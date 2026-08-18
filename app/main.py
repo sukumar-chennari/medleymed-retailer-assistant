@@ -58,7 +58,11 @@ def _extract_email(text: str) -> tuple[str | None, str]:
     if not match:
         return None, text
     email = match.group(0)
-    remainder = (text[: match.start()] + text[match.end() :]).strip(" ,;:-")
+    remainder = text[: match.start()] + text[match.end() :]
+    # Also drop a leading label word like "email:" or "mail" that introduced
+    # the address, so it doesn't linger in the saved shipping address.
+    remainder = re.sub(r"[,;:\-\s]*\b(e-?mail|mail)\b\s*:?\s*$", "", remainder, flags=re.IGNORECASE)
+    remainder = remainder.strip(" ,;:-")
     return email, remainder
 
 

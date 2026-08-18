@@ -14,5 +14,6 @@ SMTP_HOST = os.environ.get("SMTP_HOST")
 SMTP_PORT = os.environ.get("SMTP_PORT")
 SMTP_USER = os.environ.get("SMTP_USER")
 SMTP_PASS = os.environ.get("SMTP_PASS")
+SMTP_FROM_NAME = os.environ.get("SMTP_FROM_NAME", "MedleyMed Orders")
 
 SMTP_CONFIGURED = all([SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS])

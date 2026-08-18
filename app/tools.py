@@ -3,6 +3,7 @@ import json
 import re
 import smtplib
 from email.message import EmailMessage
+from email.utils import formataddr
 
 from app import config, store
 
@@ -188,8 +189,8 @@ def send_confirmation_email(to: str, order_details: str) -> str:
         return json.dumps({"sent": True, "mode": "mock"})
 
     message = EmailMessage()
-    message["Subject"] = "Your order confirmation"
-    message["From"] = config.SMTP_USER
+    message["Subject"] = "Your MedleyMed order confirmation"
+    message["From"] = formataddr((config.SMTP_FROM_NAME, config.SMTP_USER))
     message["To"] = to
     message.set_content(order_details)
 
