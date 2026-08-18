@@ -1,4 +1,6 @@
+import difflib
 import json
+import re
 import smtplib
 from email.message import EmailMessage
 
@@ -15,6 +17,31 @@ COLD_KEYWORDS = [
     "dextromethorphan", "phenylephrine", "chlorpheniramine",
 ]
 
+# Individual words for typo-tolerant fuzzy fallback (see _fuzzy_classify) —
+# a misspelling like "runnig nose" won't contain the exact phrase "runny
+# nose", so the plain substring check above misses it entirely.
+FEVER_WORDS = {"fever", "temperature", "chills", "chill", "headache", "paracetamol", "acetaminophen", "ibuprofen"}
+COLD_WORDS = {
+    "cold", "runny", "nose", "sneezing", "sneeze", "congestion", "sore",
+    "throat", "cough", "stuffy", "nasal", "flu", "cetirizine", "antihistamine",
+    "pseudoephedrine", "decongestant", "dextromethorphan", "phenylephrine",
+    "chlorpheniramine",
+}
+FUZZY_CUTOFF = 0.7
+
+
+def _fuzzy_classify(s: str) -> str | None:
+    words = re.findall(r"[a-z]+", s)
+    fever_hit = any(difflib.get_close_matches(w, FEVER_WORDS, n=1, cutoff=FUZZY_CUTOFF) for w in words)
+    cold_hit = any(difflib.get_close_matches(w, COLD_WORDS, n=1, cutoff=FUZZY_CUTOFF) for w in words)
+    if fever_hit and not cold_hit:
+        return "fever"
+    if cold_hit and not fever_hit:
+        return "cold"
+    if fever_hit and cold_hit:
+        return "fever"
+    return None
+
 
 def classify(symptom: str) -> str | None:
     s = symptom.strip().lower()
@@ -24,7 +51,7 @@ def classify(symptom: str) -> str | None:
         return "fever"
     if any(k in s for k in COLD_KEYWORDS):
         return "cold"
-    return None
+    return _fuzzy_classify(s)
 
 
 def lookup_symptom(symptom: str) -> str:

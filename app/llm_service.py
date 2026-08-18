@@ -267,6 +267,23 @@ def _claims_unverified_completion(reply_text: str) -> bool:
     return order_claim or address_claim or email_claim
 
 
+TOOL_NAMES = {t["function"]["name"] for t in TOOLS}
+
+
+def _leaked_tool_intent(reply_text: str) -> str | None:
+    """Catches the model narrating a tool call as text instead of using the
+    real mechanism — e.g. "I'll call decline_out_of_scope to end this
+    conversation" or raw {"name": "start_order", ...} JSON. Returns the tool
+    name it was trying to invoke, if recognizable, so the caller can perform
+    the real action instead of leaking the planning text to the user."""
+    t = reply_text.lower()
+    narration = any(p in t for p in ("i'll call", "i will call", "calling the", "call the tool"))
+    for name in TOOL_NAMES:
+        if name in t and (narration or f'"name": "{name}"' in t or f"'name': '{name}'" in t):
+            return name
+    return None
+
+
 GREETING_REPLY = "Hi! I can help with fever or cold symptoms, or a photo of a medicine label — what's going on?"
 
 BYE_REPLY = "Take care! Come back anytime you have fever or cold questions."
@@ -358,9 +375,18 @@ def run_turn(
 
         if not tool_calls:
             reply_text = message.get("content", "")
-            if _claims_unverified_completion(reply_text):
+
+            leaked_tool = _leaked_tool_intent(reply_text)
+            if leaked_tool == "decline_out_of_scope":
+                print(f"[GUARD] converted leaked decline intent to real decline: {reply_text!r}")
+                reply_text = OUT_OF_SCOPE_REPLY
+            elif leaked_tool:
+                print(f"[GUARD] blocked leaked tool intent ({leaked_tool}): {reply_text!r}")
+                reply_text = FAKE_COMPLETION_GUARD_REPLY
+            elif _claims_unverified_completion(reply_text):
                 print(f"[GUARD] blocked unverified completion claim: {reply_text!r}")
                 reply_text = FAKE_COMPLETION_GUARD_REPLY
+
             messages.append({"role": "assistant", "content": reply_text})
             return reply_text, messages
 
