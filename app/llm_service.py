@@ -70,6 +70,14 @@ Keep replies short and conversational — this is a live demo, not a long-form r
 IMPORTANT: When you need to call a tool, use the actual tool-calling mechanism —
 never type out a function name, JSON, or tool call syntax as visible text in your
 reply.
+
+NEVER CLAIM WITHOUT CALLING: Do not tell the user an order was placed, an address
+was saved, or a confirmation email was sent unless you just received a tool
+result in THIS conversation confirming exactly that. This applies even if the
+user names a specific product directly instead of describing a symptom (e.g.
+"order Paracetamol") — you must still call start_order for it; never describe
+placing the order, saving the address, or sending an email in your own words
+without actually calling the tool first.
 """
 
 TOOLS = [
@@ -209,28 +217,89 @@ def describe_image(image_b64: str, media_type: str) -> str:
         return f"Image could not be read ({exc}) — ask the user to type the medicine name."
 
 
-def _build_user_text(text: str, image_b64: str | None, image_media_type: str | None) -> str:
-    if not image_b64:
-        return text or ""
-
-    description = describe_image(image_b64, image_media_type or "image/jpeg")
-    parts = [text] if text else []
-    parts.append(f"[Image analysis: {description}]")
-
-    # Classifying the identified medicine and running the catalog lookup here,
-    # rather than leaving it to the model to decide whether the image implies
-    # fever or cold, mirrors the start_order fix: the small local model proved
-    # unreliable at making that connection itself from an image-only turn.
-    category = tools.classify(description)
+def _inject_catalog_hint(parts: list, source_text: str) -> None:
+    """Deterministically resolves any recognizable medicine/symptom mention to
+    real catalog data and appends it to the message. Originally added only for
+    images, but the same grounding is needed for plain text too: a user naming
+    a product directly ("order Paracetamol") skips the usual symptom-description
+    step, and without this the model has no real product_id in context at all —
+    it either has to call lookup_symptom itself (unreliable) or invents one."""
+    category = tools.classify(source_text)
     if category:
         result = tools.lookup_symptom(category)
         parts.append(
-            f"[This image was identified as a {category} medicine. Matching "
-            f"catalog products (present these to the user, don't call "
-            f"lookup_symptom again): {result}]"
+            f"[Detected a {category}-related medicine/symptom mention. Matching "
+            f"catalog products (use one of these exact product_ids for "
+            f"start_order, don't call lookup_symptom again): {result}]"
         )
 
+
+def _build_user_text(text: str, image_b64: str | None, image_media_type: str | None) -> str:
+    parts = [text] if text else []
+
+    if image_b64:
+        description = describe_image(image_b64, image_media_type or "image/jpeg")
+        parts.append(f"[Image analysis: {description}]")
+        _inject_catalog_hint(parts, description)
+    elif text:
+        _inject_catalog_hint(parts, text)
+
     return "\n".join(parts)
+
+
+FAKE_COMPLETION_GUARD_REPLY = (
+    "Let's make sure that actually goes through — what symptom is this for "
+    "(fever or cold)? That way I can look up the right product and place a "
+    "real order for you."
+)
+
+
+def _claims_unverified_completion(reply_text: str) -> bool:
+    """Catches the observed failure mode where the model narrates an order as
+    done ("I've saved your address... order has been placed") without ever
+    calling a tool this turn — i.e. nothing was actually saved anywhere. Only
+    checked on the no-tool-call path, since a genuine completion always comes
+    with a real start_order result in the same turn (see run_turn)."""
+    t = reply_text.lower()
+    order_claim = "order" in t and any(k in t for k in ("placed", "confirmed", "shipped", "is on its way"))
+    address_claim = "saved your address" in t or "address has been saved" in t or "address is saved" in t
+    email_claim = "confirmation email" in t or "email has been sent" in t or "will send you an email" in t
+    return order_claim or address_claim or email_claim
+
+
+GREETING_REPLY = "Hi! I can help with fever or cold symptoms, or a photo of a medicine label — what's going on?"
+
+BYE_REPLY = "Take care! Come back anytime you have fever or cold questions."
+
+# Exact-match phrases only (after lowercasing/stripping punctuation) — this is
+# intentionally a closed list, not a fuzzy classifier, so it never swallows a
+# real request that merely starts with a pleasantry (e.g. "hi, I have a fever"
+# still falls through to the model, since the full text won't match).
+GREETING_PHRASES = {
+    "hi", "hii", "hiii", "hello", "helo", "hey", "hey there", "hiya", "yo",
+    "good morning", "good afternoon", "good evening", "morning", "evening",
+    "how are you", "how r u", "hows it going", "how's it going",
+    "whats up", "what's up", "sup",
+}
+BYE_PHRASES = {
+    "thanks", "thank you", "thanks a lot", "thank you so much", "ty", "thx",
+    "bye", "goodbye", "bye bye", "see you", "cya", "take care", "ok thanks",
+    "okay thanks", "great thanks", "cool thanks",
+}
+
+
+def _deterministic_pleasantry_reply(text: str) -> str | None:
+    """Greeting/pleasantry handling relies on a rule the model followed
+    inconsistently in testing (a plain "hi" sometimes still triggered
+    decline_out_of_scope, a 3B-model reliability gap, not a prompt-wording
+    problem). Short-circuiting known pleasantries in code guarantees
+    consistent behavior instead of hoping the model applies the instruction."""
+    normalized = text.strip().lower().strip("!.,? ")
+    if normalized in GREETING_PHRASES:
+        return GREETING_REPLY
+    if normalized in BYE_PHRASES:
+        return BYE_REPLY
+    return None
 
 
 OLLAMA_UNAVAILABLE_REPLY = (
@@ -268,6 +337,13 @@ def run_turn(
     """Runs one full user turn (including any tool-use round trips) and
     returns (reply_text, updated_messages)."""
 
+    if not image_b64 and user_text:
+        pleasantry_reply = _deterministic_pleasantry_reply(user_text)
+        if pleasantry_reply:
+            messages.append({"role": "user", "content": user_text})
+            messages.append({"role": "assistant", "content": pleasantry_reply})
+            return pleasantry_reply, messages
+
     combined_text = _build_user_text(user_text, image_b64, image_media_type)
     messages.append({"role": "user", "content": combined_text})
 
@@ -282,6 +358,9 @@ def run_turn(
 
         if not tool_calls:
             reply_text = message.get("content", "")
+            if _claims_unverified_completion(reply_text):
+                print(f"[GUARD] blocked unverified completion claim: {reply_text!r}")
+                reply_text = FAKE_COMPLETION_GUARD_REPLY
             messages.append({"role": "assistant", "content": reply_text})
             return reply_text, messages
 

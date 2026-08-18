@@ -30,9 +30,9 @@ function closeChat() {
   chatFab.classList.remove("hidden");
 }
 
-chatFab.addEventListener("click", openChat);
+chatFab.addEventListener("click", () => openChat());
 chatClose.addEventListener("click", closeChat);
-ctaOpenChat.addEventListener("click", openChat);
+ctaOpenChat.addEventListener("click", () => openChat());
 
 async function loadDashboard() {
   try {
