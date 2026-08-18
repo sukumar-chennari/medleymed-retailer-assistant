@@ -1,11 +1,12 @@
 import base64
+import json
 import re
 
 import ollama
 from google import genai
 from google.genai import types
 
-from app import config, tools
+from app import config, store, tools
 from app.tools import TOOL_FUNCTIONS
 
 MAX_TOOL_ROUNDS = 6
@@ -199,6 +200,11 @@ TOOLS = [
 
 OUT_OF_SCOPE_REPLY = "This demo only handles fever and cold OTC guidance — I can't help with that here."
 
+DISCLAIMER = (
+    "This is general OTC guidance, not a medical diagnosis — consult a doctor if "
+    "symptoms persist or worsen."
+)
+
 
 def describe_image(image_b64: str, media_type: str) -> str:
     if _gemini_client is None:
@@ -218,7 +224,20 @@ def describe_image(image_b64: str, media_type: str) -> str:
         return f"Image could not be read ({exc}) — ask the user to type the medicine name."
 
 
-def _inject_catalog_hint(parts: list, source_text: str) -> None:
+def _remember_products(session_id: str, lookup_result_json: str) -> None:
+    """Records whatever product list was just shown to the user (whichever
+    path produced it — a real lookup_symptom call, or the deterministic
+    injection below) so a later bare reply like "3" or "001" can be resolved
+    to a real product_id deterministically. See main.py's _resolve_bare_selection."""
+    try:
+        result = json.loads(lookup_result_json)
+    except (TypeError, ValueError):
+        return
+    if result.get("matched") and result.get("products"):
+        store.set_last_products(session_id, result["products"])
+
+
+def _inject_catalog_hint(parts: list, source_text: str, session_id: str) -> None:
     """Deterministically resolves any recognizable medicine/symptom mention to
     real catalog data and appends it to the message. Originally added only for
     images, but the same grounding is needed for plain text too: a user naming
@@ -228,6 +247,7 @@ def _inject_catalog_hint(parts: list, source_text: str) -> None:
     category = tools.classify(source_text)
     if category:
         result = tools.lookup_symptom(category)
+        _remember_products(session_id, result)
         parts.append(
             f"[Detected a {category}-related medicine/symptom mention. Matching "
             f"catalog products (use one of these exact product_ids for "
@@ -235,15 +255,17 @@ def _inject_catalog_hint(parts: list, source_text: str) -> None:
         )
 
 
-def _build_user_text(text: str, image_b64: str | None, image_media_type: str | None) -> str:
+def _build_user_text(
+    text: str, image_b64: str | None, image_media_type: str | None, session_id: str
+) -> str:
     parts = [text] if text else []
 
     if image_b64:
         description = describe_image(image_b64, image_media_type or "image/jpeg")
         parts.append(f"[Image analysis: {description}]")
-        _inject_catalog_hint(parts, description)
+        _inject_catalog_hint(parts, description, session_id)
     elif text:
-        _inject_catalog_hint(parts, text)
+        _inject_catalog_hint(parts, text, session_id)
 
     return "\n".join(parts)
 
@@ -255,17 +277,20 @@ FAKE_COMPLETION_GUARD_REPLY = (
 )
 
 
-def _claims_unverified_completion(reply_text: str) -> bool:
-    """Catches the observed failure mode where the model narrates an order as
-    done ("I've saved your address... order has been placed") without ever
-    calling a tool this turn — i.e. nothing was actually saved anywhere. Only
-    checked on the no-tool-call path, since a genuine completion always comes
-    with a real start_order result in the same turn (see run_turn)."""
+def _claims_order_placed(reply_text: str) -> bool:
     t = reply_text.lower()
-    order_claim = "order" in t and any(k in t for k in ("placed", "confirmed", "shipped", "is on its way"))
-    address_claim = "saved your address" in t or "address has been saved" in t or "address is saved" in t
-    email_claim = "confirmation email" in t or "email has been sent" in t or "will send you an email" in t
-    return order_claim or address_claim or email_claim
+    return "order" in t and any(k in t for k in ("placed", "confirmed", "shipped", "is on its way"))
+
+
+def _claims_email_sent(reply_text: str) -> bool:
+    t = reply_text.lower()
+    return any(
+        k in t
+        for k in (
+            "confirmation email", "email has been sent", "email has also been sent",
+            "will send you an email", "sent you an email", "email sent",
+        )
+    )
 
 
 TOOL_NAMES = {t["function"]["name"] for t in TOOLS}
@@ -274,15 +299,58 @@ TOOL_NAMES = {t["function"]["name"] for t in TOOLS}
 def _leaked_tool_intent(reply_text: str) -> str | None:
     """Catches the model narrating a tool call as text instead of using the
     real mechanism — e.g. "I'll call decline_out_of_scope to end this
-    conversation" or raw {"name": "start_order", ...} JSON. Returns the tool
-    name it was trying to invoke, if recognizable, so the caller can perform
-    the real action instead of leaking the planning text to the user."""
+    conversation" or raw {"name": "start_order", ...} / {"type": "function",
+    "function": {"name": "lookup_symptom", ...}} JSON in either compact or
+    spaced form. Returns the tool name it was trying to invoke, if
+    recognizable, so the caller can perform the real action instead of
+    leaking the planning text to the user."""
     t = reply_text.lower()
     narration = any(p in t for p in ("i'll call", "i will call", "calling the", "call the tool"))
     for name in TOOL_NAMES:
-        if name in t and (narration or f'"name": "{name}"' in t or f"'name': '{name}'" in t):
+        if name not in t:
+            continue
+        if narration or re.search(r'["\']name["\']\s*:\s*["\']' + re.escape(name) + r'["\']', t):
             return name
     return None
+
+
+def _recover_leaked_lookup(reply_text: str) -> tuple[str, str] | None:
+    """The leaked JSON for lookup_symptom conveniently still contains the
+    real symptom the model meant to look up — so rather than just suppressing
+    the leak (a dead-end "please rephrase" that loses the user's answer),
+    perform the real lookup ourselves and return a properly phrased reply.
+    Returns (reply_text, raw_lookup_result_json) or None if unrecoverable."""
+    match = re.search(r'["\']symptom["\']\s*:\s*["\']([^"\']+)["\']', reply_text, re.IGNORECASE)
+    if not match:
+        return None
+    result_json = tools.lookup_symptom(match.group(1))
+    result = json.loads(result_json)
+    if not result.get("matched"):
+        return OUT_OF_SCOPE_REPLY, result_json
+    lines = ["Here's what I'd recommend:", ""]
+    for p in result["products"]:
+        lines.append(f"- {p['name']} ({p['id']}) — {p['description']}")
+    lines.append("")
+    lines.append("Would you like to order one of these?")
+    lines.append("")
+    lines.append(DISCLAIMER)
+    return "\n".join(lines), result_json
+
+
+PRODUCT_ID_RE = re.compile(r"\b(?:fev|col)-\d{3}\b", re.IGNORECASE)
+
+
+def _remember_recommended_product(session_id: str, reply_text: str) -> None:
+    """Tracks the single product the assistant just recommended (parsed out
+    of its own reply) so a later bare "yes"/"ok" confirmation — the natural
+    way people respond to "would you like to order this?" — can be resolved
+    deterministically instead of trusting the model to remember and act on
+    it reliably across another turn."""
+    matches = {m.lower() for m in PRODUCT_ID_RE.findall(reply_text)}
+    if len(matches) == 1:
+        product_id = next(iter(matches))
+        if store.find_product(product_id):
+            store.set_last_recommended_product(session_id, product_id)
 
 
 GREETING_REPLY = "Hi! I can help with fever or cold symptoms, or a photo of a medicine label — what's going on?"
@@ -363,16 +431,21 @@ def run_turn(
             messages.append({"role": "assistant", "content": pleasantry_reply})
             return pleasantry_reply, messages
 
-    combined_text = _build_user_text(user_text, image_b64, image_media_type)
+    combined_text = _build_user_text(user_text, image_b64, image_media_type, session_id)
     messages.append({"role": "user", "content": combined_text})
 
-    # Tracks whether a *real* start_order success happened anywhere in this
-    # turn (e.g. the address-already-on-file fast path, which succeeds
-    # immediately). Needed because the model's follow-up "your order has been
-    # placed" text arrives in a later iteration with no tool_calls of its own
-    # — without this the completion-claim guard below can't tell that
-    # legitimate case apart from a hallucinated one.
+    # Tracks whether a *real* start_order success (and, separately, a real
+    # email send) happened anywhere in this turn. Needed because the model's
+    # follow-up "your order has been placed" text arrives in a later
+    # iteration with no tool_calls of its own — without this the
+    # completion-claim guard below can't tell a legitimate claim apart from a
+    # hallucinated one. Tracked separately per claim: a real order_placed
+    # doesn't make an accompanying "email has been sent" claim true too — the
+    # start_order result can report order_placed:true and email_sent:false
+    # in the same result (no email on file), and the model has been observed
+    # claiming the email was sent anyway.
     real_order_placed_this_turn = False
+    real_email_sent_this_turn = False
 
     for _ in range(MAX_TOOL_ROUNDS):
         try:
@@ -390,12 +463,28 @@ def run_turn(
             if leaked_tool == "decline_out_of_scope":
                 print(f"[GUARD] converted leaked decline intent to real decline: {reply_text!r}")
                 reply_text = OUT_OF_SCOPE_REPLY
+            elif leaked_tool == "lookup_symptom":
+                recovered = _recover_leaked_lookup(reply_text)
+                if recovered:
+                    print(f"[GUARD] recovered leaked lookup_symptom call: {reply_text!r}")
+                    _remember_products(session_id, recovered[1])
+                    reply_text = recovered[0]
+                else:
+                    print(f"[GUARD] blocked leaked tool intent (lookup_symptom, unrecoverable): {reply_text!r}")
+                    reply_text = FAKE_COMPLETION_GUARD_REPLY
             elif leaked_tool:
                 print(f"[GUARD] blocked leaked tool intent ({leaked_tool}): {reply_text!r}")
                 reply_text = FAKE_COMPLETION_GUARD_REPLY
-            elif _claims_unverified_completion(reply_text) and not real_order_placed_this_turn:
-                print(f"[GUARD] blocked unverified completion claim: {reply_text!r}")
-                reply_text = FAKE_COMPLETION_GUARD_REPLY
+            else:
+                _remember_recommended_product(session_id, reply_text)
+                unverified_order = _claims_order_placed(reply_text) and not real_order_placed_this_turn
+                unverified_email = _claims_email_sent(reply_text) and not real_email_sent_this_turn
+                if unverified_order or unverified_email:
+                    print(
+                        f"[GUARD] blocked unverified completion claim "
+                        f"(order={unverified_order}, email={unverified_email}): {reply_text!r}"
+                    )
+                    reply_text = FAKE_COMPLETION_GUARD_REPLY
 
             messages.append({"role": "assistant", "content": reply_text})
             return reply_text, messages
@@ -415,8 +504,13 @@ def run_turn(
                     result = tools.start_order(arguments["product_id"], session_id)
                     if '"order_placed": true' in result:
                         real_order_placed_this_turn = True
+                        store.clear_last_recommended_product(session_id)
+                    if '"email_sent": true' in result:
+                        real_email_sent_this_turn = True
                 else:
                     result = TOOL_FUNCTIONS[name](arguments)
+                    if name == "lookup_symptom":
+                        _remember_products(session_id, result)
             except Exception as exc:
                 result = f"Error calling {name}: {exc}"
             print(f"[TOOL CALL] {name}({arguments}) -> {result}")

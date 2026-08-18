@@ -20,6 +20,8 @@ _sessions: dict[str, list] = {}
 
 _pending_orders: dict[str, str] = {}
 _pending_emails: dict[str, str] = {}
+_last_products: dict[str, list] = {}
+_last_recommended_product: dict[str, str] = {}
 
 
 def get_catalog() -> list[dict]:
@@ -110,6 +112,26 @@ def get_pending_email(session_id: str) -> Optional[str]:
 
 def clear_pending_email(session_id: str) -> None:
     _pending_emails.pop(session_id, None)
+
+
+def set_last_products(session_id: str, products: list[dict]) -> None:
+    _last_products[session_id] = products
+
+
+def get_last_products(session_id: str) -> Optional[list[dict]]:
+    return _last_products.get(session_id)
+
+
+def set_last_recommended_product(session_id: str, product_id: str) -> None:
+    _last_recommended_product[session_id] = product_id
+
+
+def get_last_recommended_product(session_id: str) -> Optional[str]:
+    return _last_recommended_product.get(session_id)
+
+
+def clear_last_recommended_product(session_id: str) -> None:
+    _last_recommended_product.pop(session_id, None)
 
 
 def get_session_messages(session_id: str) -> list:

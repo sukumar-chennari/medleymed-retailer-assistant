@@ -122,6 +122,68 @@ def _complete_pending_order(session_id: str, product_id: str, address_text: str)
     )
 
 
+def _resolve_bare_selection(text: str, last_products: list[dict] | None) -> dict | None:
+    """After a product list is shown, users very naturally reply with just a
+    number ("3") or an id fragment ("001") rather than the full product_id —
+    and the model handles that unreliably (either declining it as unrelated,
+    or hallucinating a completion for the wrong product). Resolves it
+    deterministically against whatever list was actually just shown, matching
+    by the product id's numeric suffix first (unambiguous even though ids
+    like fev-001/col-001 collide numerically across categories, since we only
+    ever look inside the specific list just shown), falling back to plain
+    list position."""
+    if not last_products:
+        return None
+    t = text.strip()
+    if not re.fullmatch(r"\d{1,3}", t):
+        return None
+    n = int(t)
+    for product in last_products:
+        suffix = product["id"].split("-")[-1]
+        if suffix.isdigit() and int(suffix) == n:
+            return product
+    if 1 <= n <= len(last_products):
+        return last_products[n - 1]
+    return None
+
+
+AFFIRMATIVE_PHRASES = {
+    "yes", "yeah", "yep", "yup", "sure", "ok", "okay", "please",
+    "go ahead", "do it", "confirm", "place it", "order it", "place the order",
+}
+
+
+def _is_affirmative(text: str) -> bool:
+    """A bare "yes"/"ok" is the natural way to respond to "would you like to
+    order this?" — an exact-match list (not fuzzy/word-based) keeps this from
+    ever misfiring on a real sentence that happens to contain "ok"."""
+    return text.strip().lower().strip("!.,? ") in AFFIRMATIVE_PHRASES
+
+
+def _reply_for_start_order_result(order: dict) -> str:
+    if "error" in order:
+        return f"Sorry, {order['error']}"
+
+    if not order.get("order_placed"):
+        # tools.start_order already recorded the pending order internally;
+        # we just need to ask for the address ourselves.
+        return "Sure! What's your shipping address so I can send that out?"
+
+    email_note = (
+        "A confirmation email has been sent."
+        if order.get("email_sent")
+        else "I don't have an email on file for you — reply with your email address if you'd like a confirmation sent."
+    )
+    return (
+        f"Order confirmed!\n\n"
+        f"Order ID: {order['order_id']}\n"
+        f"Product: {order['product_name']}\n"
+        f"Price: ${order['price_usd']}\n"
+        f"Shipping to: {order['address']}\n\n"
+        f"{email_note}\n\n{DISCLAIMER}"
+    )
+
+
 def _complete_pending_email(email: str, order_id: str) -> str:
     store.save_email("demo_user", email)
     order = store.get_order(order_id)
@@ -146,6 +208,9 @@ def chat(req: ChatRequest):
     try:
         pending_email_order_id = store.get_pending_email(req.session_id)
         pending_product_id = store.get_pending_order(req.session_id)
+        last_products = store.get_last_products(req.session_id)
+        last_recommended_product_id = store.get_last_recommended_product(req.session_id)
+        selected_product = _resolve_bare_selection(text, last_products) if text else None
 
         if pending_email_order_id and text and _looks_like_an_email(text):
             store.clear_pending_email(req.session_id)
@@ -156,6 +221,23 @@ def chat(req: ChatRequest):
         elif pending_product_id and text and _looks_like_an_address(text):
             store.clear_pending_order(req.session_id)
             reply = _complete_pending_order(req.session_id, pending_product_id, text)
+            messages.append({"role": "user", "content": text})
+            messages.append({"role": "assistant", "content": reply})
+        elif selected_product and not pending_product_id:
+            order = json.loads(tools.start_order(selected_product["id"], req.session_id))
+            reply = _reply_for_start_order_result(order)
+            messages.append({"role": "user", "content": text})
+            messages.append({"role": "assistant", "content": reply})
+        elif (
+            last_recommended_product_id
+            and text
+            and _is_affirmative(text)
+            and not pending_product_id
+            and not pending_email_order_id
+        ):
+            store.clear_last_recommended_product(req.session_id)
+            order = json.loads(tools.start_order(last_recommended_product_id, req.session_id))
+            reply = _reply_for_start_order_result(order)
             messages.append({"role": "user", "content": text})
             messages.append({"role": "assistant", "content": reply})
         else:
