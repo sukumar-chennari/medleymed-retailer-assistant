@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MedleyMed Retailer Dashboard</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div class="dashboard">
+    <nav class="topbar">
+      <span class="brand">
+        <svg class="logo-mark" width="30" height="30" viewBox="0 0 48 48" aria-hidden="true">
+          <path d="M24,24 C24,10 10,4 6,10 C2,16 8,24 24,24 Z" fill="#1ec2dd" />
+          <path d="M24,24 C24,38 38,44 42,38 C46,32 40,24 24,24 Z" fill="#2d3480" />
+          <path d="M12,10.5 h4 M14,8.5 v4" stroke="#ffffff" stroke-width="1.6" stroke-linecap="round" />
+        </svg>
+        <span><span class="brand-medley">Medley</span><span class="brand-med">Med</span></span>
+        <span class="brand-pill">Retailer</span>
+      </span>
+      <span class="topbar-user" id="topbar-user">Hi, Demo User</span>
+    </nav>
+
+    <main class="dashboard-content">
+      <h1>Retailer Dashboard</h1>
+      <p class="subtitle">Manage orders and chat with your medicine assistant.</p>
+
+      <div class="stats-strip">
+        <div class="stat-tile">
+          <span class="stat-value" id="stat-products">–</span>
+          <span class="stat-label">Products Listed</span>
+        </div>
+        <div class="stat-tile">
+          <span class="stat-value" id="stat-orders">–</span>
+          <span class="stat-label">Orders Placed</span>
+        </div>
+        <div class="stat-tile">
+          <span class="stat-value stat-status"><span class="status-dot"></span>Online</span>
+          <span class="stat-label">Assistant Status</span>
+        </div>
+      </div>
+
+      <div class="card-grid">
+        <section class="card">
+          <h2>Shipping Address</h2>
+          <p id="card-address" class="card-body">Loading…</p>
+        </section>
+
+        <section class="card">
+          <h2>Recent Orders</h2>
+          <div id="card-orders" class="card-body">Loading…</div>
+        </section>
+
+        <section class="card card-cta">
+          <h2>Feeling under the weather?</h2>
+          <p class="card-body">
+            Describe your symptoms or upload a photo of a medicine label or
+            prescription, and our assistant can suggest OTC options and place
+            an order for you.
+          </p>
+          <button id="cta-open-chat" type="button" class="cta-button">Chat with Assistant</button>
+        </section>
+      </div>
+
+      <h2 class="section-heading">Product Catalog</h2>
+      <p class="subtitle">Ask the assistant about any of these to check symptoms and order.</p>
+      <div id="catalog-grid" class="catalog-grid">Loading…</div>
+    </main>
+  </div>
+
+  <button id="chat-fab" type="button" class="chat-fab" aria-label="Open chat assistant">💬</button>
+
+  <div id="chat-panel" class="chat-panel hidden">
+    <header class="chat-panel-header">
+      <div>
+        <strong>MedleyMed Assistant</strong>
+        <p class="disclaimer">
+          Demo only — general OTC guidance, not a medical diagnosis. Consult a
+          doctor if symptoms persist or worsen.
+        </p>
+      </div>
+      <button id="chat-close" type="button" aria-label="Close chat">&times;</button>
+    </header>
+
+    <main id="chat" class="chat"></main>
+
+    <div id="image-preview" class="image-preview hidden">
+      <img id="image-preview-img" alt="Selected image preview" />
+      <button id="image-remove" type="button" aria-label="Remove image">&times;</button>
+    </div>
+
+    <form id="chat-form" class="composer">
+      <label for="image-input" class="icon-button" title="Attach a photo">📷</label>
+      <input id="image-input" type="file" accept="image/*" hidden />
+      <input id="text-input" type="text" placeholder="Describe your symptoms…" autocomplete="off" />
+      <button type="submit">Send</button>
+    </form>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

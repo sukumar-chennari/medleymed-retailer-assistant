@@ -1,0 +1,74 @@
+[
+  {
+    "id": "fev-001",
+    "name": "Paracetamol 500mg Tablets",
+    "category": "fever",
+    "active_ingredient": "Paracetamol",
+    "price_usd": 4.99,
+    "otc": true,
+    "description": "Reduces fever and relieves mild to moderate pain."
+  },
+  {
+    "id": "fev-002",
+    "name": "Paracetamol Extra Strength 650mg",
+    "category": "fever",
+    "active_ingredient": "Paracetamol",
+    "price_usd": 6.49,
+    "otc": true,
+    "description": "Higher-dose fever reducer and pain reliever for adults."
+  },
+  {
+    "id": "fev-003",
+    "name": "Ibuprofen 200mg Tablets",
+    "category": "fever",
+    "active_ingredient": "Ibuprofen",
+    "price_usd": 5.29,
+    "otc": true,
+    "description": "Reduces fever and inflammation; also relieves body aches."
+  },
+  {
+    "id": "fev-004",
+    "name": "Children's Paracetamol Syrup",
+    "category": "fever",
+    "active_ingredient": "Paracetamol",
+    "price_usd": 7.99,
+    "otc": true,
+    "description": "Liquid fever reducer formulated for children."
+  },
+  {
+    "id": "col-001",
+    "name": "Cetirizine 10mg Antihistamine Tablets",
+    "category": "cold",
+    "active_ingredient": "Cetirizine",
+    "price_usd": 5.99,
+    "otc": true,
+    "description": "Relieves runny nose, sneezing, and watery eyes."
+  },
+  {
+    "id": "col-002",
+    "name": "Pseudoephedrine Decongestant Tablets",
+    "category": "cold",
+    "active_ingredient": "Pseudoephedrine",
+    "price_usd": 6.99,
+    "otc": true,
+    "description": "Relieves nasal and sinus congestion."
+  },
+  {
+    "id": "col-003",
+    "name": "Cold & Flu Multi-Symptom Relief",
+    "category": "cold",
+    "active_ingredient": "Paracetamol + Phenylephrine + Chlorpheniramine",
+    "price_usd": 8.49,
+    "otc": true,
+    "description": "Combination relief for congestion, cough, and mild fever/aches."
+  },
+  {
+    "id": "col-004",
+    "name": "Cough Suppressant Syrup (Dextromethorphan)",
+    "category": "cold",
+    "active_ingredient": "Dextromethorphan",
+    "price_usd": 6.29,
+    "otc": true,
+    "description": "Relieves dry, persistent cough."
+  }
+]
