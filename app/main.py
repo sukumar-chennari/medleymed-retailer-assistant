@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
@@ -22,6 +23,8 @@ DISCLAIMER = (
     "This is general OTC guidance, not a medical diagnosis — consult a doctor if "
     "symptoms persist or worsen."
 )
+
+EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
 
 
 @app.get("/health")
@@ -47,24 +50,63 @@ def catalog():
     return store.get_catalog()
 
 
+def _extract_email(text: str) -> tuple[str | None, str]:
+    """Pulls an email address out of free text if present, e.g. a user typing
+    their address and email in the same message. Returns (email_or_None,
+    remaining_text_with_email_removed)."""
+    match = EMAIL_RE.search(text)
+    if not match:
+        return None, text
+    email = match.group(0)
+    remainder = (text[: match.start()] + text[match.end() :]).strip(" ,;:-")
+    return email, remainder
+
+
+def _looks_like_an_email(text: str) -> bool:
+    return EMAIL_RE.search(text) is not None
+
+
+def _looks_like_an_address(text: str) -> bool:
+    """A pending order treats the user's next message as their shipping address —
+    but only if it plausibly is one. Without this, a reply like "thank you" or
+    "actually never mind" gets silently saved and used as the shipping address."""
+    return any(ch.isdigit() for ch in text) and len(text) >= 8
+
+
 def _complete_pending_order(session_id: str, product_id: str, address_text: str) -> str:
     """Deterministically finishes an order once the user's next message supplies
     the address, instead of trusting the LLM to chain save_address + place_order
     + send_confirmation_email itself across turns (see llm_service/tools for why)."""
-    store.save_address("demo_user", address_text)
-    order = json.loads(tools.place_order(product_id))
+    email_in_text, address_only = _extract_email(address_text)
+    store.save_address("demo_user", address_only or address_text)
+    if email_in_text:
+        store.save_email("demo_user", email_in_text)
 
+    order = json.loads(tools.place_order(product_id))
     if "error" in order:
         return f"Sorry, something went wrong placing that order: {order['error']}"
 
     user = store.get_user("demo_user")
+    recipient_email = user.get("email")
     summary = f"Order {order['order_id']}: {order['product_name']} (${order['price_usd']}) to {order['address']}"
-    email_result = json.loads(tools.send_confirmation_email(user["email"], summary))
-    email_note = (
-        "A confirmation email has been sent."
-        if email_result.get("sent")
-        else "Your order is placed, though the confirmation email couldn't be sent."
-    )
+
+    if recipient_email:
+        email_result = json.loads(tools.send_confirmation_email(recipient_email, summary))
+        email_note = (
+            f"A confirmation email has been sent to {recipient_email}."
+            if email_result.get("sent")
+            else "Your order is placed, though the confirmation email couldn't be sent."
+        )
+    else:
+        # No email on file at all — the order still ships fine (address is
+        # all that requires), but ask for an email so a confirmation can go
+        # out; the next message is captured as the email, same pattern as
+        # the address flow above.
+        store.set_pending_email(session_id, order["order_id"])
+        email_note = (
+            "I don't have an email on file for you — reply with your email "
+            "address if you'd like a confirmation sent."
+        )
 
     return (
         f"Order confirmed!\n\n"
@@ -76,11 +118,17 @@ def _complete_pending_order(session_id: str, product_id: str, address_text: str)
     )
 
 
-def _looks_like_an_address(text: str) -> bool:
-    """A pending order treats the user's next message as their shipping address —
-    but only if it plausibly is one. Without this, a reply like "thank you" or
-    "actually never mind" gets silently saved and used as the shipping address."""
-    return any(ch.isdigit() for ch in text) and len(text) >= 8
+def _complete_pending_email(email: str, order_id: str) -> str:
+    store.save_email("demo_user", email)
+    order = store.get_order(order_id)
+    if order is None:
+        return f"Thanks, I've saved {email} for next time — though I couldn't find that earlier order to send a confirmation for."
+
+    summary = f"Order {order['order_id']}: {order['product_name']} (${order['price_usd']}) to {order['address']}"
+    email_result = json.loads(tools.send_confirmation_email(email, summary))
+    if email_result.get("sent"):
+        return f"Thanks! I've sent the confirmation for order {order['order_id']} to {email}."
+    return f"I've saved {email}, but the confirmation email couldn't be sent right now."
 
 
 @app.post("/api/chat", response_model=ChatResponse)
@@ -89,14 +137,22 @@ def chat(req: ChatRequest):
         raise HTTPException(status_code=400, detail="Provide text or an image.")
 
     messages = store.get_session_messages(req.session_id)
+    text = req.text.strip() if req.text else ""
 
     try:
+        pending_email_order_id = store.get_pending_email(req.session_id)
         pending_product_id = store.get_pending_order(req.session_id)
 
-        if pending_product_id and req.text.strip() and _looks_like_an_address(req.text.strip()):
+        if pending_email_order_id and text and _looks_like_an_email(text):
+            store.clear_pending_email(req.session_id)
+            email_in_text, _ = _extract_email(text)
+            reply = _complete_pending_email(email_in_text, pending_email_order_id)
+            messages.append({"role": "user", "content": text})
+            messages.append({"role": "assistant", "content": reply})
+        elif pending_product_id and text and _looks_like_an_address(text):
             store.clear_pending_order(req.session_id)
-            reply = _complete_pending_order(req.session_id, pending_product_id, req.text.strip())
-            messages.append({"role": "user", "content": req.text.strip()})
+            reply = _complete_pending_order(req.session_id, pending_product_id, text)
+            messages.append({"role": "user", "content": text})
             messages.append({"role": "assistant", "content": reply})
         else:
             reply, messages = run_turn(

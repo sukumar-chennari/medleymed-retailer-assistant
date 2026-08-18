@@ -17,9 +17,9 @@ COLD_KEYWORDS = [
     "dextromethorphan", "phenylephrine", "chlorpheniramine",
 ]
 
-# Individual words for typo-tolerant fuzzy fallback (see _fuzzy_classify) —
-# a misspelling like "runnig nose" won't contain the exact phrase "runny
-# nose", so the plain substring check above misses it entirely.
+# Individual words for typo-tolerant fallback (see _fuzzy_classify) — a
+# misspelling like "runnig nose" won't contain the exact phrase "runny nose",
+# so the plain substring check above misses it entirely.
 FEVER_WORDS = {"fever", "temperature", "chills", "chill", "headache", "paracetamol", "acetaminophen", "ibuprofen"}
 COLD_WORDS = {
     "cold", "runny", "nose", "sneezing", "sneeze", "congestion", "sore",
@@ -27,13 +27,38 @@ COLD_WORDS = {
     "pseudoephedrine", "decongestant", "dextromethorphan", "phenylephrine",
     "chlorpheniramine",
 }
-FUZZY_CUTOFF = 0.7
+
+# Fuzzy (edit-distance) matching is ONLY safe for longer, distinctive words.
+# Short words like "cold", "sore", "flu" have too many unrelated short-word
+# neighbors (e.g. "code" vs "cold" scores *higher* than the real typo "runnig"
+# vs "runny" does) — fuzzy-matching them caused "fix my code" to be
+# misclassified as a cold symptom. Short words rely on exact membership only
+# (still typo-tolerant for the common case: whole words split out of phrases,
+# like "nose" catching "runnig nose" even though "runnig" itself doesn't match
+# anything).
+_LONG_FEVER_WORDS = {w for w in FEVER_WORDS if len(w) >= 7}
+_LONG_COLD_WORDS = {w for w in COLD_WORDS if len(w) >= 7}
+FUZZY_CUTOFF = 0.8
+FUZZY_MIN_WORD_LEN = 7
 
 
 def _fuzzy_classify(s: str) -> str | None:
     words = re.findall(r"[a-z]+", s)
-    fever_hit = any(difflib.get_close_matches(w, FEVER_WORDS, n=1, cutoff=FUZZY_CUTOFF) for w in words)
-    cold_hit = any(difflib.get_close_matches(w, COLD_WORDS, n=1, cutoff=FUZZY_CUTOFF) for w in words)
+
+    fever_hit = any(w in FEVER_WORDS for w in words)
+    cold_hit = any(w in COLD_WORDS for w in words)
+
+    if not fever_hit:
+        fever_hit = any(
+            len(w) >= FUZZY_MIN_WORD_LEN and difflib.get_close_matches(w, _LONG_FEVER_WORDS, n=1, cutoff=FUZZY_CUTOFF)
+            for w in words
+        )
+    if not cold_hit:
+        cold_hit = any(
+            len(w) >= FUZZY_MIN_WORD_LEN and difflib.get_close_matches(w, _LONG_COLD_WORDS, n=1, cutoff=FUZZY_CUTOFF)
+            for w in words
+        )
+
     if fever_hit and not cold_hit:
         return "fever"
     if cold_hit and not fever_hit:
@@ -134,11 +159,26 @@ def start_order(product_id: str, session_id: str) -> str:
     if "error" in order:
         return json.dumps(order)
 
-    user = store.get_user("demo_user")
-    summary = f"Order {order['order_id']}: {order['product_name']} (${order['price_usd']}) to {order['address']}"
-    email_result = json.loads(send_confirmation_email(user["email"], summary))
     order["order_placed"] = True
-    order["email_sent"] = email_result.get("sent", False)
+    recipient_email = store.get_email("demo_user")
+
+    if recipient_email:
+        summary = f"Order {order['order_id']}: {order['product_name']} (${order['price_usd']}) to {order['address']}"
+        email_result = json.loads(send_confirmation_email(recipient_email, summary))
+        order["email_sent"] = email_result.get("sent", False)
+    else:
+        # No email on file — the order is still valid (address is all that's
+        # required to ship), but there's no one to mail a confirmation to.
+        # Mirrors the same missing-email handling in main.py's deterministic
+        # address-completion path, for the fast "address already saved" case.
+        store.set_pending_email(session_id, order["order_id"])
+        order["email_sent"] = False
+        order["email_needed"] = (
+            "No email on file. Tell the user their order is confirmed, and ask "
+            "for their email if they'd like a confirmation sent — their next "
+            "message will be captured as the email automatically."
+        )
+
     return json.dumps(order)
 
 

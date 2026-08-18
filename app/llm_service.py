@@ -1,4 +1,5 @@
 import base64
+import re
 
 import ollama
 from google import genai
@@ -288,21 +289,17 @@ GREETING_REPLY = "Hi! I can help with fever or cold symptoms, or a photo of a me
 
 BYE_REPLY = "Take care! Come back anytime you have fever or cold questions."
 
-# Exact-match phrases only (after lowercasing/stripping punctuation) — this is
-# intentionally a closed list, not a fuzzy classifier, so it never swallows a
-# real request that merely starts with a pleasantry (e.g. "hi, I have a fever"
-# still falls through to the model, since the full text won't match).
-GREETING_PHRASES = {
-    "hi", "hii", "hiii", "hello", "helo", "hey", "hey there", "hiya", "yo",
-    "good morning", "good afternoon", "good evening", "morning", "evening",
-    "how are you", "how r u", "hows it going", "how's it going",
-    "whats up", "what's up", "sup",
+# Word-level (not exact-phrase) matching — a fixed phrase list is too brittle
+# for casual variants like "hey whatup" or "yo whats good". Any message that
+# (a) contains no recognizable fever/cold content per tools.classify, (b) is
+# short, and (c) contains one of these words is treated as a pleasantry. (a)
+# is what stops this from swallowing a real request like "hi, I have a fever".
+GREETING_WORDS = {
+    "hi", "hii", "hiii", "hello", "helo", "hey", "hiya", "yo", "sup",
+    "whatup", "whatsup", "wassup", "morning", "evening",
 }
-BYE_PHRASES = {
-    "thanks", "thank you", "thanks a lot", "thank you so much", "ty", "thx",
-    "bye", "goodbye", "bye bye", "see you", "cya", "take care", "ok thanks",
-    "okay thanks", "great thanks", "cool thanks",
-}
+BYE_WORDS = {"thanks", "thank", "thx", "ty", "bye", "goodbye", "cya", "cheers"}
+MAX_PLEASANTRY_WORDS = 6
 
 
 def _deterministic_pleasantry_reply(text: str) -> str | None:
@@ -311,11 +308,16 @@ def _deterministic_pleasantry_reply(text: str) -> str | None:
     decline_out_of_scope, a 3B-model reliability gap, not a prompt-wording
     problem). Short-circuiting known pleasantries in code guarantees
     consistent behavior instead of hoping the model applies the instruction."""
-    normalized = text.strip().lower().strip("!.,? ")
-    if normalized in GREETING_PHRASES:
-        return GREETING_REPLY
-    if normalized in BYE_PHRASES:
+    if tools.classify(text) is not None:
+        return None  # real symptom/medicine content — let the normal flow handle it
+
+    words = re.findall(r"[a-z']+", text.lower())
+    if not words or len(words) > MAX_PLEASANTRY_WORDS:
+        return None
+    if any(w in BYE_WORDS for w in words):
         return BYE_REPLY
+    if any(w in GREETING_WORDS for w in words):
+        return GREETING_REPLY
     return None
 
 
@@ -364,6 +366,14 @@ def run_turn(
     combined_text = _build_user_text(user_text, image_b64, image_media_type)
     messages.append({"role": "user", "content": combined_text})
 
+    # Tracks whether a *real* start_order success happened anywhere in this
+    # turn (e.g. the address-already-on-file fast path, which succeeds
+    # immediately). Needed because the model's follow-up "your order has been
+    # placed" text arrives in a later iteration with no tool_calls of its own
+    # — without this the completion-claim guard below can't tell that
+    # legitimate case apart from a hallucinated one.
+    real_order_placed_this_turn = False
+
     for _ in range(MAX_TOOL_ROUNDS):
         try:
             response = _call_ollama_with_retry([{"role": "system", "content": SYSTEM_PROMPT}] + messages)
@@ -383,7 +393,7 @@ def run_turn(
             elif leaked_tool:
                 print(f"[GUARD] blocked leaked tool intent ({leaked_tool}): {reply_text!r}")
                 reply_text = FAKE_COMPLETION_GUARD_REPLY
-            elif _claims_unverified_completion(reply_text):
+            elif _claims_unverified_completion(reply_text) and not real_order_placed_this_turn:
                 print(f"[GUARD] blocked unverified completion claim: {reply_text!r}")
                 reply_text = FAKE_COMPLETION_GUARD_REPLY
 
@@ -403,6 +413,8 @@ def run_turn(
             try:
                 if name == "start_order":
                     result = tools.start_order(arguments["product_id"], session_id)
+                    if '"order_placed": true' in result:
+                        real_order_placed_this_turn = True
                 else:
                     result = TOOL_FUNCTIONS[name](arguments)
             except Exception as exc:

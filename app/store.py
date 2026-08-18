@@ -19,6 +19,7 @@ _order_id_counter = itertools.count(1)
 _sessions: dict[str, list] = {}
 
 _pending_orders: dict[str, str] = {}
+_pending_emails: dict[str, str] = {}
 
 
 def get_catalog() -> list[dict]:
@@ -52,6 +53,16 @@ def save_address(user_id: str, address: str) -> None:
     user["address"] = address
 
 
+def get_email(user_id: str) -> Optional[str]:
+    user = _users.get(user_id)
+    return user["email"] if user else None
+
+
+def save_email(user_id: str, email: str) -> None:
+    user = _users.setdefault(user_id, {"user_id": user_id, "email": None})
+    user["email"] = email
+
+
 def create_order(user_id: str, product_id: str, address: str) -> dict:
     order_id = f"ord-{next(_order_id_counter):04d}"
     product = find_product(product_id)
@@ -73,6 +84,10 @@ def list_orders(user_id: str) -> list[dict]:
     return [o for o in _orders.values() if o["user_id"] == user_id]
 
 
+def get_order(order_id: str) -> Optional[dict]:
+    return _orders.get(order_id)
+
+
 def set_pending_order(session_id: str, product_id: str) -> None:
     _pending_orders[session_id] = product_id
 
@@ -83,6 +98,18 @@ def get_pending_order(session_id: str) -> Optional[str]:
 
 def clear_pending_order(session_id: str) -> None:
     _pending_orders.pop(session_id, None)
+
+
+def set_pending_email(session_id: str, order_id: str) -> None:
+    _pending_emails[session_id] = order_id
+
+
+def get_pending_email(session_id: str) -> Optional[str]:
+    return _pending_emails.get(session_id)
+
+
+def clear_pending_email(session_id: str) -> None:
+    _pending_emails.pop(session_id, None)
 
 
 def get_session_messages(session_id: str) -> list:
