@@ -364,9 +364,19 @@ BYE_REPLY = "Take care! Come back anytime you have fever or cold questions."
 # is what stops this from swallowing a real request like "hi, I have a fever".
 GREETING_WORDS = {
     "hi", "hii", "hiii", "hello", "helo", "hey", "hiya", "yo", "sup",
-    "whatup", "whatsup", "wassup", "morning", "evening",
+    "whatup", "whatsup", "wassup", "morning", "evening", "buddy",
 }
 BYE_WORDS = {"thanks", "thank", "thx", "ty", "bye", "goodbye", "cya", "cheers"}
+
+# Idiom-level phrases ("how are you") use generic words (how/are/you) that
+# would cause false positives if added to GREETING_WORDS individually, so
+# they're matched as whole phrases instead — checked as a substring of the
+# normalized text so "how are you bro?" still matches.
+GREETING_PHRASES = {
+    "how are you", "how r u", "how are u", "hows it going", "how's it going",
+    "how you doing", "how you doin", "how ya doing", "whats good",
+    "what's good", "how is it going", "how's everything",
+}
 MAX_PLEASANTRY_WORDS = 6
 
 
@@ -380,7 +390,14 @@ def _deterministic_pleasantry_reply(text: str) -> str | None:
         return None  # real symptom/medicine content — let the normal flow handle it
 
     words = re.findall(r"[a-z']+", text.lower())
-    if not words or len(words) > MAX_PLEASANTRY_WORDS:
+    if not words:
+        return None
+
+    normalized = " ".join(words)
+    if any(phrase in normalized for phrase in GREETING_PHRASES):
+        return GREETING_REPLY
+
+    if len(words) > MAX_PLEASANTRY_WORDS:
         return None
     if any(w in BYE_WORDS for w in words):
         return BYE_REPLY
