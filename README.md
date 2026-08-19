@@ -36,3 +36,27 @@ plan and roadmap.
 Everything runs on your own machine — no cloud deployment needed. Just make sure
 Ollama is running and this server is up before the demo, on the same laptop the
 browser is opened on.
+
+## Commands
+
+One-time setup (see Setup above for details):
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env   # then fill in GEMINI_API_KEY
+ollama pull llama3.2
+```
+
+Every time you want to run it:
+
+```bash
+ollama serve            # if Ollama isn't already running
+source .venv/bin/activate
+uvicorn app.main:app --reload
+```
+
+Then open http://localhost:8000 in a browser.
+
+To stop the server, press `Ctrl+C` in that terminal (or `pkill -f "uvicorn app.main:app"`).
