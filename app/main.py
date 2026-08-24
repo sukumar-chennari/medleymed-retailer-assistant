@@ -196,6 +196,29 @@ def chat(req: ChatRequest):
             reply = _complete_pending_order(req.session_id, pending_product_id, text)
             messages.append({"role": "user", "content": text})
             messages.append({"role": "assistant", "content": reply})
+        elif pending_email_order_id and text:
+            # Reply doesn't look like an email — handling this via run_turn
+            # let the model free-generate instead of admitting it still
+            # needs one; keep the LLM out of this state entirely rather
+            # than risk it again.
+            reply = "I still need an email address to send your confirmation to — what's the best one to use?"
+            messages.append({"role": "user", "content": text})
+            messages.append({"role": "assistant", "content": reply})
+        elif pending_product_id and text:
+            # Reply doesn't look like an address — observed failure here:
+            # the model, given a bare "yes" while an address was still
+            # pending, fabricated a plausible-looking address out of thin
+            # air, called the real save_address tool with it, and claimed
+            # the order was placed — all without ever actually calling
+            # start_order again. Keeping the LLM out of this state entirely
+            # (like the pending-email branch above) removes the chance for
+            # that to happen instead of hoping the model admits it needs
+            # a real address.
+            product = store.find_product(pending_product_id)
+            product_name = product["name"] if product else "your order"
+            reply = f"I still need your shipping address to complete the order for {product_name} — could you share it?"
+            messages.append({"role": "user", "content": text})
+            messages.append({"role": "assistant", "content": reply})
         elif selected_product and not pending_product_id:
             order = json.loads(tools.start_order(selected_product["id"], req.session_id))
             reply = _reply_for_start_order_result(order)

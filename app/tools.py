@@ -43,54 +43,61 @@ FUZZY_CUTOFF = 0.8
 FUZZY_MIN_WORD_LEN = 7
 
 
-def _fuzzy_classify(s: str) -> str | None:
+def _category_hit(s: str, words: list[str], keywords: list[str], word_set: set[str], long_word_set: set[str]) -> bool:
+    """Substring keyword match, or exact word membership, or (for long,
+    distinctive words only — see FUZZY_MIN_WORD_LEN) a fuzzy match. All
+    three checks always run for a category — this used to be structured as
+    "try substrings for both categories, and only fall back to word/fuzzy
+    matching if NEITHER substring matched at all", which meant a message
+    like "nose block and feverih" (fever hits the "fever" substring inside
+    "feverih", so fuzzy fallback never runs at all) never got to check "nose"
+    as a cold word, silently dropping cold from the result entirely."""
+    if any(k in s for k in keywords):
+        return True
+    if any(w in word_set for w in words):
+        return True
+    return any(
+        len(w) >= FUZZY_MIN_WORD_LEN and difflib.get_close_matches(w, long_word_set, n=1, cutoff=FUZZY_CUTOFF)
+        for w in words
+    )
+
+
+def classify_categories(symptom: str) -> list[str]:
+    """Returns every category the text matches, not just the first — a
+    message like "nose block and feverih" describes both a cold symptom and
+    a fever, and both need to come back so the model can offer both, not
+    just whichever one this function happened to check/match first."""
+    s = symptom.strip().lower()
+    if s == "fever":
+        return ["fever"]
+    if s == "cold":
+        return ["cold"]
+
     words = re.findall(r"[a-z]+", s)
-
-    fever_hit = any(w in FEVER_WORDS for w in words)
-    cold_hit = any(w in COLD_WORDS for w in words)
-
-    if not fever_hit:
-        fever_hit = any(
-            len(w) >= FUZZY_MIN_WORD_LEN and difflib.get_close_matches(w, _LONG_FEVER_WORDS, n=1, cutoff=FUZZY_CUTOFF)
-            for w in words
-        )
-    if not cold_hit:
-        cold_hit = any(
-            len(w) >= FUZZY_MIN_WORD_LEN and difflib.get_close_matches(w, _LONG_COLD_WORDS, n=1, cutoff=FUZZY_CUTOFF)
-            for w in words
-        )
-
-    if fever_hit and not cold_hit:
-        return "fever"
-    if cold_hit and not fever_hit:
-        return "cold"
-    if fever_hit and cold_hit:
-        return "fever"
-    return None
+    categories = []
+    if _category_hit(s, words, FEVER_KEYWORDS, FEVER_WORDS, _LONG_FEVER_WORDS):
+        categories.append("fever")
+    if _category_hit(s, words, COLD_KEYWORDS, COLD_WORDS, _LONG_COLD_WORDS):
+        categories.append("cold")
+    return categories
 
 
 def classify(symptom: str) -> str | None:
-    s = symptom.strip().lower()
-    if s in ("fever", "cold"):
-        return s
-    if any(k in s for k in FEVER_KEYWORDS):
-        return "fever"
-    if any(k in s for k in COLD_KEYWORDS):
-        return "cold"
-    return _fuzzy_classify(s)
+    categories = classify_categories(symptom)
+    return categories[0] if categories else None
 
 
 def lookup_symptom(symptom: str) -> str:
-    category = classify(symptom)
-    if category is None:
+    categories = classify_categories(symptom)
+    if not categories:
         return json.dumps({
             "matched": False,
             "message": "No fever/cold match for this symptom — out of scope for this demo.",
         })
-    products = store.lookup_by_category(category)
+    products = [p for category in categories for p in store.lookup_by_category(category)]
     return json.dumps({
         "matched": True,
-        "category": category,
+        "category": categories[0] if len(categories) == 1 else "+".join(categories),
         "products": [
             {
                 "id": p["id"],

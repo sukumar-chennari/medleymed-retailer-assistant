@@ -53,8 +53,20 @@ def build_order_confirmation(order: dict) -> str:
 
 
 def claims_order_placed(reply_text: str) -> bool:
+    """Broad on purpose — a phrasing like "I'll go ahead and place the
+    order... here's your order summary... once it's processed" describes a
+    completed order without ever using the literal words "placed" or
+    "confirmed" the original (narrower) version of this check looked for,
+    and slipped through undetected along with a fabricated shipping address."""
     t = reply_text.lower()
-    return "order" in t and any(k in t for k in ("placed", "confirmed", "shipped", "is on its way"))
+    return "order" in t and any(
+        k in t
+        for k in (
+            "placed", "confirmed", "shipped", "is on its way", "order summary",
+            "place the order", "processing your order", "once it's processed",
+            "order has been", "your order is",
+        )
+    )
 
 
 def claims_email_sent(reply_text: str) -> bool:
@@ -139,8 +151,18 @@ def remember_recommended_product(session_id: str, reply_text: str) -> None:
     of its own reply) so a later bare "yes"/"ok" confirmation — the natural
     way people respond to "would you like to order this?" — can be resolved
     deterministically instead of trusting the model to remember and act on
-    it reliably across another turn."""
+    it reliably across another turn.
+
+    Observed failure this guards against: a reply that names a product only
+    by its human-readable name ("Paracetamol 500mg Tablets"), never its id
+    ("fev-001"), left this mechanism blind — "yes" then fell through to the
+    model's own memory, which ordered a *different* product (Extra Strength
+    650mg) than the one actually shown. Falling back to matching by catalog
+    product name closes that gap."""
     matches = {m.lower() for m in PRODUCT_ID_RE.findall(reply_text)}
+    if not matches:
+        text_lower = reply_text.lower()
+        matches = {p["id"] for p in store.get_catalog() if p["name"].lower() in text_lower}
     if len(matches) == 1:
         product_id = next(iter(matches))
         if store.find_product(product_id):

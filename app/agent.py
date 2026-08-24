@@ -306,12 +306,18 @@ def _inject_catalog_hint(parts: list, source_text: str, session_id: str) -> None
     a product directly ("order Paracetamol") skips the usual symptom-description
     step, and without this the model has no real product_id in context at all —
     it either has to call lookup_symptom itself (unreliable) or invents one."""
-    category = tools.classify(source_text)
-    if category:
-        result = tools.lookup_symptom(category)
+    categories = tools.classify_categories(source_text)
+    if categories:
+        # Pass the original text, not a pre-classified single category — a
+        # message can describe both ("nose block and fever"), and collapsing
+        # to one category here before calling lookup_symptom would silently
+        # drop the other one's products even though lookup_symptom itself
+        # now handles multi-category text correctly.
+        result = tools.lookup_symptom(source_text)
         _remember_products(session_id, result)
+        category_label = "+".join(categories)
         parts.append(
-            f"[Detected a {category}-related medicine/symptom mention. Matching "
+            f"[Detected a {category_label}-related medicine/symptom mention. Matching "
             f"catalog products (use one of these exact product_ids for "
             f"start_order, don't call lookup_symptom again): {result}]"
         )
