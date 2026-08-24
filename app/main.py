@@ -134,28 +134,71 @@ def _complete_confirmed_order(session_id: str, pending: dict) -> str:
     return guardrails.build_order_confirmation(order)
 
 
+# Filler words stripped before checking for an ordinal/positional selection
+# phrase — "last item bro" and "the second one please" both need to reduce
+# to just the meaningful word(s) before matching.
+_SELECTION_FILLER_WORDS = {
+    "bro", "please", "pls", "the", "that", "item", "items", "option",
+    "options", "product", "products", "number", "no",
+}
+_ORDINAL_TO_INDEX = {
+    "first": 1, "1st": 1,
+    "second": 2, "2nd": 2,
+    "third": 3, "3rd": 3,
+    "fourth": 4, "4th": 4,
+    "fifth": 5, "5th": 5,
+}
+
+
 def _resolve_bare_selection(text: str, last_products: list[dict] | None) -> dict | None:
     """After a product list is shown, users very naturally reply with just a
-    number ("3") or an id fragment ("001") rather than the full product_id —
-    and the model handles that unreliably (either declining it as unrelated,
-    or hallucinating a completion for the wrong product). Resolves it
-    deterministically against whatever list was actually just shown, matching
-    by the product id's numeric suffix first (unambiguous even though ids
-    like fev-001/col-001 collide numerically across categories, since we only
-    ever look inside the specific list just shown), falling back to plain
-    list position."""
+    number ("3"), an ordinal phrase ("last one", "the third item bro"), or an
+    id fragment ("001") rather than the full product_id — and the model
+    handles bare numbers fine but ordinal phrases unreliably (observed: asked
+    "last one" after a fever list, it fabricated an entirely unrelated cold
+    product list instead of picking the actual last fever item — presumably
+    a hallucinated fresh lookup_symptom call with nothing grounding it).
+    Resolving these deterministically against whatever list was actually
+    just shown removes that failure mode the same way bare digits already
+    are handled — matching by the product id's numeric suffix first for
+    plain digits (unambiguous even though ids like fev-001/col-001 collide
+    numerically across categories, since we only ever look inside the
+    specific list just shown), falling back to plain list position; ordinal
+    phrases resolve to list position directly, since "last"/"third" refer to
+    what was actually displayed, not a catalog id."""
     if not last_products:
         return None
-    t = text.strip()
-    if not re.fullmatch(r"\d{1,3}", t):
+    t = text.strip().lower().strip("!.,? ")
+
+    if re.fullmatch(r"\d{1,3}", t):
+        n = int(t)
+        for product in last_products:
+            suffix = product["id"].split("-")[-1]
+            if suffix.isdigit() and int(suffix) == n:
+                return product
+        if 1 <= n <= len(last_products):
+            return last_products[n - 1]
         return None
-    n = int(t)
-    for product in last_products:
-        suffix = product["id"].split("-")[-1]
-        if suffix.isdigit() and int(suffix) == n:
-            return product
-    if 1 <= n <= len(last_products):
-        return last_products[n - 1]
+
+    words = [w for w in re.findall(r"[a-z0-9]+", t) if w not in _SELECTION_FILLER_WORDS]
+    if not words:
+        return None
+
+    # "one" doubles as a generic filler noun when paired with an ordinal
+    # word ("second one", "last one") but means position 1 on its own
+    # ("one" / "just one").
+    if len(words) > 1 and "one" in words and (words[0] == "last" or words[0] in _ORDINAL_TO_INDEX):
+        words = [w for w in words if w != "one"]
+
+    def _at(n: int) -> dict | None:
+        return last_products[n - 1] if 1 <= n <= len(last_products) else None
+
+    if words == ["last"]:
+        return last_products[-1]
+    if words == ["one"]:
+        return _at(1)
+    if len(words) == 1 and words[0] in _ORDINAL_TO_INDEX:
+        return _at(_ORDINAL_TO_INDEX[words[0]])
     return None
 
 

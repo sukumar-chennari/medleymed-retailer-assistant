@@ -325,6 +325,16 @@ def describe_image(image_b64: str, media_type: str) -> str:
         return f"Image could not be read ({exc}) — ask the user to type the medicine name."
 
 
+def _established_category(session_id: str) -> str | None:
+    """The fever/cold category of whatever product list was last shown this
+    session, if any — used to keep a follow-up turn anchored to the same
+    category rather than trusting the model to remember or re-derive it."""
+    last = store.get_last_products(session_id)
+    if not last:
+        return None
+    return "fever" if last[0]["id"].startswith("fev") else "cold"
+
+
 def _remember_products(session_id: str, lookup_result_json: str) -> None:
     """Records whatever product list was just shown to the user (whichever
     path produced it — a real lookup_symptom call, or the deterministic
@@ -697,11 +707,7 @@ def run_turn(
                 # paracetamol?" got declined outright despite fever context
                 # from the same turn. Redirect to a real lookup instead of
                 # trusting the decline, rather than ending the turn wrong.
-                category = tools.classify(user_text) if user_text else None
-                if not category:
-                    last = store.get_last_products(session_id)
-                    if last:
-                        category = "fever" if last[0]["id"].startswith("fev") else "cold"
+                category = (tools.classify(user_text) if user_text else None) or _established_category(session_id)
                 if category:
                     print(f"[GUARD] blocked incorrect decline_out_of_scope on grounded input: {user_text!r}")
                     result = tools.lookup_symptom(category)
@@ -749,6 +755,29 @@ def run_turn(
                 elif name == "lookup_symptom" and user_text and INFO_QUESTION_RE.search(user_text):
                     print(f"[GUARD] redirected misrouted lookup_symptom to lookup_medicine_info: {user_text!r}")
                     result = tools.lookup_medicine_info(user_text)
+                elif (
+                    name == "lookup_symptom"
+                    and not (bool(image_b64) or (bool(user_text) and tools.classify(user_text) is not None))
+                    and (established := _established_category(session_id))
+                ):
+                    # The current message's own text doesn't establish any
+                    # category — the only reason this call isn't blocked as
+                    # ungrounded below is an established category from
+                    # earlier this session (see symptom_lookup_grounded).
+                    # That justifies reusing THAT category, never switching
+                    # to a different one the model invented. Observed
+                    # failure: asked "last one" right after a fever product
+                    # list, the model called lookup_symptom(symptom="cold")
+                    # with nothing in the message suggesting cold at all,
+                    # fabricating an entirely unrelated product list.
+                    requested = tools.classify(arguments.get("symptom", ""))
+                    if requested != established:
+                        print(
+                            f"[GUARD] blocked lookup_symptom category switch "
+                            f"(requested={arguments.get('symptom')!r}, established={established!r}): {arguments}"
+                        )
+                    result = tools.lookup_symptom(established)
+                    _remember_products(session_id, result)
                 elif name == "lookup_symptom" and not symptom_lookup_grounded:
                     print(f"[GUARD] blocked ungrounded lookup_symptom call: {arguments}")
                     blocked_ungrounded_lookup_this_turn = True
