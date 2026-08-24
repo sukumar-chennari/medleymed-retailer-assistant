@@ -18,12 +18,6 @@ GENERIC_FAILURE_REPLY = (
     "keeps happening, check that Ollama is running."
 )
 
-
-DISCLAIMER = (
-    "This is general OTC guidance, not a medical diagnosis — consult a doctor if "
-    "symptoms persist or worsen."
-)
-
 EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
 
 
@@ -101,30 +95,16 @@ def _complete_pending_order(session_id: str, product_id: str, address_text: str)
 
     if recipient_email:
         email_result = json.loads(tools.send_confirmation_email(recipient_email, summary))
-        email_note = (
-            f"A confirmation email has been sent to {recipient_email}."
-            if email_result.get("sent")
-            else "Your order is placed, though the confirmation email couldn't be sent."
-        )
+        order["email_sent"] = email_result.get("sent", False)
     else:
         # No email on file at all — the order still ships fine (address is
         # all that requires), but ask for an email so a confirmation can go
         # out; the next message is captured as the email, same pattern as
         # the address flow above.
         store.set_pending_email(session_id, order["order_id"])
-        email_note = (
-            "I don't have an email on file for you — reply with your email "
-            "address if you'd like a confirmation sent."
-        )
+        order["email_sent"] = False
 
-    return (
-        f"Order confirmed!\n\n"
-        f"Order ID: {order['order_id']}\n"
-        f"Product: {order['product_name']}\n"
-        f"Price: ${order['price_usd']}\n"
-        f"Shipping to: {order['address']}\n\n"
-        f"{email_note}\n\n{DISCLAIMER}"
-    )
+    return guardrails.build_order_confirmation(order)
 
 
 def _resolve_bare_selection(text: str, last_products: list[dict] | None) -> dict | None:
@@ -174,19 +154,7 @@ def _reply_for_start_order_result(order: dict) -> str:
         # we just need to ask for the address ourselves.
         return "Sure! What's your shipping address so I can send that out?"
 
-    email_note = (
-        "A confirmation email has been sent."
-        if order.get("email_sent")
-        else "I don't have an email on file for you — reply with your email address if you'd like a confirmation sent."
-    )
-    return (
-        f"Order confirmed!\n\n"
-        f"Order ID: {order['order_id']}\n"
-        f"Product: {order['product_name']}\n"
-        f"Price: ${order['price_usd']}\n"
-        f"Shipping to: {order['address']}\n\n"
-        f"{email_note}\n\n{DISCLAIMER}"
-    )
+    return guardrails.build_order_confirmation(order)
 
 
 def _complete_pending_email(email: str, order_id: str) -> str:

@@ -27,6 +27,31 @@ DISCLAIMER = (
 )
 
 
+def build_order_confirmation(order: dict) -> str:
+    """The single canonical order-confirmation template — every completion
+    path (deterministic address/email follow-ups in main.py, and a real
+    start_order success reached via the LLM tool-loop in agent.py) renders
+    through this, rather than ever letting the model phrase this message
+    itself. Observed failure mode this prevents: a real order succeeded, but
+    the model's own free-text confirmation ("please allow 3-5 business days
+    for delivery...") omitted the order id, price, and address — details the
+    user actually needs — even though nothing was factually wrong."""
+    email_note = (
+        "A confirmation email has been sent."
+        if order.get("email_sent")
+        else "I don't have an email on file for you — reply with your email "
+             "address if you'd like a confirmation sent."
+    )
+    return (
+        f"Order confirmed!\n\n"
+        f"Order ID: {order['order_id']}\n"
+        f"Product: {order['product_name']}\n"
+        f"Price: ${order['price_usd']}\n"
+        f"Shipping to: {order['address']}\n\n"
+        f"{email_note}\n\n{DISCLAIMER}"
+    )
+
+
 def claims_order_placed(reply_text: str) -> bool:
     t = reply_text.lower()
     return "order" in t and any(k in t for k in ("placed", "confirmed", "shipped", "is on its way"))

@@ -404,6 +404,7 @@ def run_turn(
     # inferred from "no tool_calls this iteration".
     real_order_placed_this_turn = False
     real_email_sent_this_turn = False
+    completed_order_this_turn = None
 
     for _ in range(MAX_TOOL_ROUNDS):
         try:
@@ -423,6 +424,17 @@ def run_turn(
                 # up to the model, which was observed giving inconsistent
                 # soft-redirects instead of a clean decline once this fires.
                 reply_text = guardrails.OUT_OF_SCOPE_REPLY
+                messages.append({"role": "assistant", "content": reply_text})
+                return reply_text, messages
+
+            if completed_order_this_turn:
+                # A real order was placed this turn — render the confirmation
+                # from the actual order data instead of the model's own
+                # phrasing. Observed failure: the model sometimes free-generates
+                # a vague confirmation ("please allow 3-5 business days...")
+                # that omits the order id, price, and address the user needs,
+                # even though the order itself was genuinely placed.
+                reply_text = guardrails.build_order_confirmation(completed_order_this_turn)
                 messages.append({"role": "assistant", "content": reply_text})
                 return reply_text, messages
 
@@ -456,6 +468,26 @@ def run_turn(
         messages.append({"role": "assistant", "content": message.get("content", ""), "tool_calls": tool_calls})
 
         if any(c["function"]["name"] == "decline_out_of_scope" for c in tool_calls):
+            if symptom_lookup_grounded:
+                # Mirrors the ungrounded-lookup_symptom guard, in reverse: the
+                # model declined a message that's actually grounded (either
+                # the text itself classifies, or a category is already
+                # established this session) — e.g. "anything apart from
+                # paracetamol?" got declined outright despite fever context
+                # from the same turn. Redirect to a real lookup instead of
+                # trusting the decline, rather than ending the turn wrong.
+                category = tools.classify(user_text) if user_text else None
+                if not category:
+                    last = store.get_last_products(session_id)
+                    if last:
+                        category = "fever" if last[0]["id"].startswith("fev") else "cold"
+                if category:
+                    print(f"[GUARD] blocked incorrect decline_out_of_scope on grounded input: {user_text!r}")
+                    result = tools.lookup_symptom(category)
+                    _remember_products(session_id, result)
+                    messages.append({"role": "tool", "content": result})
+                    continue
+
             messages.append({"role": "tool", "content": "declined — told the user this is out of scope"})
             messages.append({"role": "assistant", "content": guardrails.OUT_OF_SCOPE_REPLY})
             return guardrails.OUT_OF_SCOPE_REPLY, messages
@@ -466,10 +498,12 @@ def run_turn(
             try:
                 if name == "start_order":
                     result = tools.start_order(arguments["product_id"], session_id)
-                    if '"order_placed": true' in result:
+                    parsed_order = json.loads(result)
+                    if parsed_order.get("order_placed"):
                         real_order_placed_this_turn = True
+                        completed_order_this_turn = parsed_order
                         store.clear_last_recommended_product(session_id)
-                    if '"email_sent": true' in result:
+                    if parsed_order.get("email_sent"):
                         real_email_sent_this_turn = True
                 elif name == "lookup_symptom" and user_text and INFO_QUESTION_RE.search(user_text):
                     print(f"[GUARD] redirected misrouted lookup_symptom to lookup_medicine_info: {user_text!r}")
