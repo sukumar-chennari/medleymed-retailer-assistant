@@ -5,3 +5,6 @@ google-genai
 python-dotenv
 python-multipart
 chromadb
+langchain
+langchain-core
+langchain-ollama

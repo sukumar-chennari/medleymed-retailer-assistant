@@ -1,22 +1,41 @@
 """The agent: system prompt, tool schema, and the tool-calling orchestration
-loop. This is where the LLM decides what to do — reading `guardrails.py`
+loop — built on LangChain's `create_agent` (LangGraph under the hood) rather
+than a hand-rolled loop over the raw Ollama chat API. Reading `guardrails.py`
 alongside this file matters, since several of the decisions made here get
-double-checked there before reaching the user."""
+double-checked there before reaching the user.
+
+Every guardrail that used to live inline in a manual tool-calling loop is
+re-implemented here as agent middleware: `wrap_tool_call` intercepts a tool
+call *before* it executes (block it, redirect it to a different real action,
+or correct its arguments), and `after_agent` overrides the final reply
+*after* the model produces it — the same two intervention points the old
+loop used, just expressed through LangChain's hook API instead of an
+in-place `for` loop.
+"""
 
 import base64
 import json
 import re
 
-import ollama
 from google import genai
 from google.genai import types
+from langchain.agents import create_agent
+from langchain.agents.middleware import AgentMiddleware
+from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.tools import tool
+from langchain_ollama import ChatOllama
+from langgraph.errors import GraphRecursionError
 
 from app import config, guardrails, store, tools
-from app.tools import TOOL_FUNCTIONS
 
 MAX_TOOL_ROUNDS = 6
 
-_ollama_client = ollama.Client(host=config.OLLAMA_HOST)
+TOOL_NAMES = {
+    "lookup_symptom", "get_saved_address", "save_address",
+    "start_order", "lookup_medicine_info", "decline_out_of_scope",
+}
+
+_chat_model = ChatOllama(model=config.TEXT_MODEL, base_url=config.OLLAMA_HOST, temperature=0.2)
 _gemini_client = genai.Client(api_key=config.GEMINI_API_KEY) if config.GEMINI_API_KEY else None
 
 SYSTEM_PROMPT = """\
@@ -126,157 +145,6 @@ user names a specific product directly instead of describing a symptom (e.g.
 placing the order, saving the address, or sending an email in your own words
 without actually calling the tool first.
 """
-
-TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "lookup_symptom",
-            "description": (
-                "Look up OTC medicine recommendations from the fixed catalog for a fever "
-                "or cold symptom. ONLY covers fever and cold (e.g. fever, headache-with-fever, "
-                "runny nose, cough, congestion, sore throat, chills). Returns an empty result "
-                "for anything else — do not call this for symptoms unrelated to fever/cold; "
-                "instead tell the user this demo can't help with that."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "symptom": {
-                        "type": "string",
-                        "description": (
-                            "The symptom or condition category, e.g. 'fever' or 'cold'. "
-                            "Derive this from what the user typed or from the image "
-                            "analysis description."
-                        ),
-                    }
-                },
-                "required": ["symptom"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_saved_address",
-            "description": (
-                "Retrieve the saved shipping address for the current user, if one exists. "
-                "Always call this before asking the user for an address and before placing an order."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "user_id": {
-                        "type": "string",
-                        "description": (
-                            "The user identifier for this conversation. Use 'demo_user' — "
-                            "this demo has a single hardcoded user."
-                        ),
-                    }
-                },
-                "required": ["user_id"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "save_address",
-            "description": (
-                "Save a shipping address for the current user so future orders don't need "
-                "to ask again. Call this only after the user has explicitly provided their "
-                "address in chat."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "user_id": {"type": "string"},
-                    "address": {
-                        "type": "string",
-                        "description": "Full shipping address exactly as the user provided it.",
-                    },
-                },
-                "required": ["user_id", "address"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "start_order",
-            "description": (
-                "Start placing an order for a catalog product once the user has "
-                "confirmed they want it. The product_id MUST be one returned by a prior "
-                "lookup_symptom call — never invent a product_id or order something "
-                "outside the fever/cold catalog. This never completes the order "
-                "immediately, even if an address is already on file: it always asks the "
-                "user to confirm their address first (people move — never assume a "
-                "saved address is still correct), or asks for one if there isn't any on "
-                "file yet. Their next message resolves whichever question this asked. "
-                "You never need to call this (or any other tool) again for the same order."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "product_id": {
-                        "type": "string",
-                        "description": "Product id exactly as returned by lookup_symptom.",
-                    },
-                    "quantity": {
-                        "type": "integer",
-                        "description": (
-                            "How many the user wants to order, e.g. 2. Defaults to 1 if "
-                            "not mentioned — do not ask the user to specify a quantity "
-                            "unless they bring it up themselves."
-                        ),
-                    },
-                },
-                "required": ["product_id"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "lookup_medicine_info",
-            "description": (
-                "Look up dosage, common side effects, or warnings for a catalog medicine "
-                "from our knowledge base (retrieval-augmented — this returns real excerpts "
-                "to quote/cite, not a free-form answer). Only covers the 8 fever/cold "
-                "products in our catalog. Returns an empty result for anything else."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": (
-                            "The user's factual question, e.g. 'dosage for paracetamol' "
-                            "or 'side effects of cetirizine'."
-                        ),
-                    }
-                },
-                "required": ["query"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "decline_out_of_scope",
-            "description": (
-                "Call this when the user's request is not about fever/cold symptoms, "
-                "medicine suggestions, or placing a fever/cold OTC order — e.g. general "
-                "chit-chat, coding help, unrelated medical conditions or injuries, or "
-                "anything else outside this demo's narrow scope. Do not attempt to answer "
-                "the off-topic request yourself; just call this tool."
-            ),
-            "parameters": {"type": "object", "properties": {}, "required": []},
-        },
-    },
-]
-
-TOOL_NAMES = {t["function"]["name"] for t in TOOLS}
 
 # Catches an observed tool-misrouting failure: "side effects of cetirizine"
 # was called through lookup_symptom instead of lookup_medicine_info, because
@@ -545,20 +413,281 @@ OLLAMA_UNAVAILABLE_REPLY = (
     "running). Please make sure Ollama is started and try again."
 )
 
+TOOL_ROUND_LIMIT_REPLY = "Sorry, I'm having trouble completing that request right now — could you rephrase?"
 
-def _call_ollama_with_retry(messages_payload: list):
+
+def _build_tools(session_id: str) -> list:
+    """Builds a fresh set of LangChain tools for this one turn, closing over
+    session_id — start_order needs it to actually place/defer an order, and
+    it's the caller's context (never something the model itself supplies),
+    same as in the raw-ollama tool schema this replaces."""
+
+    @tool
+    def lookup_symptom(symptom: str) -> str:
+        """Look up OTC medicine recommendations from the fixed catalog for a fever
+        or cold symptom. ONLY covers fever and cold (e.g. fever, headache-with-fever,
+        runny nose, cough, congestion, sore throat, chills). Returns an empty result
+        for anything else — do not call this for symptoms unrelated to fever/cold;
+        instead tell the user this demo can't help with that."""
+        return tools.lookup_symptom(symptom)
+
+    @tool
+    def get_saved_address(user_id: str) -> str:
+        """Retrieve the saved shipping address for the current user, if one exists.
+        Always call this before asking the user for an address and before placing an order."""
+        return tools.get_saved_address(user_id)
+
+    @tool
+    def save_address(user_id: str, address: str) -> str:
+        """Save a shipping address for the current user so future orders don't need
+        to ask again. Call this only after the user has explicitly provided their
+        address in chat."""
+        return tools.save_address(user_id, address)
+
+    @tool
+    def start_order(product_id: str, quantity: int = 1) -> str:
+        """Start placing an order for a catalog product once the user has
+        confirmed they want it. The product_id MUST be one returned by a prior
+        lookup_symptom call — never invent a product_id or order something
+        outside the fever/cold catalog. This never completes the order
+        immediately, even if an address is already on file: it always asks the
+        user to confirm their address first (people move — never assume a
+        saved address is still correct), or asks for one if there isn't any on
+        file yet. Their next message resolves whichever question this asked.
+        You never need to call this (or any other tool) again for the same order."""
+        return tools.start_order(product_id, session_id, quantity)
+
+    @tool
+    def lookup_medicine_info(query: str) -> str:
+        """Look up dosage, common side effects, or warnings for a catalog medicine
+        from our knowledge base (retrieval-augmented — this returns real excerpts
+        to quote/cite, not a free-form answer). Only covers the 8 fever/cold
+        products in our catalog. Returns an empty result for anything else."""
+        return tools.lookup_medicine_info(query)
+
+    @tool
+    def decline_out_of_scope() -> str:
+        """Call this when the user's request is not about fever/cold symptoms,
+        medicine suggestions, or placing a fever/cold OTC order — e.g. general
+        chit-chat, coding help, unrelated medical conditions or injuries, or
+        anything else outside this demo's narrow scope. Do not attempt to answer
+        the off-topic request yourself; just call this tool."""
+        # Never actually reached — _GuardrailMiddleware.wrap_tool_call always
+        # short-circuits this tool itself (either redirecting to a real
+        # lookup_symptom call, or forcing the canned decline reply), the same
+        # way the old manual loop special-cased it rather than dispatching it
+        # through a real implementation.
+        return "declined — told the user this is out of scope"
+
+    return [lookup_symptom, get_saved_address, save_address, start_order, lookup_medicine_info, decline_out_of_scope]
+
+
+class _GuardrailMiddleware(AgentMiddleware):
+    """Re-implements every tool-call-time and final-reply-time guardrail that
+    used to live inline in the manual tool-calling loop, as two hooks:
+    `wrap_tool_call` (pre-execution: block, redirect, or correct a call
+    before it runs) and `after_agent` (post-execution: override the model's
+    final text). Constructed fresh per turn — see run_turn — since every
+    guardrail here depends on this specific turn's user_text/session_id/
+    grounding state, not anything reusable across turns."""
+
+    def __init__(
+        self,
+        session_id: str,
+        user_text: str,
+        image_b64: str | None,
+        had_shown_recommendation: bool,
+        symptom_lookup_grounded: bool,
+        turn_state: dict,
+    ):
+        super().__init__()
+        self.session_id = session_id
+        self.user_text = user_text
+        self.image_b64 = image_b64
+        self.had_shown_recommendation = had_shown_recommendation
+        self.symptom_lookup_grounded = symptom_lookup_grounded
+        self.turn_state = turn_state
+
+    def wrap_tool_call(self, request, handler):
+        name = request.tool_call["name"]
+        args = request.tool_call["args"]
+        call_id = request.tool_call["id"]
+        session_id = self.session_id
+        user_text = self.user_text
+
+        try:
+            if name == "decline_out_of_scope":
+                # Mirrors the ungrounded-lookup_symptom guard, in reverse: the
+                # model declined a message that's actually grounded (either
+                # the text itself classifies, or a category is already
+                # established this session) — e.g. "anything apart from
+                # paracetamol?" got declined outright despite fever context
+                # from the same turn. Redirect to a real lookup instead of
+                # trusting the decline, rather than ending the turn wrong.
+                category = (tools.classify(user_text) if user_text else None) or _established_category(session_id)
+                if category:
+                    print(f"[GUARD] blocked incorrect decline_out_of_scope on grounded input: {user_text!r}")
+                    result = tools.lookup_symptom(category)
+                    _remember_products(session_id, result)
+                    return ToolMessage(content=result, tool_call_id=call_id, name=name)
+                # Not grounded — let the model take one more (discarded) turn
+                # reacting to this tool result; after_agent forces the canned
+                # OUT_OF_SCOPE_REPLY regardless of what it says next, the
+                # same end result the old loop got by returning immediately.
+                self.turn_state["declined_forced"] = True
+                return ToolMessage(content="declined — told the user this is out of scope", tool_call_id=call_id, name=name)
+
+            if name == "lookup_symptom":
+                if user_text and INFO_QUESTION_RE.search(user_text):
+                    print(f"[GUARD] redirected misrouted lookup_symptom to lookup_medicine_info: {user_text!r}")
+                    result = tools.lookup_medicine_info(user_text)
+                    return ToolMessage(content=result, tool_call_id=call_id, name=name)
+
+                text_classifies = bool(user_text) and tools.classify(user_text) is not None
+                established = _established_category(session_id)
+                if not (bool(self.image_b64) or text_classifies) and established:
+                    # The current message's own text doesn't establish any
+                    # category — the only reason this call isn't blocked as
+                    # ungrounded below is an established category from
+                    # earlier this session. That justifies reusing THAT
+                    # category, never switching to a different one the model
+                    # invented. Observed failure: asked "last one" right
+                    # after a fever product list, the model called
+                    # lookup_symptom(symptom="cold") with nothing in the
+                    # message suggesting cold at all.
+                    requested = tools.classify(args.get("symptom", ""))
+                    if requested != established:
+                        print(
+                            f"[GUARD] blocked lookup_symptom category switch "
+                            f"(requested={args.get('symptom')!r}, established={established!r}): {args}"
+                        )
+                    result = tools.lookup_symptom(established)
+                    _remember_products(session_id, result)
+                    return ToolMessage(content=result, tool_call_id=call_id, name=name)
+
+                if not self.symptom_lookup_grounded:
+                    print(f"[GUARD] blocked ungrounded lookup_symptom call: {args}")
+                    self.turn_state["blocked_ungrounded_lookup"] = True
+                    result = json.dumps({
+                        "matched": False,
+                        "message": (
+                            "This message doesn't describe a fever or cold symptom. Do "
+                            "not present catalog products for it — call "
+                            "decline_out_of_scope instead."
+                        ),
+                    })
+                    return ToolMessage(content=result, tool_call_id=call_id, name=name)
+
+                response = handler(request)
+                print(f"[TOOL CALL] {name}({args}) -> {response.content}")
+                _remember_products(session_id, response.content)
+                return response
+
+            if name == "start_order":
+                order_intent_this_message = bool(user_text) and ORDER_INTENT_RE.search(user_text)
+                if not self.had_shown_recommendation and not order_intent_this_message:
+                    print(f"[GUARD] blocked premature start_order before user confirmed intent: {args}")
+                    result = json.dumps({
+                        "order_placed": False,
+                        "message": (
+                            "The user has not confirmed they want to order this yet "
+                            "— do not call start_order. Instead, present the "
+                            "recommended product in plain text and ask \"Would you "
+                            "like to order this?\", then stop without calling any "
+                            "tool this turn."
+                        ),
+                    })
+                    return ToolMessage(content=result, tool_call_id=call_id, name=name)
+
+                response = handler(request)
+                print(f"[TOOL CALL] {name}({args}) -> {response.content}")
+                try:
+                    parsed_order = json.loads(response.content)
+                except (TypeError, ValueError):
+                    parsed_order = {}
+                if parsed_order.get("order_placed"):
+                    self.turn_state["real_order_placed"] = True
+                    self.turn_state["completed_order"] = parsed_order
+                    store.clear_last_recommended_product(session_id)
+                elif "error" not in parsed_order:
+                    self.turn_state["deferred_order"] = parsed_order
+                if parsed_order.get("email_sent"):
+                    self.turn_state["real_email_sent"] = True
+                return response
+
+            response = handler(request)
+            print(f"[TOOL CALL] {name}({args}) -> {response.content}")
+            return response
+        except Exception as exc:
+            print(f"[TOOL ERROR] {name}({args}): {exc}")
+            return ToolMessage(content=f"Error calling {name}: {exc}", tool_call_id=call_id, name=name)
+
+    def after_agent(self, state, runtime) -> dict | None:
+        last = state["messages"][-1]
+        reply_text = last.content or ""
+        session_id = self.session_id
+
+        if self.turn_state.get("blocked_ungrounded_lookup") or self.turn_state.get("declined_forced"):
+            # We already know structurally that this turn's lookup was
+            # invalid, or that a decline should stand — don't leave the
+            # final wording up to the model regardless of what it said in
+            # reaction to the tool result.
+            return {"messages": [AIMessage(content=guardrails.OUT_OF_SCOPE_REPLY, id=last.id)]}
+
+        if self.turn_state.get("completed_order"):
+            # A real order was placed this turn — render the confirmation
+            # from the actual order data instead of the model's own
+            # phrasing. Observed failure: the model sometimes free-generates
+            # a vague confirmation that omits the order id, price, and
+            # address the user needs, even though the order itself was
+            # genuinely placed.
+            final = guardrails.build_order_confirmation(self.turn_state["completed_order"])
+            return {"messages": [AIMessage(content=final, id=last.id)]}
+
+        leaked_tool = guardrails.leaked_tool_intent(reply_text, TOOL_NAMES)
+        if leaked_tool == "decline_out_of_scope":
+            print(f"[GUARD] converted leaked decline intent to real decline: {reply_text!r}")
+            final = guardrails.OUT_OF_SCOPE_REPLY
+        elif leaked_tool == "lookup_symptom":
+            recovered = guardrails.recover_leaked_lookup(reply_text)
+            if recovered:
+                print(f"[GUARD] recovered leaked lookup_symptom call: {reply_text!r}")
+                _remember_products(session_id, recovered[1])
+                final = recovered[0]
+            else:
+                print(f"[GUARD] blocked leaked tool intent (lookup_symptom, unrecoverable): {reply_text!r}")
+                final = guardrails.FAKE_COMPLETION_GUARD_REPLY
+        elif leaked_tool:
+            print(f"[GUARD] blocked leaked tool intent ({leaked_tool}): {reply_text!r}")
+            final = guardrails.FAKE_COMPLETION_GUARD_REPLY
+        elif self.turn_state.get("deferred_order"):
+            # Never trust the model's own phrasing here — see
+            # guardrails.reply_for_deferred_order for the two distinct
+            # observed failures this avoids.
+            final = guardrails.reply_for_deferred_order(self.turn_state["deferred_order"])
+        else:
+            guardrails.remember_recommended_product(session_id, reply_text)
+            guard_reply = guardrails.check_unverified_completion(
+                reply_text,
+                self.turn_state.get("real_order_placed", False),
+                self.turn_state.get("real_email_sent", False),
+            )
+            final = guard_reply or reply_text
+
+        return {"messages": [AIMessage(content=final, id=last.id)]}
+
+
+def _invoke_agent_with_retry(agent_graph, payload: dict, run_config: dict):
     """One retry before giving up — Ollama running locally on CPU occasionally
     has a slow/failed first call under load; a single retry smooths that over
-    without masking a genuinely dead service."""
+    without masking a genuinely dead service. A recursion-limit hit is a real
+    cap, not a transient failure, so it's never retried."""
     last_exc = None
     for attempt in range(2):
         try:
-            return _ollama_client.chat(
-                model=config.TEXT_MODEL,
-                messages=messages_payload,
-                tools=TOOLS,
-                options={"temperature": 0.2},
-            )
+            return agent_graph.invoke(payload, config=run_config)
+        except GraphRecursionError:
+            raise
         except Exception as exc:
             last_exc = exc
             print(f"[OLLAMA ERROR] attempt {attempt + 1} failed: {exc}")
@@ -643,197 +772,48 @@ def run_turn(
         or (bool(user_text) and tools.classify(user_text) is not None)
         or bool(store.get_last_products(session_id))
     )
-    blocked_ungrounded_lookup_this_turn = False
 
     # Tracks whether a *real* start_order success (and, separately, a real
     # email send) happened anywhere in this turn — see
     # guardrails.check_unverified_completion for why this can't just be
-    # inferred from "no tool_calls this iteration".
-    real_order_placed_this_turn = False
-    real_email_sent_this_turn = False
-    completed_order_this_turn = None
-    # A start_order call that deferred (asked for an address, or asked to
-    # confirm one on file) rather than completing. Needed because the model
-    # was observed claiming "I've placed your order" even when the tool
-    # result it just received clearly said order_placed:false — the
-    # unverified-completion guard correctly blocks that claim, but needs
-    # this to render the *correct* ask instead of falling back to a generic,
-    # wrong-for-this-situation reply.
-    deferred_order_result_this_turn = None
+    # inferred from "no tool_calls this iteration". Mutated by
+    # _GuardrailMiddleware, which closes over this same dict.
+    turn_state: dict = {
+        "real_order_placed": False,
+        "real_email_sent": False,
+        "completed_order": None,
+        "deferred_order": None,
+        "blocked_ungrounded_lookup": False,
+        "declined_forced": False,
+    }
 
-    for _ in range(MAX_TOOL_ROUNDS):
-        try:
-            response = _call_ollama_with_retry([{"role": "system", "content": SYSTEM_PROMPT}] + messages)
-        except Exception:
-            messages.append({"role": "assistant", "content": OLLAMA_UNAVAILABLE_REPLY})
-            return OLLAMA_UNAVAILABLE_REPLY, messages
-        message = response["message"]
-        tool_calls = message.get("tool_calls") or []
+    agent_tools = _build_tools(session_id)
+    middleware = [
+        _GuardrailMiddleware(
+            session_id=session_id,
+            user_text=user_text,
+            image_b64=image_b64,
+            had_shown_recommendation=had_shown_recommendation,
+            symptom_lookup_grounded=symptom_lookup_grounded,
+            turn_state=turn_state,
+        )
+    ]
+    # Rebuilt fresh every turn — tools and middleware both close over this
+    # turn's session_id/user_text/grounding state, which can't be cached
+    # across turns.
+    agent_graph = create_agent(_chat_model, tools=agent_tools, system_prompt=SYSTEM_PROMPT, middleware=middleware)
 
-        if not tool_calls:
-            reply_text = message.get("content", "")
+    run_config = {"recursion_limit": MAX_TOOL_ROUNDS * 2 + 4}
 
-            if blocked_ungrounded_lookup_this_turn:
-                # We already know structurally that this turn's lookup_symptom
-                # call was invalid (see below) — don't leave the final wording
-                # up to the model, which was observed giving inconsistent
-                # soft-redirects instead of a clean decline once this fires.
-                reply_text = guardrails.OUT_OF_SCOPE_REPLY
-                messages.append({"role": "assistant", "content": reply_text})
-                return reply_text, messages
+    try:
+        result = _invoke_agent_with_retry(agent_graph, {"messages": messages}, run_config)
+    except GraphRecursionError:
+        messages.append({"role": "assistant", "content": TOOL_ROUND_LIMIT_REPLY})
+        return TOOL_ROUND_LIMIT_REPLY, messages
+    except Exception:
+        messages.append({"role": "assistant", "content": OLLAMA_UNAVAILABLE_REPLY})
+        return OLLAMA_UNAVAILABLE_REPLY, messages
 
-            if completed_order_this_turn:
-                # A real order was placed this turn — render the confirmation
-                # from the actual order data instead of the model's own
-                # phrasing. Observed failure: the model sometimes free-generates
-                # a vague confirmation ("please allow 3-5 business days...")
-                # that omits the order id, price, and address the user needs,
-                # even though the order itself was genuinely placed.
-                reply_text = guardrails.build_order_confirmation(completed_order_this_turn)
-                messages.append({"role": "assistant", "content": reply_text})
-                return reply_text, messages
-
-            leaked_tool = guardrails.leaked_tool_intent(reply_text, TOOL_NAMES)
-            if leaked_tool == "decline_out_of_scope":
-                print(f"[GUARD] converted leaked decline intent to real decline: {reply_text!r}")
-                reply_text = guardrails.OUT_OF_SCOPE_REPLY
-            elif leaked_tool == "lookup_symptom":
-                recovered = guardrails.recover_leaked_lookup(reply_text)
-                if recovered:
-                    print(f"[GUARD] recovered leaked lookup_symptom call: {reply_text!r}")
-                    _remember_products(session_id, recovered[1])
-                    reply_text = recovered[0]
-                else:
-                    print(f"[GUARD] blocked leaked tool intent (lookup_symptom, unrecoverable): {reply_text!r}")
-                    reply_text = guardrails.FAKE_COMPLETION_GUARD_REPLY
-            elif leaked_tool:
-                print(f"[GUARD] blocked leaked tool intent ({leaked_tool}): {reply_text!r}")
-                reply_text = guardrails.FAKE_COMPLETION_GUARD_REPLY
-            elif deferred_order_result_this_turn:
-                # Never trust the model's own phrasing here — see
-                # guardrails.reply_for_deferred_order for the two distinct
-                # observed failures this avoids.
-                reply_text = guardrails.reply_for_deferred_order(deferred_order_result_this_turn)
-            else:
-                guardrails.remember_recommended_product(session_id, reply_text)
-                guard_reply = guardrails.check_unverified_completion(
-                    reply_text, real_order_placed_this_turn, real_email_sent_this_turn
-                )
-                if guard_reply:
-                    reply_text = guard_reply
-
-            messages.append({"role": "assistant", "content": reply_text})
-            return reply_text, messages
-
-        # tool_calls here are ollama's ToolCall pydantic objects, not plain
-        # dicts — harmless while messages only ever lived in memory, but
-        # store.save_session_messages now round-trips this list through
-        # json.dumps for real persistence, which can't serialize them
-        # directly. model_dump() converts to plain dicts; already-plain
-        # entries (e.g. reloaded from a prior session) pass through as-is.
-        serializable_tool_calls = [c.model_dump() if hasattr(c, "model_dump") else c for c in tool_calls]
-        messages.append({"role": "assistant", "content": message.get("content", ""), "tool_calls": serializable_tool_calls})
-
-        if any(c["function"]["name"] == "decline_out_of_scope" for c in tool_calls):
-            if symptom_lookup_grounded:
-                # Mirrors the ungrounded-lookup_symptom guard, in reverse: the
-                # model declined a message that's actually grounded (either
-                # the text itself classifies, or a category is already
-                # established this session) — e.g. "anything apart from
-                # paracetamol?" got declined outright despite fever context
-                # from the same turn. Redirect to a real lookup instead of
-                # trusting the decline, rather than ending the turn wrong.
-                category = (tools.classify(user_text) if user_text else None) or _established_category(session_id)
-                if category:
-                    print(f"[GUARD] blocked incorrect decline_out_of_scope on grounded input: {user_text!r}")
-                    result = tools.lookup_symptom(category)
-                    _remember_products(session_id, result)
-                    messages.append({"role": "tool", "content": result})
-                    continue
-
-            messages.append({"role": "tool", "content": "declined — told the user this is out of scope"})
-            messages.append({"role": "assistant", "content": guardrails.OUT_OF_SCOPE_REPLY})
-            return guardrails.OUT_OF_SCOPE_REPLY, messages
-
-        for call in tool_calls:
-            name = call["function"]["name"]
-            arguments = call["function"]["arguments"]
-            try:
-                if name == "start_order":
-                    order_intent_this_message = bool(user_text) and ORDER_INTENT_RE.search(user_text)
-                    if not had_shown_recommendation and not order_intent_this_message:
-                        print(f"[GUARD] blocked premature start_order before user confirmed intent: {arguments}")
-                        result = json.dumps({
-                            "order_placed": False,
-                            "message": (
-                                "The user has not confirmed they want to order this yet "
-                                "— do not call start_order. Instead, present the "
-                                "recommended product in plain text and ask \"Would you "
-                                "like to order this?\", then stop without calling any "
-                                "tool this turn."
-                            ),
-                        })
-                    else:
-                        try:
-                            quantity = int(arguments.get("quantity", 1))
-                        except (TypeError, ValueError):
-                            quantity = 1
-                        result = tools.start_order(arguments["product_id"], session_id, quantity)
-                        parsed_order = json.loads(result)
-                        if parsed_order.get("order_placed"):
-                            real_order_placed_this_turn = True
-                            completed_order_this_turn = parsed_order
-                            store.clear_last_recommended_product(session_id)
-                        elif "error" not in parsed_order:
-                            deferred_order_result_this_turn = parsed_order
-                        if parsed_order.get("email_sent"):
-                            real_email_sent_this_turn = True
-                elif name == "lookup_symptom" and user_text and INFO_QUESTION_RE.search(user_text):
-                    print(f"[GUARD] redirected misrouted lookup_symptom to lookup_medicine_info: {user_text!r}")
-                    result = tools.lookup_medicine_info(user_text)
-                elif (
-                    name == "lookup_symptom"
-                    and not (bool(image_b64) or (bool(user_text) and tools.classify(user_text) is not None))
-                    and (established := _established_category(session_id))
-                ):
-                    # The current message's own text doesn't establish any
-                    # category — the only reason this call isn't blocked as
-                    # ungrounded below is an established category from
-                    # earlier this session (see symptom_lookup_grounded).
-                    # That justifies reusing THAT category, never switching
-                    # to a different one the model invented. Observed
-                    # failure: asked "last one" right after a fever product
-                    # list, the model called lookup_symptom(symptom="cold")
-                    # with nothing in the message suggesting cold at all,
-                    # fabricating an entirely unrelated product list.
-                    requested = tools.classify(arguments.get("symptom", ""))
-                    if requested != established:
-                        print(
-                            f"[GUARD] blocked lookup_symptom category switch "
-                            f"(requested={arguments.get('symptom')!r}, established={established!r}): {arguments}"
-                        )
-                    result = tools.lookup_symptom(established)
-                    _remember_products(session_id, result)
-                elif name == "lookup_symptom" and not symptom_lookup_grounded:
-                    print(f"[GUARD] blocked ungrounded lookup_symptom call: {arguments}")
-                    blocked_ungrounded_lookup_this_turn = True
-                    result = json.dumps({
-                        "matched": False,
-                        "message": (
-                            "This message doesn't describe a fever or cold symptom. Do "
-                            "not present catalog products for it — call "
-                            "decline_out_of_scope instead."
-                        ),
-                    })
-                else:
-                    result = TOOL_FUNCTIONS[name](arguments)
-                    if name == "lookup_symptom":
-                        _remember_products(session_id, result)
-            except Exception as exc:
-                result = f"Error calling {name}: {exc}"
-            print(f"[TOOL CALL] {name}({arguments}) -> {result}")
-            messages.append({"role": "tool", "content": result})
-
-    fallback = "Sorry, I'm having trouble completing that request right now — could you rephrase?"
-    messages.append({"role": "assistant", "content": fallback})
-    return fallback, messages
+    reply_text = result["messages"][-1].content or ""
+    messages.append({"role": "assistant", "content": reply_text})
+    return reply_text, messages
