@@ -725,7 +725,14 @@ def run_turn(
             messages.append({"role": "assistant", "content": reply_text})
             return reply_text, messages
 
-        messages.append({"role": "assistant", "content": message.get("content", ""), "tool_calls": tool_calls})
+        # tool_calls here are ollama's ToolCall pydantic objects, not plain
+        # dicts — harmless while messages only ever lived in memory, but
+        # store.save_session_messages now round-trips this list through
+        # json.dumps for real persistence, which can't serialize them
+        # directly. model_dump() converts to plain dicts; already-plain
+        # entries (e.g. reloaded from a prior session) pass through as-is.
+        serializable_tool_calls = [c.model_dump() if hasattr(c, "model_dump") else c for c in tool_calls]
+        messages.append({"role": "assistant", "content": message.get("content", ""), "tool_calls": serializable_tool_calls})
 
         if any(c["function"]["name"] == "decline_out_of_scope" for c in tool_calls):
             if symptom_lookup_grounded:

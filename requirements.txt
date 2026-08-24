@@ -4,3 +4,4 @@ ollama
 google-genai
 python-dotenv
 python-multipart
+chromadb

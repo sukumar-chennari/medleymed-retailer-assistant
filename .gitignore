@@ -4,4 +4,6 @@ __pycache__/
 .venv/
 venv/
 .DS_Store
-app/data/kb_index.json
+app/data/kb_meta.json
+app/data/chroma_db/
+app/data/app.db

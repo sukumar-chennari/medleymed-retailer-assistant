@@ -8,25 +8,31 @@ it to open the assistant, describe symptoms or upload a photo of a medicine
 label/prescription, get a product suggestion from a fixed catalog, and place a
 demo order with email confirmation.
 
-Scope is deliberately narrow: fever and cold only, one hardcoded demo user,
-in-memory storage. Built entirely on free resources: **Ollama** (`llama3.2`,
-running locally) drives the conversation and tool-calling, `nomic-embed-text`
-(also local Ollama) powers a small retrieval-augmented-generation (RAG)
-knowledge base for medicine dosage/side-effect questions, and the free
-**Gemini API** reads uploaded photos. See
+Scope is deliberately narrow: fever and cold only, one hardcoded demo user.
+Built entirely on free resources: **Ollama** (`llama3.2`, running locally)
+drives the conversation and tool-calling, `nomic-embed-text` (also local
+Ollama) powers a small retrieval-augmented-generation (RAG) knowledge base
+for medicine dosage/side-effect questions, and the free **Gemini API** reads
+uploaded photos. See
 `/Users/macbookpro/.claude/plans/twinkly-humming-wolf.md` for the full design
 plan and roadmap.
+
+App data (orders, addresses, in-progress conversation state) persists in a
+local SQLite file and survives restarts; the RAG knowledge base is embedded
+into a local Chroma vector store rather than plain in-memory Python — both
+run entirely on-disk with no server or paid service involved.
 
 ### Code layout
 
 - `app/agent.py` — the agent: system prompt, tool schema, tool-calling loop
 - `app/guardrails.py` — hallucination/leak/pleasantry safety-net checks
 - `app/tools.py` — tool implementations (catalog lookup, orders, RAG lookup)
-- `app/data_ingest.py` — chunks and embeds the knowledge base (run standalone
-  with `python -m app.data_ingest`)
-- `app/retrieval.py` — cosine-similarity search over the embedded chunks
+- `app/data_ingest.py` — chunks, embeds, and upserts the knowledge base into
+  Chroma (run standalone with `python -m app.data_ingest`)
+- `app/retrieval.py` — vector search over the Chroma collection
 - `app/data/knowledge_base/*.md` — the RAG corpus (one file per catalog item)
-- `app/store.py` — in-memory app state (orders, sessions, addresses)
+- `app/store.py` — SQLite-backed app state (orders, sessions, addresses) —
+  `app/data/app.db`, created automatically on first run
 - `app/main.py` — FastAPI routes
 
 ## Setup
@@ -46,9 +52,13 @@ plan and roadmap.
 6. `uvicorn app.main:app --reload`
 7. Open http://localhost:8000
 
-The first run automatically builds the RAG index (`app/data/kb_index.json`)
-if it doesn't exist yet. To rebuild it explicitly (e.g. after editing the
-knowledge base), run `python -m app.data_ingest`.
+The first run automatically builds the RAG index (a local Chroma collection
+at `app/data/chroma_db/`) if it doesn't exist yet. To rebuild it explicitly
+(e.g. after editing the knowledge base), run `python -m app.data_ingest`.
+
+App data lives in `app/data/app.db` (SQLite), created automatically on first
+run. To reset the demo to a clean slate (no orders, no saved address/email),
+just delete that file — it's regenerated empty on the next start.
 
 ## Running the demo
 

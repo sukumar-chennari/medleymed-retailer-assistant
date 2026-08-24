@@ -1,12 +1,12 @@
 """Vector search over the ingested knowledge base — embeds a query and finds
-the most similar chunks by cosine similarity. Plain Python, no vector-DB
-dependency: the corpus is ~30 chunks, which doesn't need one.
+the most similar chunks via a persistent Chroma collection (see
+data_ingest.py for how it's built).
 """
 
 import json
-import math
 import re
 
+import chromadb
 import ollama
 
 from app import config, data_ingest
@@ -23,33 +23,30 @@ def _mg_strengths(text: str) -> set[str]:
     return {m.replace(" ", "").lower() for m in MG_RE.findall(text)}
 
 
-def _load_index() -> list[dict]:
-    """Loads the cached index, rebuilding it if it's missing OR stale — the
-    cache's stored content_hash is compared against a fresh hash of the
+def _load_collection():
+    """Loads the cached Chroma collection, rebuilding it if it's missing OR
+    stale — the sidecar content_hash is compared against a fresh hash of the
     current knowledge-base files + embedding model (see
     data_ingest.compute_content_hash), so editing a knowledge_base/*.md file
     and restarting the app picks up the change automatically instead of
     silently serving outdated embeddings."""
-    if data_ingest.INDEX_PATH.exists():
-        cached = json.loads(data_ingest.INDEX_PATH.read_text())
-        if cached.get("content_hash") == data_ingest.compute_content_hash():
-            return cached["chunks"]
-        print("[RAG] knowledge base changed since last ingest — rebuilding index")
+    if data_ingest.META_PATH.exists():
+        meta = json.loads(data_ingest.META_PATH.read_text())
+        if meta.get("content_hash") == data_ingest.compute_content_hash():
+            client = chromadb.PersistentClient(path=str(data_ingest.CHROMA_DIR))
+            try:
+                return client.get_collection(data_ingest.COLLECTION_NAME)
+            except Exception:
+                print("[RAG] cache metadata present but collection missing — rebuilding index")
+        else:
+            print("[RAG] knowledge base changed since last ingest — rebuilding index")
     else:
         print("[RAG] no cached index found — building one")
-    return data_ingest.build_index()
+    data_ingest.build_index()
+    return chromadb.PersistentClient(path=str(data_ingest.CHROMA_DIR)).get_collection(data_ingest.COLLECTION_NAME)
 
 
-_index = _load_index()
-
-
-def _cosine_similarity(a: list[float], b: list[float]) -> float:
-    dot = sum(x * y for x, y in zip(a, b))
-    norm_a = math.sqrt(sum(x * x for x in a))
-    norm_b = math.sqrt(sum(y * y for y in b))
-    if norm_a == 0 or norm_b == 0:
-        return 0.0
-    return dot / (norm_a * norm_b)
+_collection = _load_collection()
 
 
 def search(query: str, top_k: int = 3) -> list[dict]:
@@ -65,27 +62,30 @@ def search(query: str, top_k: int = 3) -> list[dict]:
     number heavily. A small keyword boost for an exact "NNNmg" match between
     the query and a chunk's product title (a lightweight hybrid
     keyword+semantic technique) fixes this specific, verified failure mode
-    without a full reranker."""
+    without a full reranker — fetching more than top_k from Chroma before
+    applying it means a strength-matching chunk can still be pulled back
+    into the final top_k even if its raw vector similarity alone wouldn't
+    have ranked it there."""
+    if _collection.count() == 0:
+        return []
+
     response = _client.embed(model=config.EMBED_MODEL, input=query)
     query_vector = response.embeddings[0]
     query_strengths = _mg_strengths(query)
 
+    fetch_n = min(max(top_k * 3, 10), _collection.count())
+    result = _collection.query(query_embeddings=[query_vector], n_results=fetch_n)
+
     scored = []
-    for chunk in _index:
-        score = _cosine_similarity(query_vector, chunk["embedding"])
-        if query_strengths and query_strengths & _mg_strengths(chunk["title"]):
+    for doc, meta, distance in zip(result["documents"][0], result["metadatas"][0], result["distances"][0]):
+        score = 1 - distance  # collection is cosine-space: distance = 1 - cosine_similarity
+        if query_strengths and query_strengths & _mg_strengths(meta["title"]):
             score = min(score + STRENGTH_BOOST, 1.0)
-        scored.append({**chunk, "score": score})
+        scored.append({"product": meta["title"], "source": meta["source"], "section": meta["section"], "text": doc, "score": score})
     scored.sort(key=lambda c: c["score"], reverse=True)
 
     return [
-        {
-            "product": c["title"],
-            "source": c["source"],
-            "section": c["section"],
-            "text": c["text"],
-            "score": round(c["score"], 3),
-        }
+        {**c, "score": round(c["score"], 3)}
         for c in scored[:top_k]
         if c["score"] >= MIN_SIMILARITY
     ]
