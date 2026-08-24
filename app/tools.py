@@ -196,6 +196,8 @@ def start_order(product_id: str, session_id: str, quantity: int = 1) -> str:
         store.set_pending_order(session_id, product_id, quantity)
         return json.dumps({
             "order_placed": False,
+            "quantity": quantity,
+            "quantity_clamped": clamped,
             "message": (
                 "No address on file. Ask the user for their shipping address in plain "
                 "conversational text now, then stop — do not call any more tools this "
@@ -209,6 +211,8 @@ def start_order(product_id: str, session_id: str, quantity: int = 1) -> str:
         "order_placed": False,
         "needs_address_confirmation": True,
         "address_on_file": address,
+        "quantity": quantity,
+        "quantity_clamped": clamped,
         "message": (
             f'Ask the user to confirm this shipping address on file: "{address}". '
             "Do not call any more tools this turn. If they confirm (e.g. \"yes\"), "

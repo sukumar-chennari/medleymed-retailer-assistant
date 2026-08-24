@@ -341,9 +341,15 @@ def _remember_products(session_id: str, lookup_result_json: str) -> None:
 # Symptoms ambiguous enough that recommending the wrong product would be a
 # real mismatch, not just a suboptimal pick — e.g. our only cough product
 # (col-004) is a dry-cough suppressant, explicitly unsuited for a productive
-# ("wet"/"chesty") cough per its own knowledge-base entry. Extensible: add
-# more entries here for other symptoms worth narrowing down before
-# recommending, following the same {qualifiers, question} shape.
+# ("wet"/"chesty") cough per its own knowledge-base entry; fever products
+# split sharply between adult and child dosing (fev-004 is the only
+# pediatric option) — the wrong pick there is a real dosing mismatch, not
+# just a suboptimal one. Each "branch" maps a set of answer words to either
+# a fixed reply (e.g. "see a pharmacist", no product fits) or a list of
+# product_ids to recommend — one product renders as a direct "would you like
+# to order this?", more than one renders as a normal multi-option list.
+# Extensible: add more entries here for other symptoms worth narrowing down
+# before recommending, following the same {qualifiers, question, branches} shape.
 CLARIFYING_QUESTIONS = {
     "cough": {
         "qualifiers": ("dry", "wet", "chesty", "productive", "phlegm", "mucus", "sputum"),
@@ -352,15 +358,31 @@ CLARIFYING_QUESTIONS = {
             "cough)? Our cough product is a dry-cough suppressant only, so this "
             "makes sure it's actually the right fit."
         ),
-        "matching_answers": ("dry",),
-        "non_matching_answers": ("wet", "chesty", "productive", "phlegm", "mucus", "sputum"),
-        "matching_product_id": "col-004",
-        "no_match_reply": (
-            "Our only cough product (Cough Suppressant Syrup) is a dry-cough "
-            "suppressant, so it isn't the right fit for a productive/chesty "
-            "cough — I'd recommend checking with a pharmacist for that instead. "
-            "Is there anything else I can help with?"
+        "branches": [
+            {"answers": ("dry",), "product_ids": ("col-004",)},
+            {
+                "answers": ("wet", "chesty", "productive", "phlegm", "mucus", "sputum"),
+                "product_ids": (),
+                "reply": (
+                    "Our only cough product (Cough Suppressant Syrup) is a dry-cough "
+                    "suppressant, so it isn't the right fit for a productive/chesty "
+                    "cough — I'd recommend checking with a pharmacist for that instead. "
+                    "Is there anything else I can help with?"
+                ),
+            },
+        ],
+    },
+    "fever": {
+        "qualifiers": ("child", "kid", "kids", "baby", "infant", "toddler", "adult", "myself", "grown"),
+        "question": (
+            "Is this fever for a child, or for an adult/yourself? Our child and "
+            "adult fever products use different dosing, so this makes sure the "
+            "recommendation is the right fit."
         ),
+        "branches": [
+            {"answers": ("child", "kid", "kids", "baby", "infant", "toddler"), "product_ids": ("fev-004",)},
+            {"answers": ("adult", "myself", "grown", "me"), "product_ids": ("fev-001", "fev-002", "fev-003")},
+        ],
     },
 }
 
@@ -375,6 +397,25 @@ def _needs_clarification(source_text: str) -> tuple[str, str] | None:
     return None
 
 
+def _render_products(products: list[dict], session_id: str) -> str:
+    store.set_last_products(session_id, products)
+    if len(products) == 1:
+        product = products[0]
+        store.set_last_recommended_product(session_id, product["id"])
+        return (
+            f"{product['name']} would be a good fit — {product['description']}\n\n"
+            f"Would you like to order this?\n\n{guardrails.DISCLAIMER}"
+        )
+    lines = ["Here's what I'd recommend:", ""]
+    for p in products:
+        lines.append(f"- {p['name']} ({p['id']}) — {p['description']}")
+    lines.append("")
+    lines.append("Which one would you like to try?")
+    lines.append("")
+    lines.append(guardrails.DISCLAIMER)
+    return "\n".join(lines)
+
+
 def resolve_clarification(trigger: str, answer_text: str, session_id: str) -> str | None:
     """Deterministically resolves the user's answer to a previously-asked
     clarifying question — same reasoning as asking it deterministically:
@@ -386,16 +427,24 @@ def resolve_clarification(trigger: str, answer_text: str, session_id: str) -> st
     if not rule:
         return None
     s = answer_text.lower()
+    for branch in rule["branches"]:
+        if any(a in s for a in branch["answers"]):
+            if not branch["product_ids"]:
+                return branch["reply"]
+            products = [p for p in (store.find_product(pid) for pid in branch["product_ids"]) if p]
+            return _render_products(products, session_id)
+    return None
 
-    if any(a in s for a in rule["matching_answers"]):
-        product = store.find_product(rule["matching_product_id"])
-        store.set_last_recommended_product(session_id, product["id"])
-        return (
-            f"{product['name']} would be a good fit — {product['description']}\n\n"
-            f"Would you like to order this?\n\n{guardrails.DISCLAIMER}"
-        )
-    if any(a in s for a in rule["non_matching_answers"]):
-        return rule["no_match_reply"]
+
+def _resolve_prequalified_clarification(source_text: str, session_id: str) -> str | None:
+    """Handles a qualifier arriving in the same message as the trigger word
+    (see run_turn) — same branch-matching as resolve_clarification, just
+    entered directly from the original message instead of a follow-up
+    answer to a question that was actually asked."""
+    s = source_text.lower()
+    for trigger, rule in CLARIFYING_QUESTIONS.items():
+        if trigger in s and any(q in s for q in rule["qualifiers"]):
+            return resolve_clarification(trigger, source_text, session_id)
     return None
 
 
@@ -510,6 +559,21 @@ def run_turn(
             messages.append({"role": "assistant", "content": question})
             return question, messages
 
+        # The qualifier can arrive pre-answered in the same message ("my baby
+        # has a fever") — _needs_clarification correctly skips asking again,
+        # but without this, the message then fell through to a plain
+        # lookup_symptom call that returns every product in the category
+        # unfiltered, including ones the qualifier just ruled out (e.g. a
+        # bare "2" after "my baby has a fever" could select the adult-only
+        # Extra Strength product). Resolving directly against the same
+        # branch logic keeps this deterministic and consistent with the
+        # question-then-answer path instead of leaving it to the model.
+        prequalified_reply = _resolve_prequalified_clarification(user_text, session_id)
+        if prequalified_reply:
+            messages.append({"role": "user", "content": user_text})
+            messages.append({"role": "assistant", "content": prequalified_reply})
+            return prequalified_reply, messages
+
     # Snapshot BEFORE _build_user_text runs — it records this turn's own
     # detected products via _remember_products, which would otherwise make
     # "a recommendation exists" look true even on the very first mention of a
@@ -606,17 +670,18 @@ def run_turn(
             elif leaked_tool:
                 print(f"[GUARD] blocked leaked tool intent ({leaked_tool}): {reply_text!r}")
                 reply_text = guardrails.FAKE_COMPLETION_GUARD_REPLY
+            elif deferred_order_result_this_turn:
+                # Never trust the model's own phrasing here — see
+                # guardrails.reply_for_deferred_order for the two distinct
+                # observed failures this avoids.
+                reply_text = guardrails.reply_for_deferred_order(deferred_order_result_this_turn)
             else:
                 guardrails.remember_recommended_product(session_id, reply_text)
                 guard_reply = guardrails.check_unverified_completion(
                     reply_text, real_order_placed_this_turn, real_email_sent_this_turn
                 )
                 if guard_reply:
-                    reply_text = (
-                        guardrails.reply_for_deferred_order(deferred_order_result_this_turn)
-                        if deferred_order_result_this_turn
-                        else guard_reply
-                    )
+                    reply_text = guard_reply
 
             messages.append({"role": "assistant", "content": reply_text})
             return reply_text, messages

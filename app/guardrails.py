@@ -61,19 +61,27 @@ def reply_for_deferred_order(order: dict) -> str:
     """The correct thing to say after a start_order call that deferred
     (never completes synchronously — see tools.start_order) rather than
     completed. Shared by main.py (bare-selection/affirmative-triggered
-    orders) and the guard below (agent.py's run_turn), because both need to
-    render this identically rather than trusting the model's own wording —
-    observed failure: even after start_order clearly returned
-    order_placed:false, the model still wrote "I've placed your order..."
-    and got blocked by the unverified-completion guard, which used to fall
-    back to a generic, wrong-for-this-situation reply instead of the correct
-    address/confirmation ask this function now provides."""
+    orders) and agent.py's run_turn — the latter now uses this
+    unconditionally whenever a turn deferred, not just as a guard fallback,
+    because trusting the model's own wording here failed in two distinct
+    ways: even after start_order clearly returned order_placed:false, it
+    sometimes wrote "I've placed your order..." (caught by the
+    unverified-completion guard, which used to fall back to a generic,
+    wrong-for-this-situation reply instead of this one); separately — and
+    without tripping that guard at all, since it never claimed completion —
+    it silently omitted that a requested quantity had been capped by our
+    per-order limit, so the user only found out from the final order
+    confirmation instead of before agreeing to it."""
+    clamp_note = (
+        f" (Note: I've capped this at our per-order limit of {tools.MAX_QUANTITY_PER_ORDER}.)"
+        if order.get("quantity_clamped") else ""
+    )
     if order.get("needs_address_confirmation"):
         return (
             f"We have this address on file: {order['address_on_file']}. Should I "
-            "ship to this address, or would you like to give a different one?"
+            f"ship to this address, or would you like to give a different one?{clamp_note}"
         )
-    return "Sure! What's your shipping address so I can send that out?"
+    return f"Sure! What's your shipping address so I can send that out?{clamp_note}"
 
 
 def claims_order_placed(reply_text: str) -> bool:
