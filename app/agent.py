@@ -5,6 +5,7 @@ double-checked there before reaching the user."""
 
 import base64
 import json
+import re
 
 import ollama
 from google import genai
@@ -74,9 +75,11 @@ about a specific medicine (e.g. "cetirizine"), ONLY use results whose
 "product" matches it; ignore any other returned result even if it scored
 well, since results about a different product can come back in the same
 call. Answer ONLY using the text of the results you kept — do not add
-anything from your own general knowledge — and cite the source at the end of
-your answer, e.g. "(Source: fev-001.md)". If none of the results match the
-medicine asked about, tell the user that isn't in our knowledge base rather
+anything from your own general knowledge — and cite the source and section at
+the end of your answer using both the "source" and "section" fields, e.g.
+"(Source: fev-001.md § Dosage)". If you used more than one result, cite each
+one. If none of the results match the medicine asked about, tell the user
+that isn't in our knowledge base rather
 than guessing an answer.
 
 IMAGES: If the user's message includes a line starting with "[Image analysis:",
@@ -249,6 +252,20 @@ TOOLS = [
 ]
 
 TOOL_NAMES = {t["function"]["name"] for t in TOOLS}
+
+# Catches an observed tool-misrouting failure: "side effects of cetirizine"
+# was called through lookup_symptom instead of lookup_medicine_info, because
+# "cetirizine" itself is a recognized cold keyword — lookup_symptom happily
+# returned a generic cold-product list (no side-effect info at all), and the
+# model then fabricated an entire fake FDA-style answer with a bogus citation
+# rather than admitting it had nothing grounded to answer from. Any message
+# matching this pattern is an info QUESTION about a medicine, never a symptom
+# description, so a lookup_symptom call for it gets redirected to the correct
+# tool instead of trusting the model to pick the right one every time.
+INFO_QUESTION_RE = re.compile(
+    r"\b(side\s*effects?|dosage|warning|interaction|overdose|how (much|many)\b.*\bmg)\b",
+    re.IGNORECASE,
+)
 
 
 def describe_image(image_b64: str, media_type: str) -> str:
@@ -454,6 +471,9 @@ def run_turn(
                         store.clear_last_recommended_product(session_id)
                     if '"email_sent": true' in result:
                         real_email_sent_this_turn = True
+                elif name == "lookup_symptom" and user_text and INFO_QUESTION_RE.search(user_text):
+                    print(f"[GUARD] redirected misrouted lookup_symptom to lookup_medicine_info: {user_text!r}")
+                    result = tools.lookup_medicine_info(user_text)
                 elif name == "lookup_symptom" and not symptom_lookup_grounded:
                     print(f"[GUARD] blocked ungrounded lookup_symptom call: {arguments}")
                     blocked_ungrounded_lookup_this_turn = True

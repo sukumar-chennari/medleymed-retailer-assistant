@@ -3,6 +3,7 @@ base. Run standalone with `python -m app.data_ingest` to (re)build the index
 independently of starting the app — see retrieval.py for how it's consumed.
 """
 
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -21,6 +22,20 @@ def load_documents() -> list[tuple[str, str]]:
     """Returns [(filename, full_text), ...] for every .md file in the
     knowledge base, sorted for a deterministic ingestion order."""
     return [(path.name, path.read_text()) for path in sorted(KB_DIR.glob("*.md"))]
+
+
+def compute_content_hash() -> str:
+    """Fingerprints the current knowledge-base source files plus the
+    embedding model name — if either changes, cached embeddings are stale
+    and need rebuilding. This is what makes the cache in retrieval.py
+    self-invalidating instead of silently serving outdated data after a
+    knowledge-base edit."""
+    hasher = hashlib.sha256()
+    for filename, text in load_documents():
+        hasher.update(filename.encode())
+        hasher.update(text.encode())
+    hasher.update(config.EMBED_MODEL.encode())
+    return hasher.hexdigest()
 
 
 def chunk_document(filename: str, text: str) -> list[dict]:
@@ -51,8 +66,10 @@ def chunk_document(filename: str, text: str) -> list[dict]:
 
 def build_index() -> list[dict]:
     """Chunks every knowledge-base document, embeds each chunk with the local
-    Ollama embedding model, and writes/returns the resulting index (each
-    chunk dict gains an "embedding" key: a list of floats)."""
+    Ollama embedding model, and writes/returns the resulting chunks (each
+    chunk dict gains an "embedding" key: a list of floats). The cache file
+    also stores a content_hash so retrieval.py can detect when the source
+    docs or embedding model have changed and rebuild automatically."""
     all_chunks = []
     for filename, text in load_documents():
         all_chunks.extend(chunk_document(filename, text))
@@ -61,7 +78,11 @@ def build_index() -> list[dict]:
         response = _client.embed(model=config.EMBED_MODEL, input=chunk["text"])
         chunk["embedding"] = response.embeddings[0]
 
-    INDEX_PATH.write_text(json.dumps(all_chunks))
+    INDEX_PATH.write_text(json.dumps({
+        "content_hash": compute_content_hash(),
+        "embed_model": config.EMBED_MODEL,
+        "chunks": all_chunks,
+    }))
     return all_chunks
 
 
