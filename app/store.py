@@ -20,6 +20,7 @@ _sessions: dict[str, list] = {}
 
 _pending_orders: dict[str, str] = {}
 _pending_emails: dict[str, str] = {}
+_pending_clarifications: dict[str, str] = {}
 _last_products: dict[str, list] = {}
 _last_recommended_product: dict[str, str] = {}
 
@@ -112,6 +113,18 @@ def get_pending_email(session_id: str) -> Optional[str]:
 
 def clear_pending_email(session_id: str) -> None:
     _pending_emails.pop(session_id, None)
+
+
+def set_pending_clarification(session_id: str, trigger: str) -> None:
+    _pending_clarifications[session_id] = trigger
+
+
+def get_pending_clarification(session_id: str) -> Optional[str]:
+    return _pending_clarifications.get(session_id)
+
+
+def clear_pending_clarification(session_id: str) -> None:
+    _pending_clarifications.pop(session_id, None)
 
 
 def set_last_products(session_id: str, products: list[dict]) -> None:

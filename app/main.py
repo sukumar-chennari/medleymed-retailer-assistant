@@ -6,7 +6,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 
 from app import guardrails, store, tools
-from app.agent import run_turn
+from app.agent import resolve_clarification, run_turn
 from app.schemas import ChatRequest, ChatResponse
 
 logger = logging.getLogger("medicine_assistant")
@@ -181,11 +181,31 @@ def chat(req: ChatRequest):
     try:
         pending_email_order_id = store.get_pending_email(req.session_id)
         pending_product_id = store.get_pending_order(req.session_id)
+        pending_clarification = store.get_pending_clarification(req.session_id)
         last_products = store.get_last_products(req.session_id)
         last_recommended_product_id = store.get_last_recommended_product(req.session_id)
         selected_product = _resolve_bare_selection(text, last_products) if text else None
 
-        if pending_email_order_id and text and _looks_like_an_email(text):
+        if pending_clarification and text:
+            # Same reasoning as the deterministic question itself (see
+            # agent.run_turn): the model fabricated an answer to this
+            # question once already rather than admitting it needed to ask,
+            # so the answer doesn't get left to it either.
+            store.clear_pending_clarification(req.session_id)
+            resolved_reply = resolve_clarification(pending_clarification, text, req.session_id)
+            if resolved_reply:
+                reply = resolved_reply
+                messages.append({"role": "user", "content": text})
+                messages.append({"role": "assistant", "content": resolved_reply})
+            else:
+                reply, messages = run_turn(
+                    messages,
+                    user_text=req.text,
+                    session_id=req.session_id,
+                    image_b64=req.image_b64,
+                    image_media_type=req.image_media_type,
+                )
+        elif pending_email_order_id and text and _looks_like_an_email(text):
             store.clear_pending_email(req.session_id)
             email_in_text, _ = _extract_email(text)
             reply = _complete_pending_email(email_in_text, pending_email_order_id)

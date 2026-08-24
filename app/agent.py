@@ -327,15 +327,50 @@ CLARIFYING_QUESTIONS = {
             "cough)? Our cough product is a dry-cough suppressant only, so this "
             "makes sure it's actually the right fit."
         ),
+        "matching_answers": ("dry",),
+        "non_matching_answers": ("wet", "chesty", "productive", "phlegm", "mucus", "sputum"),
+        "matching_product_id": "col-004",
+        "no_match_reply": (
+            "Our only cough product (Cough Suppressant Syrup) is a dry-cough "
+            "suppressant, so it isn't the right fit for a productive/chesty "
+            "cough — I'd recommend checking with a pharmacist for that instead. "
+            "Is there anything else I can help with?"
+        ),
     },
 }
 
 
-def _needs_clarification(source_text: str) -> str | None:
+def _needs_clarification(source_text: str) -> tuple[str, str] | None:
+    """Returns (trigger, question) if source_text mentions an ambiguous
+    symptom without its qualifier already present, else None."""
     s = source_text.lower()
     for trigger, rule in CLARIFYING_QUESTIONS.items():
         if trigger in s and not any(q in s for q in rule["qualifiers"]):
-            return rule["question"]
+            return trigger, rule["question"]
+    return None
+
+
+def resolve_clarification(trigger: str, answer_text: str, session_id: str) -> str | None:
+    """Deterministically resolves the user's answer to a previously-asked
+    clarifying question — same reasoning as asking it deterministically:
+    the model fabricated an answer to a question it never asked once
+    (see run_turn), so the resolution doesn't get left to it either.
+    Returns None if the answer doesn't clearly match either side, letting
+    the caller fall through to a normal LLM turn instead of guessing."""
+    rule = CLARIFYING_QUESTIONS.get(trigger)
+    if not rule:
+        return None
+    s = answer_text.lower()
+
+    if any(a in s for a in rule["matching_answers"]):
+        product = store.find_product(rule["matching_product_id"])
+        store.set_last_recommended_product(session_id, product["id"])
+        return (
+            f"{product['name']} would be a good fit — {product['description']}\n\n"
+            f"Would you like to order this?\n\n{guardrails.DISCLAIMER}"
+        )
+    if any(a in s for a in rule["non_matching_answers"]):
+        return rule["no_match_reply"]
     return None
 
 
@@ -346,13 +381,16 @@ def _inject_catalog_hint(parts: list, source_text: str, session_id: str) -> None
     a product directly ("order Paracetamol") skips the usual symptom-description
     step, and without this the model has no real product_id in context at all —
     it either has to call lookup_symptom itself (unreliable) or invents one."""
-    clarify_question = _needs_clarification(source_text)
-    if clarify_question:
+    clarification = _needs_clarification(source_text)
+    if clarification:
         # Deliberately skip the catalog-data injection below this turn — if
         # the model sees the actual product alongside the question, it's
         # liable to just recommend it anyway instead of asking first (the
-        # same "won't admit it needs more info" pattern seen elsewhere).
-        parts.append(f"[Clarify: {clarify_question}]")
+        # same "won't admit it needs more info" pattern seen elsewhere). This
+        # path only runs for the image-description flow now — plain text hits
+        # the fully deterministic check in run_turn first, which this can't
+        # override since it never reaches _build_user_text in that case.
+        parts.append(f"[Clarify: {clarification[1]}]")
         return
 
     categories = tools.classify_categories(source_text)
@@ -428,6 +466,22 @@ def run_turn(
             messages.append({"role": "user", "content": user_text})
             messages.append({"role": "assistant", "content": pleasantry_reply})
             return pleasantry_reply, messages
+
+        # Observed failure: the injected "[Clarify: ...]" hint (soft prompt
+        # guidance) was ignored outright — the model fabricated an answer to
+        # a question it never actually asked ("since your cough is bringing
+        # up mucus" — the user never said that) and then recommended the
+        # dry-cough product anyway, contradicting its own fabricated premise.
+        # Asking the question is now deterministic and bypasses the LLM
+        # entirely for this turn, the same way pleasantries do above —
+        # there's no chance to skip or hallucinate around it.
+        clarification = _needs_clarification(user_text)
+        if clarification:
+            trigger, question = clarification
+            store.set_pending_clarification(session_id, trigger)
+            messages.append({"role": "user", "content": user_text})
+            messages.append({"role": "assistant", "content": question})
+            return question, messages
 
     combined_text = _build_user_text(user_text, image_b64, image_media_type, session_id)
     messages.append({"role": "user", "content": combined_text})
