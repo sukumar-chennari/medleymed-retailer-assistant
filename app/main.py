@@ -246,6 +246,21 @@ def _wants_different_address(text: str) -> bool:
     return any(w in ADDRESS_REJECTION_WORDS for w in words)
 
 
+# Short + contains a clear decline word — same conservative pattern as
+# guardrails.py's GREETING_WORDS/BYE_WORDS (a short message containing one
+# of these is basically never anything else). Used to detect the user
+# opting out of a pending email/address ask rather than answering it.
+DECLINE_WORDS = {"no", "nope", "nah", "skip", "cancel", "nevermind"}
+MAX_DECLINE_WORDS = 6
+
+
+def _declines(text: str) -> bool:
+    words = re.findall(r"[a-z']+", text.lower())
+    if not words or len(words) > MAX_DECLINE_WORDS:
+        return False
+    return any(w in DECLINE_WORDS for w in words)
+
+
 def _reply_for_start_order_result(order: dict) -> str:
     if "error" in order:
         return f"Sorry, {order['error']}"
@@ -347,29 +362,52 @@ def chat(req: ChatRequest):
             reply = _complete_pending_order(req.session_id, pending_product_id, text)
             messages.append({"role": "user", "content": text})
             messages.append({"role": "assistant", "content": reply})
+        elif pending_email_order_id and text and _declines(text):
+            store.clear_pending_email(req.session_id)
+            reply = "No problem — the order's already confirmed without an email receipt. Anything else I can help with?"
+            messages.append({"role": "user", "content": text})
+            messages.append({"role": "assistant", "content": reply})
         elif pending_email_order_id and text:
-            # Reply doesn't look like an email — handling this via run_turn
-            # let the model free-generate instead of admitting it still
-            # needs one; keep the LLM out of this state entirely rather
-            # than risk it again.
-            reply = "I still need an email address to send your confirmation to — what's the best one to use?"
+            # Doesn't look like an email or a decline — observed failure:
+            # this used to unconditionally repeat "I still need an email
+            # address..." even for a completely unrelated message ("who is
+            # narendra modi"), trapping the conversation instead of just
+            # answering it. The order itself is already placed regardless
+            # of email, so there's nothing risky about handling the actual
+            # message normally — route it through the real turn (still
+            # correctly declines out-of-scope, or continues normally) while
+            # leaving pending_email_order_id set, so a genuine email typed
+            # later is still captured by the branch above.
+            reply, messages = run_turn(
+                messages,
+                user_text=req.text,
+                session_id=req.session_id,
+                image_b64=req.image_b64,
+                image_media_type=req.image_media_type,
+            )
+        elif pending_product_id and text and _declines(text):
+            store.clear_pending_order(req.session_id)
+            reply = "No problem — I won't place that order without a shipping address. Let me know if you change your mind."
             messages.append({"role": "user", "content": text})
             messages.append({"role": "assistant", "content": reply})
         elif pending_product_id and text:
-            # Reply doesn't look like an address — observed failure here:
-            # the model, given a bare "yes" while an address was still
-            # pending, fabricated a plausible-looking address out of thin
-            # air, called the real save_address tool with it, and claimed
-            # the order was placed — all without ever actually calling
-            # start_order again. Keeping the LLM out of this state entirely
-            # (like the pending-email branch above) removes the chance for
-            # that to happen instead of hoping the model admits it needs
-            # a real address.
-            product = store.find_product(pending_product_id["product_id"])
-            product_name = product["name"] if product else "your order"
-            reply = f"I still need your shipping address to complete the order for {product_name} — could you share it?"
-            messages.append({"role": "user", "content": text})
-            messages.append({"role": "assistant", "content": reply})
+            # Reply doesn't look like an address, a bare "yes" (fabricated a
+            # plausible-looking address once — see the address-confirmation
+            # guard elsewhere), or a decline. Observed failure: a message
+            # asking something else entirely ("who is narendra modi") still
+            # got "I still need your shipping address..." instead of an
+            # actual answer, trapping the conversation. Route it through the
+            # real turn instead — it still correctly declines out-of-scope
+            # or continues normally — while leaving pending_product_id set,
+            # so a real address typed later still completes this order via
+            # the branch above.
+            reply, messages = run_turn(
+                messages,
+                user_text=req.text,
+                session_id=req.session_id,
+                image_b64=req.image_b64,
+                image_media_type=req.image_media_type,
+            )
         elif selected_product and not pending_product_id:
             order = json.loads(tools.start_order(selected_product["id"], req.session_id))
             reply = _reply_for_start_order_result(order)
