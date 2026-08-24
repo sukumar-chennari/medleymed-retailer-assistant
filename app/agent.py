@@ -294,12 +294,34 @@ CLARIFYING_QUESTIONS = {
 }
 
 
+# "fever" and "cold" are checked against tools.classify_categories rather
+# than a literal substring of the trigger word — a message like "high
+# temperature" (no literal "fever") or "runny nose" (no literal "cold")
+# already classifies into these categories via FEVER_KEYWORDS/COLD_KEYWORDS,
+# and skipping the clarifying question for a wording that doesn't happen to
+# contain the exact trigger word defeats the whole point of asking it.
+# Observed failure: "i think i have running nose and high temperature" went
+# straight to an unfiltered product list — including the pediatric
+# Children's Paracetamol Syrup alongside adult-only Ibuprofen — because the
+# literal string "fever" never appeared, even though the message plainly
+# classifies as fever. "cough" stays a literal check since it's a specific
+# cold sub-symptom, not itself a classify_categories() category.
+_CATEGORY_TRIGGERS = {"fever", "cold"}
+
+
+def _trigger_matches(trigger: str, source_text_lower: str, categories: set[str]) -> bool:
+    if trigger in _CATEGORY_TRIGGERS:
+        return trigger in categories
+    return trigger in source_text_lower
+
+
 def _needs_clarification(source_text: str) -> tuple[str, str] | None:
     """Returns (trigger, question) if source_text mentions an ambiguous
     symptom without its qualifier already present, else None."""
     s = source_text.lower()
+    categories = set(tools.classify_categories(source_text))
     for trigger, rule in CLARIFYING_QUESTIONS.items():
-        if trigger in s and not any(q in s for q in rule["qualifiers"]):
+        if _trigger_matches(trigger, s, categories) and not any(q in s for q in rule["qualifiers"]):
             return trigger, rule["question"]
     return None
 
@@ -349,8 +371,9 @@ def _resolve_prequalified_clarification(source_text: str, session_id: str) -> st
     entered directly from the original message instead of a follow-up
     answer to a question that was actually asked."""
     s = source_text.lower()
+    categories = set(tools.classify_categories(source_text))
     for trigger, rule in CLARIFYING_QUESTIONS.items():
-        if trigger in s and any(q in s for q in rule["qualifiers"]):
+        if _trigger_matches(trigger, s, categories) and any(q in s for q in rule["qualifiers"]):
             return resolve_clarification(trigger, source_text, session_id)
     return None
 
