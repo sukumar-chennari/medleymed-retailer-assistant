@@ -73,13 +73,16 @@ line starting with "[Clarify:", ask exactly that question instead of calling
 lookup_symptom yet — wait for their answer first.
 
 ORDER FLOW: When the user confirms they want to order a specific suggested
-product, call start_order with its product_id — that single call handles
-everything (using the saved address and sending a confirmation email, or telling
-you there's no address on file). If it tells you there's no address on file, ask
-the user for their shipping address in plain conversational text and then STOP —
-do not call any more tools that turn. Their next message will automatically be
-captured as the address and used to finish the order, so never call start_order
-again yourself to "retry" it.
+product, call start_order with its product_id (and quantity, if they mentioned
+one). It never completes the order right away — it always defers to one of two
+questions, which you relay to the user in plain conversational text and then
+STOP, without calling any more tools that turn:
+- No address on file: ask for their shipping address.
+- An address IS on file: ask them to confirm it's still correct (quote the
+  address back to them) — never assume a saved address hasn't changed.
+Their next message automatically resolves whichever question this asked, so
+never call start_order again yourself to "retry" or "confirm" it — that
+happens deterministically, not through another tool call.
 
 MEDICINE INFO: If the user asks a factual question about dosage, side effects,
 warnings, or interactions for one of our catalog medicines, call
@@ -202,15 +205,15 @@ TOOLS = [
         "function": {
             "name": "start_order",
             "description": (
-                "Start (and usually finish) placing an order for a catalog product once "
-                "the user has confirmed they want it. The product_id MUST be one returned "
-                "by a prior lookup_symptom call — never invent a product_id or order "
-                "something outside the fever/cold catalog. This single call handles "
-                "everything: if an address is already on file it places the order and "
-                "sends the confirmation email immediately; if not, it tells you to ask the "
-                "user for their address, and their next message is automatically captured "
-                "as the address to finish the order — you never need to call this (or any "
-                "other tool) again for the same order."
+                "Start placing an order for a catalog product once the user has "
+                "confirmed they want it. The product_id MUST be one returned by a prior "
+                "lookup_symptom call — never invent a product_id or order something "
+                "outside the fever/cold catalog. This never completes the order "
+                "immediately, even if an address is already on file: it always asks the "
+                "user to confirm their address first (people move — never assume a "
+                "saved address is still correct), or asks for one if there isn't any on "
+                "file yet. Their next message resolves whichever question this asked. "
+                "You never need to call this (or any other tool) again for the same order."
             ),
             "parameters": {
                 "type": "object",
@@ -218,6 +221,14 @@ TOOLS = [
                     "product_id": {
                         "type": "string",
                         "description": "Product id exactly as returned by lookup_symptom.",
+                    },
+                    "quantity": {
+                        "type": "integer",
+                        "description": (
+                            "How many the user wants to order, e.g. 2. Defaults to 1 if "
+                            "not mentioned — do not ask the user to specify a quantity "
+                            "unless they bring it up themselves."
+                        ),
                     },
                 },
                 "required": ["product_id"],
@@ -514,6 +525,14 @@ def run_turn(
     real_order_placed_this_turn = False
     real_email_sent_this_turn = False
     completed_order_this_turn = None
+    # A start_order call that deferred (asked for an address, or asked to
+    # confirm one on file) rather than completing. Needed because the model
+    # was observed claiming "I've placed your order" even when the tool
+    # result it just received clearly said order_placed:false — the
+    # unverified-completion guard correctly blocks that claim, but needs
+    # this to render the *correct* ask instead of falling back to a generic,
+    # wrong-for-this-situation reply.
+    deferred_order_result_this_turn = None
 
     for _ in range(MAX_TOOL_ROUNDS):
         try:
@@ -569,7 +588,11 @@ def run_turn(
                     reply_text, real_order_placed_this_turn, real_email_sent_this_turn
                 )
                 if guard_reply:
-                    reply_text = guard_reply
+                    reply_text = (
+                        guardrails.reply_for_deferred_order(deferred_order_result_this_turn)
+                        if deferred_order_result_this_turn
+                        else guard_reply
+                    )
 
             messages.append({"role": "assistant", "content": reply_text})
             return reply_text, messages
@@ -606,12 +629,18 @@ def run_turn(
             arguments = call["function"]["arguments"]
             try:
                 if name == "start_order":
-                    result = tools.start_order(arguments["product_id"], session_id)
+                    try:
+                        quantity = int(arguments.get("quantity", 1))
+                    except (TypeError, ValueError):
+                        quantity = 1
+                    result = tools.start_order(arguments["product_id"], session_id, quantity)
                     parsed_order = json.loads(result)
                     if parsed_order.get("order_placed"):
                         real_order_placed_this_turn = True
                         completed_order_this_turn = parsed_order
                         store.clear_last_recommended_product(session_id)
+                    elif "error" not in parsed_order:
+                        deferred_order_result_this_turn = parsed_order
                     if parsed_order.get("email_sent"):
                         real_email_sent_this_turn = True
                 elif name == "lookup_symptom" and user_text and INFO_QUESTION_RE.search(user_text):

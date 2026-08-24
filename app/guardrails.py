@@ -42,14 +42,38 @@ def build_order_confirmation(order: dict) -> str:
         else "I don't have an email on file for you — reply with your email "
              "address if you'd like a confirmation sent."
     )
+    quantity = order.get("quantity", 1)
+    total = order.get("total_price_usd", order.get("price_usd"))
+    clamp_note = f"\n{order['quantity_clamped']}" if order.get("quantity_clamped") else ""
     return (
         f"Order confirmed!\n\n"
         f"Order ID: {order['order_id']}\n"
         f"Product: {order['product_name']}\n"
-        f"Price: ${order['price_usd']}\n"
-        f"Shipping to: {order['address']}\n\n"
+        f"Quantity: {quantity}\n"
+        f"Total: ${total}\n"
+        f"Shipping to: {order['address']}\n"
+        f"{clamp_note}\n"
         f"{email_note}\n\n{DISCLAIMER}"
     )
+
+
+def reply_for_deferred_order(order: dict) -> str:
+    """The correct thing to say after a start_order call that deferred
+    (never completes synchronously — see tools.start_order) rather than
+    completed. Shared by main.py (bare-selection/affirmative-triggered
+    orders) and the guard below (agent.py's run_turn), because both need to
+    render this identically rather than trusting the model's own wording —
+    observed failure: even after start_order clearly returned
+    order_placed:false, the model still wrote "I've placed your order..."
+    and got blocked by the unverified-completion guard, which used to fall
+    back to a generic, wrong-for-this-situation reply instead of the correct
+    address/confirmation ask this function now provides."""
+    if order.get("needs_address_confirmation"):
+        return (
+            f"We have this address on file: {order['address_on_file']}. Should I "
+            "ship to this address, or would you like to give a different one?"
+        )
+    return "Sure! What's your shipping address so I can send that out?"
 
 
 def claims_order_placed(reply_text: str) -> bool:

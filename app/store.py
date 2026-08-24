@@ -18,9 +18,10 @@ _order_id_counter = itertools.count(1)
 
 _sessions: dict[str, list] = {}
 
-_pending_orders: dict[str, str] = {}
+_pending_orders: dict[str, dict] = {}
 _pending_emails: dict[str, str] = {}
 _pending_clarifications: dict[str, str] = {}
+_pending_address_confirmations: dict[str, dict] = {}
 _last_products: dict[str, list] = {}
 _last_recommended_product: dict[str, str] = {}
 
@@ -66,7 +67,7 @@ def save_email(user_id: str, email: str) -> None:
     user["email"] = email
 
 
-def create_order(user_id: str, product_id: str, address: str) -> dict:
+def create_order(user_id: str, product_id: str, address: str, quantity: int = 1) -> dict:
     order_id = f"ord-{next(_order_id_counter):04d}"
     product = find_product(product_id)
     if product is None:
@@ -77,6 +78,8 @@ def create_order(user_id: str, product_id: str, address: str) -> dict:
         "product_id": product["id"],
         "product_name": product["name"],
         "price_usd": product["price_usd"],
+        "quantity": quantity,
+        "total_price_usd": round(product["price_usd"] * quantity, 2),
         "address": address,
     }
     _orders[order_id] = order
@@ -91,16 +94,28 @@ def get_order(order_id: str) -> Optional[dict]:
     return _orders.get(order_id)
 
 
-def set_pending_order(session_id: str, product_id: str) -> None:
-    _pending_orders[session_id] = product_id
+def set_pending_order(session_id: str, product_id: str, quantity: int = 1) -> None:
+    _pending_orders[session_id] = {"product_id": product_id, "quantity": quantity}
 
 
-def get_pending_order(session_id: str) -> Optional[str]:
+def get_pending_order(session_id: str) -> Optional[dict]:
     return _pending_orders.get(session_id)
 
 
 def clear_pending_order(session_id: str) -> None:
     _pending_orders.pop(session_id, None)
+
+
+def set_pending_address_confirmation(session_id: str, product_id: str, quantity: int = 1) -> None:
+    _pending_address_confirmations[session_id] = {"product_id": product_id, "quantity": quantity}
+
+
+def get_pending_address_confirmation(session_id: str) -> Optional[dict]:
+    return _pending_address_confirmations.get(session_id)
+
+
+def clear_pending_address_confirmation(session_id: str) -> None:
+    _pending_address_confirmations.pop(session_id, None)
 
 
 def set_pending_email(session_id: str, order_id: str) -> None:

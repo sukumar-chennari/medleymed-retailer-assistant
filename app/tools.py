@@ -121,7 +121,24 @@ def save_address(user_id: str, address: str) -> str:
     return json.dumps({"saved": True, "address": address})
 
 
-def place_order(product_id: str) -> str:
+# Temporary, hand-picked placeholder — NOT sourced from any real pharmacy/
+# regulatory quantity guideline. Fetching genuine per-medicine max-quantity
+# rules (they vary by drug, jurisdiction, and pack size) was out of scope for
+# this demo's timeline; this exists so an order at least has *some* sane cap
+# instead of none, and should be replaced with real guidance before this is
+# ever more than a demo.
+MAX_QUANTITY_PER_ORDER = 2
+
+
+def _clamp_quantity(quantity: int) -> tuple[int, bool]:
+    """Returns (clamped_quantity, was_clamped)."""
+    quantity = max(1, quantity)
+    if quantity > MAX_QUANTITY_PER_ORDER:
+        return MAX_QUANTITY_PER_ORDER, True
+    return quantity, False
+
+
+def place_order(product_id: str, quantity: int = 1) -> str:
     product = store.find_product(product_id)
     if product is None:
         return json.dumps({
@@ -133,61 +150,94 @@ def place_order(product_id: str) -> str:
             "error": "No address on file. Ask the user for their shipping address, "
                      "call save_address with it, then call place_order again."
         })
-    order = store.create_order(user_id="demo_user", product_id=product_id, address=address)
+    quantity, clamped = _clamp_quantity(quantity)
+    order = store.create_order(user_id="demo_user", product_id=product_id, address=address, quantity=quantity)
+    if clamped:
+        order["quantity_clamped"] = (
+            f"Quantity was capped at our per-order limit of {MAX_QUANTITY_PER_ORDER} "
+            f"for this product — mention this to the user."
+        )
     return json.dumps(order)
 
 
-def start_order(product_id: str, session_id: str) -> str:
-    """Atomically completes an order if an address is on file, or defers it by
-    marking the session as awaiting an address. This exists because chaining
-    separate save_address/place_order/send_confirmation_email tool calls proved
-    unreliable with a small local model — collapsing the state-changing steps
-    into one call (or one deferred, deterministic follow-up) removes the chance
-    for the model to lose track of state across turns."""
+def start_order(product_id: str, session_id: str, quantity: int = 1) -> str:
+    """Starts placing an order — never completes it silently. If there's no
+    address on file, defers to ask for one; if an address IS on file, defers
+    to ask the user to confirm it's still correct rather than assuming it
+    hasn't changed. Either way, the actual order is only created once the
+    user's next message resolves the deferred step (see main.py's
+    _complete_pending_order / _complete_confirmed_order). This collapsing of
+    state-changing steps into deferred, deterministic follow-ups (rather than
+    chaining separate save_address/place_order/send_confirmation_email tool
+    calls) exists because that chaining proved unreliable with a small local
+    model — it lost track of state across turns."""
     product = store.find_product(product_id)
     if product is None:
         return json.dumps({
             "error": f"Unknown product_id '{product_id}' — not in the fever/cold catalog."
         })
 
+    quantity, clamped = _clamp_quantity(quantity)
+    clamp_note = (
+        f" (Note: capped at our per-order limit of {MAX_QUANTITY_PER_ORDER} — mention this to the user.)"
+        if clamped else ""
+    )
+
     address = store.get_address("demo_user")
     if not address:
-        store.set_pending_order(session_id, product_id)
+        store.set_pending_order(session_id, product_id, quantity)
         return json.dumps({
             "order_placed": False,
             "message": (
                 "No address on file. Ask the user for their shipping address in plain "
                 "conversational text now, then stop — do not call any more tools this "
-                "turn. Their very next message will automatically be captured as the "
-                "address and used to complete this order."
+                f"turn. Their very next message will automatically be captured as the "
+                f"address and used to complete this order.{clamp_note}"
             ),
         })
 
-    order = json.loads(place_order(product_id))
-    if "error" in order:
-        return json.dumps(order)
+    store.set_pending_address_confirmation(session_id, product_id, quantity)
+    return json.dumps({
+        "order_placed": False,
+        "needs_address_confirmation": True,
+        "address_on_file": address,
+        "message": (
+            f'Ask the user to confirm this shipping address on file: "{address}". '
+            "Do not call any more tools this turn. If they confirm (e.g. \"yes\"), "
+            "their next message completes the order to that address automatically. "
+            "If they give a different address instead, that new one is used instead "
+            f"— never assume the address on file is still correct without asking.{clamp_note}"
+        ),
+    })
 
-    order["order_placed"] = True
+
+def _build_confirmation_note(order: dict) -> dict:
     recipient_email = store.get_email("demo_user")
-
     if recipient_email:
-        summary = f"Order {order['order_id']}: {order['product_name']} (${order['price_usd']}) to {order['address']}"
+        summary = (
+            f"Order {order['order_id']}: {order['quantity']}x {order['product_name']} "
+            f"(${order['total_price_usd']}) to {order['address']}"
+        )
         email_result = json.loads(send_confirmation_email(recipient_email, summary))
         order["email_sent"] = email_result.get("sent", False)
     else:
-        # No email on file — the order is still valid (address is all that's
-        # required to ship), but there's no one to mail a confirmation to.
-        # Mirrors the same missing-email handling in main.py's deterministic
-        # address-completion path, for the fast "address already saved" case.
-        store.set_pending_email(session_id, order["order_id"])
         order["email_sent"] = False
-        order["email_needed"] = (
-            "No email on file. Tell the user their order is confirmed, and ask "
-            "for their email if they'd like a confirmation sent — their next "
-            "message will be captured as the email automatically."
-        )
+        order["email_needed"] = True
+    return order
 
-    return json.dumps(order)
+
+def complete_confirmed_order(session_id: str, product_id: str, quantity: int) -> str:
+    """Finishes an order once the user has confirmed the address on file is
+    still correct — the deterministic counterpart to start_order's deferral,
+    called from main.py rather than left to the model (see start_order's
+    docstring)."""
+    order = json.loads(place_order(product_id, quantity))
+    if "error" in order:
+        return json.dumps(order)
+    order["order_placed"] = True
+    if not store.get_email("demo_user"):
+        store.set_pending_email(session_id, order["order_id"])
+    return json.dumps(_build_confirmation_note(order))
 
 
 def send_confirmation_email(to: str, order_details: str) -> str:

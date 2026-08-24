@@ -64,6 +64,20 @@ def _looks_like_an_email(text: str) -> bool:
     return EMAIL_RE.search(text) is not None
 
 
+ADDRESS_FILLER_RE = re.compile(
+    r"^\s*(actually\s+)?(please\s+)?(ship|send|deliver)\s+(it\s+|this\s+|that\s+)?to\s+",
+    re.IGNORECASE,
+)
+
+
+def _strip_address_filler(text: str) -> str:
+    """Naturally answering "should I ship to X, or give a different one?"
+    tends to produce phrasing like "actually ship to 456 New Ave" rather
+    than just the bare address — without this, that whole phrase gets saved
+    and shown back verbatim in the order confirmation."""
+    return ADDRESS_FILLER_RE.sub("", text).strip()
+
+
 def _looks_like_an_address(text: str) -> bool:
     """A pending order treats the user's next message as their shipping address —
     but only if it plausibly is one. Without this, a reply like "thank you" or
@@ -76,22 +90,24 @@ def _looks_like_an_address(text: str) -> bool:
     return any(ch.isdigit() for ch in text) and len(text) >= 8
 
 
-def _complete_pending_order(session_id: str, product_id: str, address_text: str) -> str:
+def _complete_pending_order(session_id: str, pending: dict, address_text: str) -> str:
     """Deterministically finishes an order once the user's next message supplies
     the address, instead of trusting the LLM to chain save_address + place_order
-    + send_confirmation_email itself across turns (see llm_service/tools for why)."""
+    + send_confirmation_email itself across turns (see agent.py/tools.py for why)."""
     email_in_text, address_only = _extract_email(address_text)
-    store.save_address("demo_user", address_only or address_text)
+    store.save_address("demo_user", _strip_address_filler(address_only or address_text))
     if email_in_text:
         store.save_email("demo_user", email_in_text)
 
-    order = json.loads(tools.place_order(product_id))
+    order = json.loads(tools.place_order(pending["product_id"], pending.get("quantity", 1)))
     if "error" in order:
         return f"Sorry, something went wrong placing that order: {order['error']}"
 
-    user = store.get_user("demo_user")
-    recipient_email = user.get("email")
-    summary = f"Order {order['order_id']}: {order['product_name']} (${order['price_usd']}) to {order['address']}"
+    recipient_email = store.get_email("demo_user")
+    summary = (
+        f"Order {order['order_id']}: {order['quantity']}x {order['product_name']} "
+        f"(${order['total_price_usd']}) to {order['address']}"
+    )
 
     if recipient_email:
         email_result = json.loads(tools.send_confirmation_email(recipient_email, summary))
@@ -104,6 +120,17 @@ def _complete_pending_order(session_id: str, product_id: str, address_text: str)
         store.set_pending_email(session_id, order["order_id"])
         order["email_sent"] = False
 
+    return guardrails.build_order_confirmation(order)
+
+
+def _complete_confirmed_order(session_id: str, pending: dict) -> str:
+    """Finishes an order once the user has confirmed the address already on
+    file is still correct, rather than assuming it silently — real orders
+    always ship somewhere real; a stale saved address is a genuine mistake
+    worth double-checking, not just a demo nicety."""
+    order = json.loads(tools.complete_confirmed_order(session_id, pending["product_id"], pending.get("quantity", 1)))
+    if "error" in order:
+        return f"Sorry, something went wrong placing that order: {order['error']}"
     return guardrails.build_order_confirmation(order)
 
 
@@ -161,9 +188,9 @@ def _reply_for_start_order_result(order: dict) -> str:
         return f"Sorry, {order['error']}"
 
     if not order.get("order_placed"):
-        # tools.start_order already recorded the pending order internally;
-        # we just need to ask for the address ourselves.
-        return "Sure! What's your shipping address so I can send that out?"
+        # tools.start_order already recorded the pending order/confirmation
+        # internally; we just need to ask the user ourselves.
+        return guardrails.reply_for_deferred_order(order)
 
     return guardrails.build_order_confirmation(order)
 
@@ -193,6 +220,7 @@ def chat(req: ChatRequest):
         pending_email_order_id = store.get_pending_email(req.session_id)
         pending_product_id = store.get_pending_order(req.session_id)
         pending_clarification = store.get_pending_clarification(req.session_id)
+        pending_address_confirmation = store.get_pending_address_confirmation(req.session_id)
         last_products = store.get_last_products(req.session_id)
         last_recommended_product_id = store.get_last_recommended_product(req.session_id)
         selected_product = _resolve_bare_selection(text, last_products) if text else None
@@ -216,6 +244,26 @@ def chat(req: ChatRequest):
                     image_b64=req.image_b64,
                     image_media_type=req.image_media_type,
                 )
+        elif pending_address_confirmation and text and _is_affirmative(text):
+            store.clear_pending_address_confirmation(req.session_id)
+            reply = _complete_confirmed_order(req.session_id, pending_address_confirmation)
+            messages.append({"role": "user", "content": text})
+            messages.append({"role": "assistant", "content": reply})
+        elif pending_address_confirmation and text and _looks_like_an_address(text):
+            # They gave a different address instead of confirming the one on
+            # file — use the new one, same as the no-address-yet flow.
+            store.clear_pending_address_confirmation(req.session_id)
+            reply = _complete_pending_order(req.session_id, pending_address_confirmation, text)
+            messages.append({"role": "user", "content": text})
+            messages.append({"role": "assistant", "content": reply})
+        elif pending_address_confirmation and text:
+            # Neither a clear yes nor a new address — ask again rather than
+            # guessing which one they meant; keep the LLM out of this state
+            # for the same reasons as the other pending branches.
+            address = store.get_address("demo_user")
+            reply = f"Just to confirm — should I ship to {address}, or would you like to give a different address?"
+            messages.append({"role": "user", "content": text})
+            messages.append({"role": "assistant", "content": reply})
         elif pending_email_order_id and text and _looks_like_an_email(text):
             store.clear_pending_email(req.session_id)
             email_in_text, _ = _extract_email(text)
@@ -245,7 +293,7 @@ def chat(req: ChatRequest):
             # (like the pending-email branch above) removes the chance for
             # that to happen instead of hoping the model admits it needs
             # a real address.
-            product = store.find_product(pending_product_id)
+            product = store.find_product(pending_product_id["product_id"])
             product_name = product["name"] if product else "your order"
             reply = f"I still need your shipping address to complete the order for {product_name} — could you share it?"
             messages.append({"role": "user", "content": text})
