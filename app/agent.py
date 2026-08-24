@@ -174,6 +174,15 @@ ORDER_INTENT_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Gates the decline_out_of_scope reversal's established-category fallback
+# (see wrap_tool_call) — a message has to actually read as a follow-up to
+# the current topic, not merely fail to classify on its own, before an
+# earlier-established category is trusted to override a decline.
+CONTINUATION_RE = re.compile(
+    r"\b(alternative|another|else|different|instead|other|more)\b",
+    re.IGNORECASE,
+)
+
 
 def describe_image(image_b64: str, media_type: str) -> str:
     if _gemini_client is None:
@@ -542,12 +551,24 @@ class _GuardrailMiddleware(AgentMiddleware):
             if name == "decline_out_of_scope":
                 # Mirrors the ungrounded-lookup_symptom guard, in reverse: the
                 # model declined a message that's actually grounded (either
-                # the text itself classifies, or a category is already
-                # established this session) — e.g. "anything apart from
-                # paracetamol?" got declined outright despite fever context
-                # from the same turn. Redirect to a real lookup instead of
+                # the text itself classifies, or it's a continuation of a
+                # category already established this session) — e.g. "any
+                # alternative?" got declined outright despite fever context
+                # from the same session. Redirect to a real lookup instead of
                 # trusting the decline, rather than ending the turn wrong.
-                category = (tools.classify(user_text) if user_text else None) or _established_category(session_id)
+                #
+                # The established-category fallback is deliberately gated on
+                # CONTINUATION_RE, not trusted for any unclassified text —
+                # "who is narendra modi" doesn't classify either, but it also
+                # isn't remotely a continuation of an earlier cold/fever
+                # topic, and a bare "a category exists somewhere in this
+                # session" was wrongly overriding a CORRECT decline for it,
+                # forcing an unrelated product list into the reply instead.
+                category = (tools.classify(user_text) if user_text else None) or (
+                    _established_category(session_id)
+                    if user_text and CONTINUATION_RE.search(user_text)
+                    else None
+                )
                 if category:
                     print(f"[GUARD] blocked incorrect decline_out_of_scope on grounded input: {user_text!r}")
                     result = tools.lookup_symptom(category)
