@@ -18,9 +18,48 @@ MIN_SIMILARITY = 0.63
 MG_RE = re.compile(r"\d+\s*mg", re.IGNORECASE)
 STRENGTH_BOOST = 0.2
 
+# A second hybrid keyword+semantic boost, same idea as STRENGTH_BOOST but for
+# section intent rather than dosage strength: "dosage for cough suppressant
+# syrup" scored col-004's own Dosage section (0.606) *below* its Overview
+# (0.672) and Warnings (0.654) sections — all three are short, topically
+# similar paragraphs about the same product, and nothing in the query itself
+# gives the embedding a strong reason to prefer Dosage specifically. Since
+# the query already names which section it wants in plain words, a keyword
+# match against the chunk's own section name is exactly the same kind of
+# targeted, verified fix as the strength boost, not a general reranker.
+#
+# Gating this on the query ALSO naming the product (sharing a distinctive
+# word with the chunk's own title) is load-bearing, not optional — a first
+# version boosted every chunk whose section matched the keyword regardless
+# of product, which (a) undid the fix it was meant to make, since every
+# *other* product's Dosage section got boosted too and outranked the right
+# one, and (b) turned "dosage for amoxicillin" into a false positive, since
+# a generic "dosage for X" query resembles the Dosage section of *any*
+# product almost equally on pure semantics — there's nothing to boost
+# without a real per-product anchor the way STRENGTH_BOOST has one.
+SECTION_BOOST = 0.15
+SECTION_KEYWORDS = {
+    "Dosage": ("dosage", "dose", "dosing", "how much", "how many"),
+    "Common Side Effects": ("side effect", "side-effect"),
+    "Warnings": ("warning", "caution", "contraindication"),
+}
+TITLE_WORD_RE = re.compile(r"[a-z]+")
+
 
 def _mg_strengths(text: str) -> set[str]:
     return {m.replace(" ", "").lower() for m in MG_RE.findall(text)}
+
+
+def _title_mentioned(query_lower: str, title: str) -> bool:
+    """True if the query names this specific product — shares a
+    distinctive (5+ letter) word with its title, e.g. "cough"/"suppressant"/
+    "syrup" for "Cough Suppressant Syrup (Dextromethorphan)". Short words are
+    excluded for the same reason tools.py's fuzzy symptom matching excludes
+    them: too many unrelated collisions (a generic word like "syrup" alone
+    would be fine, but this keeps the bar consistent with the rest of the
+    codebase's hybrid-matching functions)."""
+    title_words = TITLE_WORD_RE.findall(title.lower())
+    return any(len(w) >= 5 and w in query_lower for w in title_words)
 
 
 def _load_collection():
@@ -65,13 +104,15 @@ def search(query: str, top_k: int = 3) -> list[dict]:
     without a full reranker — fetching more than top_k from Chroma before
     applying it means a strength-matching chunk can still be pulled back
     into the final top_k even if its raw vector similarity alone wouldn't
-    have ranked it there."""
+    have ranked it there. SECTION_BOOST applies the same idea to section
+    intent (see its own docstring above)."""
     if _collection.count() == 0:
         return []
 
     response = _client.embed(model=config.EMBED_MODEL, input=query)
     query_vector = response.embeddings[0]
     query_strengths = _mg_strengths(query)
+    query_lower = query.lower()
 
     fetch_n = min(max(top_k * 3, 10), _collection.count())
     result = _collection.query(query_embeddings=[query_vector], n_results=fetch_n)
@@ -81,6 +122,9 @@ def search(query: str, top_k: int = 3) -> list[dict]:
         score = 1 - distance  # collection is cosine-space: distance = 1 - cosine_similarity
         if query_strengths and query_strengths & _mg_strengths(meta["title"]):
             score = min(score + STRENGTH_BOOST, 1.0)
+        section_keywords = SECTION_KEYWORDS.get(meta["section"], ())
+        if any(kw in query_lower for kw in section_keywords) and _title_mentioned(query_lower, meta["title"]):
+            score = min(score + SECTION_BOOST, 1.0)
         scored.append({"product": meta["title"], "source": meta["source"], "section": meta["section"], "text": doc, "score": score})
     scored.sort(key=lambda c: c["score"], reverse=True)
 
