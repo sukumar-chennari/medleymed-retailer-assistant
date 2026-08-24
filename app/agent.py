@@ -58,6 +58,20 @@ lookup_symptom/start_order/lookup_medicine_info only operate on a fixed
 fever/cold catalog. If a user's symptom is not fever or cold, do NOT call
 lookup_symptom — call decline_out_of_scope instead.
 
+MULTIPLE SYMPTOMS: A user can describe more than one symptom at once (e.g.
+"nose block and high temperature" — congestion AND fever). If the
+lookup_symptom result's "category" field contains more than one category
+(shown as "fever+cold"), you MUST recommend at least one product for EACH
+category mentioned, not just whichever one you noticed first — the results
+already include products from every matched category for exactly this
+reason.
+
+CLARIFYING QUESTIONS: When a symptom is ambiguous enough that the wrong
+product could be genuinely unsuitable, ask a short narrowing question BEFORE
+recommending a product, instead of guessing. If the user's message includes a
+line starting with "[Clarify:", ask exactly that question instead of calling
+lookup_symptom yet — wait for their answer first.
+
 ORDER FLOW: When the user confirms they want to order a specific suggested
 product, call start_order with its product_id — that single call handles
 everything (using the saved address and sending a confirmation email, or telling
@@ -299,6 +313,32 @@ def _remember_products(session_id: str, lookup_result_json: str) -> None:
         store.set_last_products(session_id, result["products"])
 
 
+# Symptoms ambiguous enough that recommending the wrong product would be a
+# real mismatch, not just a suboptimal pick — e.g. our only cough product
+# (col-004) is a dry-cough suppressant, explicitly unsuited for a productive
+# ("wet"/"chesty") cough per its own knowledge-base entry. Extensible: add
+# more entries here for other symptoms worth narrowing down before
+# recommending, following the same {qualifiers, question} shape.
+CLARIFYING_QUESTIONS = {
+    "cough": {
+        "qualifiers": ("dry", "wet", "chesty", "productive", "phlegm", "mucus", "sputum"),
+        "question": (
+            "Is your cough dry, or is it bringing up mucus (a chesty/productive "
+            "cough)? Our cough product is a dry-cough suppressant only, so this "
+            "makes sure it's actually the right fit."
+        ),
+    },
+}
+
+
+def _needs_clarification(source_text: str) -> str | None:
+    s = source_text.lower()
+    for trigger, rule in CLARIFYING_QUESTIONS.items():
+        if trigger in s and not any(q in s for q in rule["qualifiers"]):
+            return rule["question"]
+    return None
+
+
 def _inject_catalog_hint(parts: list, source_text: str, session_id: str) -> None:
     """Deterministically resolves any recognizable medicine/symptom mention to
     real catalog data and appends it to the message. Originally added only for
@@ -306,6 +346,15 @@ def _inject_catalog_hint(parts: list, source_text: str, session_id: str) -> None
     a product directly ("order Paracetamol") skips the usual symptom-description
     step, and without this the model has no real product_id in context at all —
     it either has to call lookup_symptom itself (unreliable) or invents one."""
+    clarify_question = _needs_clarification(source_text)
+    if clarify_question:
+        # Deliberately skip the catalog-data injection below this turn — if
+        # the model sees the actual product alongside the question, it's
+        # liable to just recommend it anyway instead of asking first (the
+        # same "won't admit it needs more info" pattern seen elsewhere).
+        parts.append(f"[Clarify: {clarify_question}]")
+        return
+
     categories = tools.classify_categories(source_text)
     if categories:
         # Pass the original text, not a pre-classified single category — a

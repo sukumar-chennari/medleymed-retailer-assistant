@@ -103,19 +103,23 @@ def check_unverified_completion(
 
 
 def leaked_tool_intent(reply_text: str, tool_names: set[str]) -> str | None:
-    """Catches the model narrating a tool call as text instead of using the
-    real mechanism — e.g. "I'll call decline_out_of_scope to end this
-    conversation" or raw {"name": "start_order", ...} / {"type": "function",
-    "function": {"name": "lookup_symptom", ...}} JSON in either compact or
-    spaced form. Returns the tool name it was trying to invoke, if
-    recognizable, so the caller can perform the real action instead of
-    leaking the planning text to the user."""
+    """Catches the model exposing internal tool-call mechanics as text
+    instead of just using the real mechanism or answering in plain
+    language — e.g. "I'll call decline_out_of_scope to end this
+    conversation", raw {"name": "start_order", ...} JSON, or "you can start
+    ordering this by calling start_order with the product_id 'fev-001'".
+
+    Deliberately broad: any literal occurrence of a tool's snake_case name
+    is treated as a leak, full stop, rather than requiring it to appear
+    alongside a specific narration phrase ("I'll call", "calling the", ...).
+    The narrower, phrase-gated version of this check missed "by calling
+    start_order with the product_id" entirely, since that sentence never
+    contains the literal substring "calling the" it was looking for — there
+    is no legitimate reason a user-facing reply should ever contain a tool's
+    internal name at all, regardless of the surrounding wording."""
     t = reply_text.lower()
-    narration = any(p in t for p in ("i'll call", "i will call", "calling the", "call the tool"))
     for name in tool_names:
-        if name not in t:
-            continue
-        if narration or re.search(r'["\']name["\']\s*:\s*["\']' + re.escape(name) + r'["\']', t):
+        if re.search(r"\b" + re.escape(name) + r"\b", t):
             return name
     return None
 
