@@ -7,3 +7,4 @@ venv/
 app/data/kb_meta.json
 app/data/chroma_db/
 app/data/app.db
+app/data/rag_eval_report.html
