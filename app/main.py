@@ -172,6 +172,12 @@ AFFIRMATIVE_WORDS = {
     "yes", "yeah", "yep", "yup", "sure", "ok", "okay", "please", "confirm",
     "go", "ahead", "do", "it", "place", "order", "the", "sounds", "good",
     "great", "perfect", "thats", "works", "lets",
+    # Casual variants observed in real testing — "ok continue bro" fell
+    # through to the generic re-ask because "continue" and "bro" weren't
+    # recognized, producing a stuck loop even though the intent was clearly
+    # to proceed.
+    "continue", "proceed", "bro", "dude", "man", "correct", "right", "fine",
+    "cool", "alright",
 }
 
 
@@ -181,6 +187,20 @@ def _is_affirmative(text: str) -> bool:
     normalized = text.strip().lower().strip("!.,? ")
     words = re.findall(r"[a-z']+", normalized)
     return bool(words) and all(w in AFFIRMATIVE_WORDS for w in words)
+
+
+# Signals like "no new one" / "i'll give another address" / "different one"
+# reject the address on file but don't yet supply a replacement — distinct
+# from genuine ambiguity. Observed failure: several such phrasings in a row
+# ("no new one", "i will give another address", "i will give different
+# one") all hit the same unhelpful "should I ship to X, or give a different
+# address?" re-ask verbatim, producing a real stuck loop with no progress.
+ADDRESS_REJECTION_WORDS = {"no", "not", "different", "another", "new", "change", "elsewhere", "else", "other"}
+
+
+def _wants_different_address(text: str) -> bool:
+    words = re.findall(r"[a-z']+", text.lower())
+    return any(w in ADDRESS_REJECTION_WORDS for w in words)
 
 
 def _reply_for_start_order_result(order: dict) -> str:
@@ -256,10 +276,19 @@ def chat(req: ChatRequest):
             reply = _complete_pending_order(req.session_id, pending_address_confirmation, text)
             messages.append({"role": "user", "content": text})
             messages.append({"role": "assistant", "content": reply})
+        elif pending_address_confirmation and text and _wants_different_address(text):
+            # They've signaled they want to give a new one but haven't
+            # supplied it yet — ask specifically for it instead of repeating
+            # the same compound question. pending_address_confirmation stays
+            # set, so their very next message (the actual address) is still
+            # handled by the _looks_like_an_address branch above.
+            reply = "No problem — what's the new shipping address?"
+            messages.append({"role": "user", "content": text})
+            messages.append({"role": "assistant", "content": reply})
         elif pending_address_confirmation and text:
-            # Neither a clear yes nor a new address — ask again rather than
-            # guessing which one they meant; keep the LLM out of this state
-            # for the same reasons as the other pending branches.
+            # Neither a clear yes, a new address, nor a rejection — ask again
+            # rather than guessing which one they meant; keep the LLM out of
+            # this state for the same reasons as the other pending branches.
             address = store.get_address("demo_user")
             reply = f"Just to confirm — should I ship to {address}, or would you like to give a different address?"
             messages.append({"role": "user", "content": text})

@@ -292,6 +292,20 @@ INFO_QUESTION_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Catches an observed failure where merely describing a symptom for the
+# first time ("i have fever") produced an immediate start_order call and
+# skipped ever asking "would you like to order this?" — the catalog hint
+# injected below literally tells the model which product_id to use "for
+# start_order", which the model took as license to call it right away. Since
+# start_order always defers to an address ask/confirmation rather than
+# completing silently, that turned a plain symptom mention into a confusing
+# "should I ship here?" prompt for an order the user never agreed to. Only
+# messages containing explicit ordering language bypass the guard below.
+ORDER_INTENT_RE = re.compile(
+    r"\b(order|buy|purchase|checkout|add to cart|get me|place (an|the) order)\b",
+    re.IGNORECASE,
+)
+
 
 def describe_image(image_b64: str, media_type: str) -> str:
     if _gemini_client is None:
@@ -416,8 +430,10 @@ def _inject_catalog_hint(parts: list, source_text: str, session_id: str) -> None
         category_label = "+".join(categories)
         parts.append(
             f"[Detected a {category_label}-related medicine/symptom mention. Matching "
-            f"catalog products (use one of these exact product_ids for "
-            f"start_order, don't call lookup_symptom again): {result}]"
+            f"catalog products (don't call lookup_symptom again): {result}. Present "
+            f"these as a recommendation and ask if they'd like to order one — do NOT "
+            f"call start_order yet unless this message already contains clear ordering "
+            f"language (e.g. 'order X', 'buy X'); wait for their next message to confirm.]"
         )
 
 
@@ -493,6 +509,14 @@ def run_turn(
             messages.append({"role": "user", "content": user_text})
             messages.append({"role": "assistant", "content": question})
             return question, messages
+
+    # Snapshot BEFORE _build_user_text runs — it records this turn's own
+    # detected products via _remember_products, which would otherwise make
+    # "a recommendation exists" look true even on the very first mention of a
+    # symptom, defeating the start_order guard below.
+    had_shown_recommendation = bool(store.get_last_products(session_id)) or bool(
+        store.get_last_recommended_product(session_id)
+    )
 
     combined_text = _build_user_text(user_text, image_b64, image_media_type, session_id)
     messages.append({"role": "user", "content": combined_text})
@@ -629,20 +653,34 @@ def run_turn(
             arguments = call["function"]["arguments"]
             try:
                 if name == "start_order":
-                    try:
-                        quantity = int(arguments.get("quantity", 1))
-                    except (TypeError, ValueError):
-                        quantity = 1
-                    result = tools.start_order(arguments["product_id"], session_id, quantity)
-                    parsed_order = json.loads(result)
-                    if parsed_order.get("order_placed"):
-                        real_order_placed_this_turn = True
-                        completed_order_this_turn = parsed_order
-                        store.clear_last_recommended_product(session_id)
-                    elif "error" not in parsed_order:
-                        deferred_order_result_this_turn = parsed_order
-                    if parsed_order.get("email_sent"):
-                        real_email_sent_this_turn = True
+                    order_intent_this_message = bool(user_text) and ORDER_INTENT_RE.search(user_text)
+                    if not had_shown_recommendation and not order_intent_this_message:
+                        print(f"[GUARD] blocked premature start_order before user confirmed intent: {arguments}")
+                        result = json.dumps({
+                            "order_placed": False,
+                            "message": (
+                                "The user has not confirmed they want to order this yet "
+                                "— do not call start_order. Instead, present the "
+                                "recommended product in plain text and ask \"Would you "
+                                "like to order this?\", then stop without calling any "
+                                "tool this turn."
+                            ),
+                        })
+                    else:
+                        try:
+                            quantity = int(arguments.get("quantity", 1))
+                        except (TypeError, ValueError):
+                            quantity = 1
+                        result = tools.start_order(arguments["product_id"], session_id, quantity)
+                        parsed_order = json.loads(result)
+                        if parsed_order.get("order_placed"):
+                            real_order_placed_this_turn = True
+                            completed_order_this_turn = parsed_order
+                            store.clear_last_recommended_product(session_id)
+                        elif "error" not in parsed_order:
+                            deferred_order_result_this_turn = parsed_order
+                        if parsed_order.get("email_sent"):
+                            real_email_sent_this_turn = True
                 elif name == "lookup_symptom" and user_text and INFO_QUESTION_RE.search(user_text):
                     print(f"[GUARD] redirected misrouted lookup_symptom to lookup_medicine_info: {user_text!r}")
                     result = tools.lookup_medicine_info(user_text)
