@@ -132,17 +132,28 @@ def _resolve_bare_selection(text: str, last_products: list[dict] | None) -> dict
     return None
 
 
-AFFIRMATIVE_PHRASES = {
-    "yes", "yeah", "yep", "yup", "sure", "ok", "okay", "please",
-    "go ahead", "do it", "confirm", "place it", "order it", "place the order",
+# Every word a purely-affirmative reply could plausibly be built from.
+# "yes please" broke the old exact-phrase-list version of this check (it
+# wasn't one of the enumerated phrases, so it fell through to the LLM, which
+# then called start_order with a product *name* instead of its id and
+# produced a confused "I made an error" reply). Checking that EVERY word in
+# the message belongs to this set (rather than ANY word) fixes that without
+# reopening the exact risk the original design avoided: a message like "ok
+# but what about the ibuprofen instead" has words ("but", "ibuprofen",
+# "instead") outside this set, so it still correctly fails the check.
+AFFIRMATIVE_WORDS = {
+    "yes", "yeah", "yep", "yup", "sure", "ok", "okay", "please", "confirm",
+    "go", "ahead", "do", "it", "place", "order", "the", "sounds", "good",
+    "great", "perfect", "thats", "works", "lets",
 }
 
 
 def _is_affirmative(text: str) -> bool:
-    """A bare "yes"/"ok" is the natural way to respond to "would you like to
-    order this?" — an exact-match list (not fuzzy/word-based) keeps this from
-    ever misfiring on a real sentence that happens to contain "ok"."""
-    return text.strip().lower().strip("!.,? ") in AFFIRMATIVE_PHRASES
+    """A bare "yes"/"ok"/"yes please" is the natural way to respond to
+    "would you like to order this?"."""
+    normalized = text.strip().lower().strip("!.,? ")
+    words = re.findall(r"[a-z']+", normalized)
+    return bool(words) and all(w in AFFIRMATIVE_WORDS for w in words)
 
 
 def _reply_for_start_order_result(order: dict) -> str:
