@@ -352,14 +352,18 @@ def chat(req: ChatRequest):
                 image_b64=req.image_b64,
                 image_media_type=req.image_media_type,
             )
+
+        store.save_session_messages(req.session_id, messages)
     except Exception:
-        # Last-resort safety net: whatever went wrong (model, tool, network),
-        # the user gets a friendly reply instead of a raw 500, and the
-        # conversation history isn't left in a half-updated state.
+        # Last-resort safety net: whatever went wrong (model, tool, network,
+        # or saving session state), the user gets a friendly reply as a real
+        # 200 instead of a raw 500 — a 500 skips this reply entirely and
+        # surfaces the frontend's own generic network-error message instead,
+        # which is a worse, less informative dead end. save_session_messages
+        # is included in this try block for the same reason: it used to run
+        # after this handler, unprotected.
         logger.exception("Unhandled error in /api/chat for session %s", req.session_id)
         return ChatResponse(reply=GENERIC_FAILURE_REPLY)
-
-    store.save_session_messages(req.session_id, messages)
 
     return ChatResponse(reply=reply)
 

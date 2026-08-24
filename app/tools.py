@@ -39,7 +39,15 @@ COLD_WORDS = {
 # anything).
 _LONG_FEVER_WORDS = {w for w in FEVER_WORDS if len(w) >= 7}
 _LONG_COLD_WORDS = {w for w in COLD_WORDS if len(w) >= 7}
-FUZZY_CUTOFF = 0.8
+# 0.8 was the boundary of a real false positive: a photographed unrelated
+# document (a BSNL phone-line disconnection letter) got its image description
+# fuzzy-matched to a cold symptom because "connection"/"reconnection" score
+# exactly 0.8 against "congestion" (difflib.SequenceMatcher) — an ordinary
+# English word colliding with a symptom word, not a typo. Every real typo of
+# our cold/fever vocabulary tested (e.g. "congestoin", "cetrizine",
+# "sneazing", "antihistmine") scores >= 0.875, so raising the cutoff to 0.85
+# excludes the false positive while still catching genuine typos.
+FUZZY_CUTOFF = 0.85
 FUZZY_MIN_WORD_LEN = 7
 
 
