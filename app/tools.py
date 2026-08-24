@@ -5,7 +5,7 @@ import smtplib
 from email.message import EmailMessage
 from email.utils import formataddr
 
-from app import config, store
+from app import config, retrieval, store
 
 FEVER_KEYWORDS = [
     "fever", "temperature", "chills", "body ache", "headache",
@@ -207,10 +207,26 @@ def send_confirmation_email(to: str, order_details: str) -> str:
         return json.dumps({"sent": False, "mode": "error", "error": str(exc)})
 
 
+def lookup_medicine_info(query: str) -> str:
+    """RAG lookup: embeds the query, retrieves the most relevant chunks from
+    the local knowledge base (see retrieval.py/data_ingest.py), and returns
+    them for the model to ground its answer in — including the source file,
+    so the model can cite it rather than answering from unverified general
+    knowledge."""
+    results = retrieval.search(query)
+    if not results:
+        return json.dumps({
+            "results": [],
+            "message": "No information found in our knowledge base for that.",
+        })
+    return json.dumps({"results": results})
+
+
 TOOL_FUNCTIONS = {
     "lookup_symptom": lambda args: lookup_symptom(args.get("symptom", "")),
     "get_saved_address": lambda args: get_saved_address(args.get("user_id", "demo_user")),
     "save_address": lambda args: save_address(
         args.get("user_id", "demo_user"), args.get("address", "")
     ),
+    "lookup_medicine_info": lambda args: lookup_medicine_info(args.get("query", "")),
 }

@@ -5,8 +5,8 @@ import re
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 
-from app import store, tools
-from app.llm_service import run_turn
+from app import guardrails, store, tools
+from app.agent import run_turn
 from app.schemas import ChatRequest, ChatResponse
 
 logger = logging.getLogger("medicine_assistant")
@@ -73,7 +73,12 @@ def _looks_like_an_email(text: str) -> bool:
 def _looks_like_an_address(text: str) -> bool:
     """A pending order treats the user's next message as their shipping address —
     but only if it plausibly is one. Without this, a reply like "thank you" or
-    "actually never mind" gets silently saved and used as the shipping address."""
+    "actually never mind" gets silently saved and used as the shipping address.
+    Also rejects anything containing a product id pattern (fev-001, col-002) —
+    a message like "order col-001" has a digit and is long enough to pass the
+    basic check, but is clearly a product reference, not an address."""
+    if guardrails.PRODUCT_ID_RE.search(text):
+        return False
     return any(ch.isdigit() for ch in text) and len(text) >= 8
 
 

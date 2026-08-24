@@ -1,12 +1,16 @@
+"""The agent: system prompt, tool schema, and the tool-calling orchestration
+loop. This is where the LLM decides what to do — reading `guardrails.py`
+alongside this file matters, since several of the decisions made here get
+double-checked there before reaching the user."""
+
 import base64
 import json
-import re
 
 import ollama
 from google import genai
 from google.genai import types
 
-from app import config, store, tools
+from app import config, guardrails, store, tools
 from app.tools import TOOL_FUNCTIONS
 
 MAX_TOOL_ROUNDS = 6
@@ -18,8 +22,10 @@ SYSTEM_PROMPT = """\
 You are a Fever & Cold OTC Medicine Assistant — a narrow demo assistant. Your ONLY
 job is: (1) suggest over-the-counter fever/cold medicines from a fixed catalog based
 on symptoms the user describes, (2) use a description of a photographed medicine
-label or prescription (given to you as text) to identify what the medicine is, and
-(3) help the user place a simple demo order for a suggested catalog product.
+label or prescription (given to you as text) to identify what the medicine is,
+(3) help the user place a simple demo order for a suggested catalog product, and
+(4) answer factual questions about dosage, side effects, or warnings for our
+catalog medicines, grounded in our knowledge base.
 
 GREETINGS: A simple greeting or pleasantry (hi, hello, hey, good morning, thanks,
 thank you, bye, how are you) is NOT out of scope — respond warmly and briefly
@@ -35,15 +41,21 @@ drugs). When such a request is out of scope, call the decline_out_of_scope tool 
 do not try to answer it yourself, and do not write out a tool call as text. Do not
 attempt to be helpful beyond that boundary, even if asked nicely or repeatedly.
 
+Example: if asked to fix code, debug a program, or anything programming-related,
+that is NOT a fever/cold symptom — call decline_out_of_scope. Do NOT call
+lookup_symptom just because you're unsure what else to do; lookup_symptom is
+ONLY for when the user describes an actual physical symptom.
+
 You are not a doctor and must never give a medical diagnosis. Every response that
 gives symptom or medicine guidance must include, verbatim or nearly so: "This is
 general OTC guidance, not a medical diagnosis — consult a doctor if symptoms persist
 or worsen."
 
-TOOLS: You have exactly five tools — lookup_symptom, get_saved_address,
-save_address, start_order, decline_out_of_scope. lookup_symptom/start_order only
-operate on a fixed fever/cold catalog. If a user's symptom is not fever or cold,
-do NOT call lookup_symptom — call decline_out_of_scope instead.
+TOOLS: You have exactly six tools — lookup_symptom, get_saved_address,
+save_address, start_order, lookup_medicine_info, decline_out_of_scope.
+lookup_symptom/start_order/lookup_medicine_info only operate on a fixed
+fever/cold catalog. If a user's symptom is not fever or cold, do NOT call
+lookup_symptom — call decline_out_of_scope instead.
 
 ORDER FLOW: When the user confirms they want to order a specific suggested
 product, call start_order with its product_id — that single call handles
@@ -53,6 +65,19 @@ the user for their shipping address in plain conversational text and then STOP �
 do not call any more tools that turn. Their next message will automatically be
 captured as the address and used to finish the order, so never call start_order
 again yourself to "retry" it.
+
+MEDICINE INFO: If the user asks a factual question about dosage, side effects,
+warnings, or interactions for one of our catalog medicines, call
+lookup_medicine_info with their question. Each result includes a "product"
+field naming which medicine that chunk is actually about — if the user asked
+about a specific medicine (e.g. "cetirizine"), ONLY use results whose
+"product" matches it; ignore any other returned result even if it scored
+well, since results about a different product can come back in the same
+call. Answer ONLY using the text of the results you kept — do not add
+anything from your own general knowledge — and cite the source at the end of
+your answer, e.g. "(Source: fev-001.md)". If none of the results match the
+medicine asked about, tell the user that isn't in our knowledge base rather
+than guessing an answer.
 
 IMAGES: If the user's message includes a line starting with "[Image analysis:",
 that's a description of a photo they uploaded. Use it to identify the medicine
@@ -185,6 +210,31 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "lookup_medicine_info",
+            "description": (
+                "Look up dosage, common side effects, or warnings for a catalog medicine "
+                "from our knowledge base (retrieval-augmented — this returns real excerpts "
+                "to quote/cite, not a free-form answer). Only covers the 8 fever/cold "
+                "products in our catalog. Returns an empty result for anything else."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": (
+                            "The user's factual question, e.g. 'dosage for paracetamol' "
+                            "or 'side effects of cetirizine'."
+                        ),
+                    }
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "decline_out_of_scope",
             "description": (
                 "Call this when the user's request is not about fever/cold symptoms, "
@@ -198,12 +248,7 @@ TOOLS = [
     },
 ]
 
-OUT_OF_SCOPE_REPLY = "This demo only handles fever and cold OTC guidance — I can't help with that here."
-
-DISCLAIMER = (
-    "This is general OTC guidance, not a medical diagnosis — consult a doctor if "
-    "symptoms persist or worsen."
-)
+TOOL_NAMES = {t["function"]["name"] for t in TOOLS}
 
 
 def describe_image(image_b64: str, media_type: str) -> str:
@@ -270,142 +315,6 @@ def _build_user_text(
     return "\n".join(parts)
 
 
-FAKE_COMPLETION_GUARD_REPLY = (
-    "Let's make sure that actually goes through — what symptom is this for "
-    "(fever or cold)? That way I can look up the right product and place a "
-    "real order for you."
-)
-
-
-def _claims_order_placed(reply_text: str) -> bool:
-    t = reply_text.lower()
-    return "order" in t and any(k in t for k in ("placed", "confirmed", "shipped", "is on its way"))
-
-
-def _claims_email_sent(reply_text: str) -> bool:
-    t = reply_text.lower()
-    return any(
-        k in t
-        for k in (
-            "confirmation email", "email has been sent", "email has also been sent",
-            "will send you an email", "sent you an email", "email sent",
-        )
-    )
-
-
-TOOL_NAMES = {t["function"]["name"] for t in TOOLS}
-
-
-def _leaked_tool_intent(reply_text: str) -> str | None:
-    """Catches the model narrating a tool call as text instead of using the
-    real mechanism — e.g. "I'll call decline_out_of_scope to end this
-    conversation" or raw {"name": "start_order", ...} / {"type": "function",
-    "function": {"name": "lookup_symptom", ...}} JSON in either compact or
-    spaced form. Returns the tool name it was trying to invoke, if
-    recognizable, so the caller can perform the real action instead of
-    leaking the planning text to the user."""
-    t = reply_text.lower()
-    narration = any(p in t for p in ("i'll call", "i will call", "calling the", "call the tool"))
-    for name in TOOL_NAMES:
-        if name not in t:
-            continue
-        if narration or re.search(r'["\']name["\']\s*:\s*["\']' + re.escape(name) + r'["\']', t):
-            return name
-    return None
-
-
-def _recover_leaked_lookup(reply_text: str) -> tuple[str, str] | None:
-    """The leaked JSON for lookup_symptom conveniently still contains the
-    real symptom the model meant to look up — so rather than just suppressing
-    the leak (a dead-end "please rephrase" that loses the user's answer),
-    perform the real lookup ourselves and return a properly phrased reply.
-    Returns (reply_text, raw_lookup_result_json) or None if unrecoverable."""
-    match = re.search(r'["\']symptom["\']\s*:\s*["\']([^"\']+)["\']', reply_text, re.IGNORECASE)
-    if not match:
-        return None
-    result_json = tools.lookup_symptom(match.group(1))
-    result = json.loads(result_json)
-    if not result.get("matched"):
-        return OUT_OF_SCOPE_REPLY, result_json
-    lines = ["Here's what I'd recommend:", ""]
-    for p in result["products"]:
-        lines.append(f"- {p['name']} ({p['id']}) — {p['description']}")
-    lines.append("")
-    lines.append("Would you like to order one of these?")
-    lines.append("")
-    lines.append(DISCLAIMER)
-    return "\n".join(lines), result_json
-
-
-PRODUCT_ID_RE = re.compile(r"\b(?:fev|col)-\d{3}\b", re.IGNORECASE)
-
-
-def _remember_recommended_product(session_id: str, reply_text: str) -> None:
-    """Tracks the single product the assistant just recommended (parsed out
-    of its own reply) so a later bare "yes"/"ok" confirmation — the natural
-    way people respond to "would you like to order this?" — can be resolved
-    deterministically instead of trusting the model to remember and act on
-    it reliably across another turn."""
-    matches = {m.lower() for m in PRODUCT_ID_RE.findall(reply_text)}
-    if len(matches) == 1:
-        product_id = next(iter(matches))
-        if store.find_product(product_id):
-            store.set_last_recommended_product(session_id, product_id)
-
-
-GREETING_REPLY = "Hi! I can help with fever or cold symptoms, or a photo of a medicine label — what's going on?"
-
-BYE_REPLY = "Take care! Come back anytime you have fever or cold questions."
-
-# Word-level (not exact-phrase) matching — a fixed phrase list is too brittle
-# for casual variants like "hey whatup" or "yo whats good". Any message that
-# (a) contains no recognizable fever/cold content per tools.classify, (b) is
-# short, and (c) contains one of these words is treated as a pleasantry. (a)
-# is what stops this from swallowing a real request like "hi, I have a fever".
-GREETING_WORDS = {
-    "hi", "hii", "hiii", "hello", "helo", "hey", "hiya", "yo", "sup",
-    "whatup", "whatsup", "wassup", "morning", "evening", "buddy",
-}
-BYE_WORDS = {"thanks", "thank", "thx", "ty", "bye", "goodbye", "cya", "cheers"}
-
-# Idiom-level phrases ("how are you") use generic words (how/are/you) that
-# would cause false positives if added to GREETING_WORDS individually, so
-# they're matched as whole phrases instead — checked as a substring of the
-# normalized text so "how are you bro?" still matches.
-GREETING_PHRASES = {
-    "how are you", "how r u", "how are u", "hows it going", "how's it going",
-    "how you doing", "how you doin", "how ya doing", "whats good",
-    "what's good", "how is it going", "how's everything",
-}
-MAX_PLEASANTRY_WORDS = 6
-
-
-def _deterministic_pleasantry_reply(text: str) -> str | None:
-    """Greeting/pleasantry handling relies on a rule the model followed
-    inconsistently in testing (a plain "hi" sometimes still triggered
-    decline_out_of_scope, a 3B-model reliability gap, not a prompt-wording
-    problem). Short-circuiting known pleasantries in code guarantees
-    consistent behavior instead of hoping the model applies the instruction."""
-    if tools.classify(text) is not None:
-        return None  # real symptom/medicine content — let the normal flow handle it
-
-    words = re.findall(r"[a-z']+", text.lower())
-    if not words:
-        return None
-
-    normalized = " ".join(words)
-    if any(phrase in normalized for phrase in GREETING_PHRASES):
-        return GREETING_REPLY
-
-    if len(words) > MAX_PLEASANTRY_WORDS:
-        return None
-    if any(w in BYE_WORDS for w in words):
-        return BYE_REPLY
-    if any(w in GREETING_WORDS for w in words):
-        return GREETING_REPLY
-    return None
-
-
 OLLAMA_UNAVAILABLE_REPLY = (
     "Sorry, I can't reach the assistant engine right now (Ollama may not be "
     "running). Please make sure Ollama is started and try again."
@@ -442,7 +351,7 @@ def run_turn(
     returns (reply_text, updated_messages)."""
 
     if not image_b64 and user_text:
-        pleasantry_reply = _deterministic_pleasantry_reply(user_text)
+        pleasantry_reply = guardrails.deterministic_pleasantry_reply(user_text)
         if pleasantry_reply:
             messages.append({"role": "user", "content": user_text})
             messages.append({"role": "assistant", "content": pleasantry_reply})
@@ -451,16 +360,19 @@ def run_turn(
     combined_text = _build_user_text(user_text, image_b64, image_media_type, session_id)
     messages.append({"role": "user", "content": combined_text})
 
+    # Adding a 6th tool visibly increased how often the model calls
+    # lookup_symptom(symptom="fever") as a default action for messages that
+    # aren't fever/cold at all (observed: 100% reproducible on "fix my
+    # code"). Cross-checking against tools.classify on the actual user text
+    # (not the model's own possibly-invented "symptom" argument) catches
+    # this deterministically instead of hoping prompt wording fixes it.
+    symptom_lookup_grounded = bool(image_b64) or (bool(user_text) and tools.classify(user_text) is not None)
+    blocked_ungrounded_lookup_this_turn = False
+
     # Tracks whether a *real* start_order success (and, separately, a real
-    # email send) happened anywhere in this turn. Needed because the model's
-    # follow-up "your order has been placed" text arrives in a later
-    # iteration with no tool_calls of its own — without this the
-    # completion-claim guard below can't tell a legitimate claim apart from a
-    # hallucinated one. Tracked separately per claim: a real order_placed
-    # doesn't make an accompanying "email has been sent" claim true too — the
-    # start_order result can report order_placed:true and email_sent:false
-    # in the same result (no email on file), and the model has been observed
-    # claiming the email was sent anyway.
+    # email send) happened anywhere in this turn — see
+    # guardrails.check_unverified_completion for why this can't just be
+    # inferred from "no tool_calls this iteration".
     real_order_placed_this_turn = False
     real_email_sent_this_turn = False
 
@@ -476,32 +388,38 @@ def run_turn(
         if not tool_calls:
             reply_text = message.get("content", "")
 
-            leaked_tool = _leaked_tool_intent(reply_text)
+            if blocked_ungrounded_lookup_this_turn:
+                # We already know structurally that this turn's lookup_symptom
+                # call was invalid (see below) — don't leave the final wording
+                # up to the model, which was observed giving inconsistent
+                # soft-redirects instead of a clean decline once this fires.
+                reply_text = guardrails.OUT_OF_SCOPE_REPLY
+                messages.append({"role": "assistant", "content": reply_text})
+                return reply_text, messages
+
+            leaked_tool = guardrails.leaked_tool_intent(reply_text, TOOL_NAMES)
             if leaked_tool == "decline_out_of_scope":
                 print(f"[GUARD] converted leaked decline intent to real decline: {reply_text!r}")
-                reply_text = OUT_OF_SCOPE_REPLY
+                reply_text = guardrails.OUT_OF_SCOPE_REPLY
             elif leaked_tool == "lookup_symptom":
-                recovered = _recover_leaked_lookup(reply_text)
+                recovered = guardrails.recover_leaked_lookup(reply_text)
                 if recovered:
                     print(f"[GUARD] recovered leaked lookup_symptom call: {reply_text!r}")
                     _remember_products(session_id, recovered[1])
                     reply_text = recovered[0]
                 else:
                     print(f"[GUARD] blocked leaked tool intent (lookup_symptom, unrecoverable): {reply_text!r}")
-                    reply_text = FAKE_COMPLETION_GUARD_REPLY
+                    reply_text = guardrails.FAKE_COMPLETION_GUARD_REPLY
             elif leaked_tool:
                 print(f"[GUARD] blocked leaked tool intent ({leaked_tool}): {reply_text!r}")
-                reply_text = FAKE_COMPLETION_GUARD_REPLY
+                reply_text = guardrails.FAKE_COMPLETION_GUARD_REPLY
             else:
-                _remember_recommended_product(session_id, reply_text)
-                unverified_order = _claims_order_placed(reply_text) and not real_order_placed_this_turn
-                unverified_email = _claims_email_sent(reply_text) and not real_email_sent_this_turn
-                if unverified_order or unverified_email:
-                    print(
-                        f"[GUARD] blocked unverified completion claim "
-                        f"(order={unverified_order}, email={unverified_email}): {reply_text!r}"
-                    )
-                    reply_text = FAKE_COMPLETION_GUARD_REPLY
+                guardrails.remember_recommended_product(session_id, reply_text)
+                guard_reply = guardrails.check_unverified_completion(
+                    reply_text, real_order_placed_this_turn, real_email_sent_this_turn
+                )
+                if guard_reply:
+                    reply_text = guard_reply
 
             messages.append({"role": "assistant", "content": reply_text})
             return reply_text, messages
@@ -510,8 +428,8 @@ def run_turn(
 
         if any(c["function"]["name"] == "decline_out_of_scope" for c in tool_calls):
             messages.append({"role": "tool", "content": "declined — told the user this is out of scope"})
-            messages.append({"role": "assistant", "content": OUT_OF_SCOPE_REPLY})
-            return OUT_OF_SCOPE_REPLY, messages
+            messages.append({"role": "assistant", "content": guardrails.OUT_OF_SCOPE_REPLY})
+            return guardrails.OUT_OF_SCOPE_REPLY, messages
 
         for call in tool_calls:
             name = call["function"]["name"]
@@ -524,6 +442,17 @@ def run_turn(
                         store.clear_last_recommended_product(session_id)
                     if '"email_sent": true' in result:
                         real_email_sent_this_turn = True
+                elif name == "lookup_symptom" and not symptom_lookup_grounded:
+                    print(f"[GUARD] blocked ungrounded lookup_symptom call: {arguments}")
+                    blocked_ungrounded_lookup_this_turn = True
+                    result = json.dumps({
+                        "matched": False,
+                        "message": (
+                            "This message doesn't describe a fever or cold symptom. Do "
+                            "not present catalog products for it — call "
+                            "decline_out_of_scope instead."
+                        ),
+                    })
                 else:
                     result = TOOL_FUNCTIONS[name](arguments)
                     if name == "lookup_symptom":

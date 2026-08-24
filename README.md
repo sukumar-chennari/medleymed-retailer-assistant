@@ -10,16 +10,31 @@ demo order with email confirmation.
 
 Scope is deliberately narrow: fever and cold only, one hardcoded demo user,
 in-memory storage. Built entirely on free resources: **Ollama** (`llama3.2`,
-running locally) drives the conversation and tool-calling, and the free
+running locally) drives the conversation and tool-calling, `nomic-embed-text`
+(also local Ollama) powers a small retrieval-augmented-generation (RAG)
+knowledge base for medicine dosage/side-effect questions, and the free
 **Gemini API** reads uploaded photos. See
 `/Users/macbookpro/.claude/plans/twinkly-humming-wolf.md` for the full design
 plan and roadmap.
 
+### Code layout
+
+- `app/agent.py` — the agent: system prompt, tool schema, tool-calling loop
+- `app/guardrails.py` — hallucination/leak/pleasantry safety-net checks
+- `app/tools.py` — tool implementations (catalog lookup, orders, RAG lookup)
+- `app/data_ingest.py` — chunks and embeds the knowledge base (run standalone
+  with `python -m app.data_ingest`)
+- `app/retrieval.py` — cosine-similarity search over the embedded chunks
+- `app/data/knowledge_base/*.md` — the RAG corpus (one file per catalog item)
+- `app/store.py` — in-memory app state (orders, sessions, addresses)
+- `app/main.py` — FastAPI routes
+
 ## Setup
 
-1. Install and start [Ollama](https://ollama.com), then pull the text model:
+1. Install and start [Ollama](https://ollama.com), then pull the models:
    ```
    ollama pull llama3.2
+   ollama pull nomic-embed-text
    ```
    (Ollama must be running — `ollama serve`, or just have the app open.)
 2. Get a free Gemini API key at https://aistudio.google.com/apikey (no credit
@@ -30,6 +45,10 @@ plan and roadmap.
    optional — without them, order confirmation emails are logged instead of sent.
 6. `uvicorn app.main:app --reload`
 7. Open http://localhost:8000
+
+The first run automatically builds the RAG index (`app/data/kb_index.json`)
+if it doesn't exist yet. To rebuild it explicitly (e.g. after editing the
+knowledge base), run `python -m app.data_ingest`.
 
 ## Running the demo
 
@@ -47,6 +66,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env   # then fill in GEMINI_API_KEY
 ollama pull llama3.2
+ollama pull nomic-embed-text
 ```
 
 Every time you want to run it:

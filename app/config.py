@@ -6,6 +6,7 @@ load_dotenv()
 
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 TEXT_MODEL = os.environ.get("OLLAMA_TEXT_MODEL", "llama3.2")
+EMBED_MODEL = os.environ.get("OLLAMA_EMBED_MODEL", "nomic-embed-text")
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 GEMINI_VISION_MODEL = os.environ.get("GEMINI_VISION_MODEL", "gemini-3.6-flash")
