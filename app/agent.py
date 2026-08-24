@@ -394,6 +394,35 @@ CLARIFYING_QUESTIONS = {
             {"answers": ("adult", "myself", "grown", "me"), "product_ids": ("fev-001", "fev-002", "fev-003")},
         ],
     },
+    "cold": {
+        # Unlike fever, there's no pediatric-formulated option at all in our
+        # cold catalog (antihistamine, decongestant, and combo relief are all
+        # adult products) — a child mention isn't a narrowing question, it's
+        # a real "nothing here fits" case, same shape as cough's wet-cough
+        # branch.
+        "qualifiers": ("child", "kid", "kids", "baby", "infant", "toddler", "adult", "myself", "grown"),
+        "question": (
+            "Is this cold for a child, or for an adult/yourself? None of our "
+            "cold products are formulated or dosed for children, so this "
+            "makes sure we don't recommend something unsuitable."
+        ),
+        "branches": [
+            {
+                "answers": ("child", "kid", "kids", "baby", "infant", "toddler"),
+                "product_ids": (),
+                "reply": (
+                    "None of our cold products (antihistamine, decongestant, or "
+                    "combination relief) are formulated or dosed for children — "
+                    "I'd recommend checking with a pharmacist or pediatrician "
+                    "instead. Is there anything else I can help with?"
+                ),
+            },
+            {
+                "answers": ("adult", "myself", "grown", "me"),
+                "product_ids": ("col-001", "col-002", "col-003", "col-004"),
+            },
+        ],
+    },
 }
 
 
