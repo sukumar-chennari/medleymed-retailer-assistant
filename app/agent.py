@@ -366,7 +366,19 @@ def run_turn(
     # code"). Cross-checking against tools.classify on the actual user text
     # (not the model's own possibly-invented "symptom" argument) catches
     # this deterministically instead of hoping prompt wording fixes it.
-    symptom_lookup_grounded = bool(image_b64) or (bool(user_text) and tools.classify(user_text) is not None)
+    #
+    # Checking classify() on the current message ALONE is too narrow though —
+    # a natural follow-up like "any alternative?" doesn't repeat a symptom
+    # keyword but is clearly still in-scope once a category was already
+    # established (e.g. "runny nose" earlier this session). store.get_last_products
+    # is the same "a category is already active in this conversation" signal
+    # main.py's bare-selection handling relies on, so a lookup here is grounded
+    # too even though this message's own text doesn't classify.
+    symptom_lookup_grounded = (
+        bool(image_b64)
+        or (bool(user_text) and tools.classify(user_text) is not None)
+        or bool(store.get_last_products(session_id))
+    )
     blocked_ungrounded_lookup_this_turn = False
 
     # Tracks whether a *real* start_order success (and, separately, a real
