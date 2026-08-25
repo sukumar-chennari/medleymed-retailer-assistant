@@ -90,6 +90,43 @@ def _looks_like_an_address(text: str) -> bool:
     return any(ch.isdigit() for ch in text) and len(text) >= 8
 
 
+# A bare place name ("hyderabad") is a completely normal way to answer a
+# fresh "what's your address?" ask, but has no digit — without this, it
+# fell through to the general LLM turn, which is exactly what let the model
+# claim "I've saved your address" ungrounded (see
+# guardrails.claims_address_saved for the actual safety net this depends on
+# regardless). Deliberately scoped to ONLY the pending_product_id
+# first-time-address context (see chat()) rather than folded into
+# _looks_like_an_address itself — the pending_address_confirmation context
+# has a real third option ("sure, whatever you think is best" meaning
+# "just use what's on file") that this heuristic would wrongly capture as
+# a brand new address if applied there too.
+_QUESTION_WORDS = {
+    "who", "what", "when", "where", "why", "how", "is", "are", "can",
+    "could", "would", "will", "do", "does", "did", "should",
+}
+
+
+def _looks_like_a_first_time_address(text: str) -> bool:
+    if _looks_like_an_address(text):
+        return True
+    if guardrails.PRODUCT_ID_RE.search(text):
+        return False
+    stripped = text.strip()
+    if not (2 <= len(stripped) <= 80):
+        return False
+    if "?" in stripped:
+        return False
+    first_word = re.split(r"[\s,]+", stripped.lower(), maxsplit=1)[0]
+    if first_word in _QUESTION_WORDS:
+        return False
+    if _declines(stripped):
+        return False
+    if tools.classify(stripped) is not None:
+        return False
+    return True
+
+
 def _complete_pending_order(session_id: str, pending: dict, address_text: str) -> str:
     """Deterministically finishes an order once the user's next message supplies
     the address, instead of trusting the LLM to chain save_address + place_order
@@ -357,7 +394,7 @@ def chat(req: ChatRequest):
             reply = _complete_pending_email(email_in_text, pending_email_order_id)
             messages.append({"role": "user", "content": text})
             messages.append({"role": "assistant", "content": reply})
-        elif pending_product_id and text and _looks_like_an_address(text):
+        elif pending_product_id and text and _looks_like_a_first_time_address(text):
             store.clear_pending_order(req.session_id)
             reply = _complete_pending_order(req.session_id, pending_product_id, text)
             messages.append({"role": "user", "content": text})

@@ -659,6 +659,16 @@ class _GuardrailMiddleware(AgentMiddleware):
                     self.turn_state["real_email_sent"] = True
                 return response
 
+            if name == "save_address":
+                response = handler(request)
+                print(f"[TOOL CALL] {name}({args}) -> {response.content}")
+                try:
+                    if json.loads(response.content).get("saved"):
+                        self.turn_state["real_address_saved"] = True
+                except (TypeError, ValueError):
+                    pass
+                return response
+
             response = handler(request)
             print(f"[TOOL CALL] {name}({args}) -> {response.content}")
             return response
@@ -715,6 +725,7 @@ class _GuardrailMiddleware(AgentMiddleware):
                 reply_text,
                 self.turn_state.get("real_order_placed", False),
                 self.turn_state.get("real_email_sent", False),
+                self.turn_state.get("real_address_saved", False),
             )
             final = guard_reply or reply_text
 
@@ -825,6 +836,7 @@ def run_turn(
     turn_state: dict = {
         "real_order_placed": False,
         "real_email_sent": False,
+        "real_address_saved": False,
         "completed_order": None,
         "deferred_order": None,
         "blocked_ungrounded_lookup": False,

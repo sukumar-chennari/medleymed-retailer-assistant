@@ -112,23 +112,45 @@ def claims_email_sent(reply_text: str) -> bool:
     )
 
 
+def claims_address_saved(reply_text: str) -> bool:
+    """Added after a real observed failure: routing a message that doesn't
+    look like an order/email/decline through a normal turn (see main.py's
+    pending_product_id/pending_email_order_id fallbacks) reopened the exact
+    hallucination this project already fixed once — the model claimed
+    "I've saved your shipping address" for a bare place name with no digits
+    (e.g. "hyderabad"), and nothing verified that claim, because only
+    order-placed and email-sent claims were ever checked."""
+    t = reply_text.lower()
+    return any(
+        k in t
+        for k in (
+            "saved your address", "saved your shipping address", "address has been saved",
+            "address is now on file", "saved that address", "saved the address",
+        )
+    )
+
+
 def check_unverified_completion(
-    reply_text: str, real_order_placed_this_turn: bool, real_email_sent_this_turn: bool
+    reply_text: str,
+    real_order_placed_this_turn: bool,
+    real_email_sent_this_turn: bool,
+    real_address_saved_this_turn: bool = False,
 ) -> str | None:
-    """Catches the model narrating an order/email as done ("I've saved your
-    address... order has been placed") without a real tool call backing it up
-    this turn. Returns a replacement reply if the claim is unverified, else
-    None. The two claims are tracked separately: a real order_placed:true
-    doesn't make an accompanying "email has been sent" claim true too — the
-    start_order result can report order_placed:true and email_sent:false in
-    the same result (no email on file), and the model has been observed
-    claiming the email was sent anyway."""
+    """Catches the model narrating an order/email/address as done ("I've
+    saved your address... order has been placed") without a real tool call
+    backing it up this turn. Returns a replacement reply if the claim is
+    unverified, else None. Each claim is tracked separately: a real
+    order_placed:true doesn't make an accompanying "email has been sent"
+    claim true too — the start_order result can report order_placed:true
+    and email_sent:false in the same result (no email on file), and the
+    model has been observed claiming the email was sent anyway."""
     unverified_order = claims_order_placed(reply_text) and not real_order_placed_this_turn
     unverified_email = claims_email_sent(reply_text) and not real_email_sent_this_turn
-    if unverified_order or unverified_email:
+    unverified_address = claims_address_saved(reply_text) and not real_address_saved_this_turn
+    if unverified_order or unverified_email or unverified_address:
         print(
             f"[GUARD] blocked unverified completion claim "
-            f"(order={unverified_order}, email={unverified_email}): {reply_text!r}"
+            f"(order={unverified_order}, email={unverified_email}, address={unverified_address}): {reply_text!r}"
         )
         return FAKE_COMPLETION_GUARD_REPLY
     return None
