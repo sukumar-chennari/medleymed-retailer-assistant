@@ -86,6 +86,23 @@ def _title_mentioned(query_lower: str, title: str) -> bool:
     return bool(_distinctive_words.get(title, set()) & query_words)
 
 
+def _identify_single_product(query_lower: str) -> str | None:
+    """Returns the one product title the query names, if a distinctive
+    word identifies exactly one — used to filter results down to that
+    product before they ever reach the model. This isn't optional
+    polish: the system prompt already instructs the model to "only use
+    results whose product matches" what was asked and ignore the rest,
+    but it doesn't reliably follow that on its own — "can I take
+    ibuprofen for a fever" retrieved both Ibuprofen and Paracetamol
+    chunks, and the model cited both, recommending paracetamol as an
+    unprompted "alternative" the user never asked about. Filtering the
+    candidate set itself removes the chance for that regardless of
+    whether the model would have honored the instruction that turn."""
+    query_words = set(TITLE_WORD_RE.findall(query_lower))
+    matched_titles = {title for title, words in _distinctive_words.items() if words & query_words}
+    return next(iter(matched_titles)) if len(matched_titles) == 1 else None
+
+
 def _load_collection():
     """Loads the cached Chroma collection, rebuilding it if it's missing OR
     stale — the sidecar content_hash is compared against a fresh hash of the
@@ -159,6 +176,11 @@ def search(query: str, top_k: int = 3) -> list[dict]:
         if any(kw in query_lower for kw in section_keywords) and _title_mentioned(query_lower, meta["title"]):
             score = min(score + SECTION_BOOST, 1.0)
         scored.append({"product": meta["title"], "source": meta["source"], "section": meta["section"], "text": doc, "score": score})
+
+    target_product = _identify_single_product(query_lower)
+    if target_product:
+        scored = [c for c in scored if c["product"] == target_product] or scored
+
     scored.sort(key=lambda c: c["score"], reverse=True)
 
     return [

@@ -1,23 +1,31 @@
-"""A small RAG evaluation harness: a golden query set with a reference
-answer for each in-scope query, checked two ways — retrieval hit@k (did the
-right document come back at all?) and content grounding (does the actual
-retrieved chunk contain the key facts the reference answer relies on, not
-just the right filename?). Run standalone with `python -m app.rag_eval`.
+"""A small RAG evaluation harness, checked at TWO separate layers:
 
-This is intentionally simple — a hand-written golden set with a keyword
-checklist per answer, not a full precision/recall/MRR suite or an LLM-judge
-similarity score — proportionate to a ~30-chunk demo corpus. The point is a
-concrete, repeatable, and *viewable* check that retrieval quality didn't
-regress (e.g. after changing MIN_SIMILARITY, or editing the knowledge base),
-rather than eyeballing it in chat each time. Every run also writes an HTML
-report (see build_html_report) so results can be reviewed at a glance
-instead of read off the terminal.
+1. Retrieval — does retrieval.search() itself return the right document,
+   with the right facts present across the top-k chunks?
+2. Agent — does the actual deployed chat pipeline (agent.run_turn, the
+   same code /api/chat calls) produce a reply containing those facts?
+
+These can genuinely diverge, and testing only the first one is a real gap,
+not a theoretical one: this project shipped a routing bug where
+"dosage for paracetamol 500mg" scored the correct chunk every time at the
+retrieval layer, while the agent itself misrouted the message into a
+clarifying question and never called lookup_medicine_info at all — a
+retrieval-only report would have stayed green throughout. Layer 2 is what
+actually answers "does the assistant give this answer," and is the one
+that matters to a user; layer 1 stays useful for isolating *which* layer
+broke when something fails.
+
+Run standalone with `python -m app.rag_eval` (runs both layers) or
+`python -m app.rag_eval --fast` (retrieval only, skips the slow real LLM
+calls — useful while iterating on retrieval.py itself).
 """
 
 import html
+import re
+import sys
 from pathlib import Path
 
-from app import retrieval
+from app import agent, retrieval, store
 
 REPORT_PATH = Path(__file__).parent / "data" / "rag_eval_report.html"
 
@@ -26,11 +34,9 @@ REPORT_PATH = Path(__file__).parent / "data" / "rag_eval_report.html"
 # questions (see agent.py's MEDICINE INFO / SCOPE instructions). Every
 # in-scope case's golden_answer is a reference answer taken directly from
 # the corresponding knowledge_base/*.md file, and must_include is the
-# minimal set of facts a *correct* retrieval has to actually surface —
-# checked against the real top-1 chunk text, not just its filename, so a
-# right-document-wrong-section (or a chunk that scored well but is missing
-# the specific number/fact asked about) still fails the content-grounding
-# check even though it passes the source hit@k check.
+# minimal set of facts a *correct* answer has to actually surface — checked
+# against both the retrieved chunks (layer 1) and the real agent reply
+# (layer 2).
 EVAL_CASES = [
     {
         "query": "dosage for paracetamol 500mg",
@@ -172,19 +178,11 @@ EVAL_CASES = [
 ]
 
 
-def _evaluate_case(case: dict, top_k: int) -> dict:
-    """Runs one case through real retrieval and scores it against both the
-    hit@k and content-grounding checks. Content grounding is checked across
-    *all* top_k results combined, not just the rank-1 chunk — that's what
-    lookup_medicine_info actually hands the model (see agent.py's MEDICINE
-    INFO instructions: synthesize from every returned result, not just the
-    first). This matters in practice: "dosage for paracetamol 500mg" scores
-    the Overview section slightly higher than the actual Dosage section
-    (0.856 vs 0.831 — the strength boost matches the whole document's title
-    equally across every section, so it doesn't discriminate rank *within*
-    a document), but Dosage still comes back in the top-3, so the model
-    still has the real fact available. A rank-1-only check would flag that
-    as a failure even though the end-to-end answer is still grounded."""
+def _evaluate_retrieval(case: dict, top_k: int) -> dict:
+    """Layer 1: runs one case through retrieval.search() directly and
+    scores it against hit@k and content-grounding. Content grounding is
+    checked across *all* top_k results combined, not just the rank-1
+    chunk — that's what lookup_medicine_info actually hands the model."""
     results = retrieval.search(case["query"], top_k=top_k)
     sources = [r["source"] for r in results]
     expected = case["expected_source"]
@@ -207,40 +205,92 @@ def _evaluate_case(case: dict, top_k: int) -> dict:
             detail = f"expected {expected}, got {sources or 'nothing'}"
 
     return {
-        **case,
         "results": results,
         "source_hit": source_hit,
         "content_hit": content_hit,
-        "passed": source_hit and content_hit,
-        "detail": detail,
+        "retrieval_passed": source_hit and content_hit,
+        "retrieval_detail": detail,
     }
 
 
-def run_eval(top_k: int = 3) -> tuple[int, int]:
-    evaluated = [_evaluate_case(case, top_k) for case in EVAL_CASES]
-    passed = 0
-    for r in evaluated:
-        passed += r["passed"]
-        status = "PASS" if r["passed"] else "FAIL"
-        print(f"[{status}] {r['query']!r} — {r['detail']}")
+_MG_RE = re.compile(r"\d+\s*mg", re.IGNORECASE)
 
-    build_html_report(evaluated)
+
+def _looks_fabricated(reply: str) -> str | None:
+    """For an out-of-scope query, the agent should decline or say it's not
+    in the knowledge base — never invent a specific dosage number or name
+    one of our real catalog products (which would mean it got misrouted
+    into a real recommendation instead of declining). Returns a reason
+    string if the reply looks fabricated, else None."""
+    if _MG_RE.search(reply):
+        return "reply contains a fabricated-looking dosage number (Nmg)"
+    catalog_names = [p["name"].lower() for p in store.get_catalog()]
+    mentioned = [n for n in catalog_names if n in reply.lower()]
+    if mentioned:
+        return f"reply names a real catalog product: {mentioned}"
+    return None
+
+
+def _evaluate_agent(case: dict, index: int) -> dict:
+    """Layer 2: runs one case through the REAL agent pipeline
+    (agent.run_turn — the same function /api/chat calls), with a fresh
+    session per case so no pending state or history from one case leaks
+    into the next. This is the check that answers "does the assistant
+    actually say this," not just "does retrieval find the right text" —
+    the two are verifiably not the same claim (see module docstring)."""
+    session_id = f"rag-agent-eval-{index}"
+    reply, _ = agent.run_turn([], user_text=case["query"], session_id=session_id)
+
+    if case["golden_answer"] is None:
+        fabrication = _looks_fabricated(reply)
+        agent_passed = fabrication is None
+        detail = "correctly declined / no fabrication" if agent_passed else fabrication
+    else:
+        missing = [f for f in case["must_include"] if f.lower() not in reply.lower()]
+        agent_passed = not missing
+        detail = "reply contains the golden facts" if agent_passed else f"reply is missing: {missing}"
+
+    return {"agent_reply": reply, "agent_passed": agent_passed, "agent_detail": detail}
+
+
+def run_eval(top_k: int = 3, include_agent: bool = True) -> tuple[int, int]:
+    evaluated = []
+    for i, case in enumerate(EVAL_CASES):
+        row = {**case, **_evaluate_retrieval(case, top_k)}
+        status = "PASS" if row["retrieval_passed"] else "FAIL"
+        print(f"[retrieval {status}] {case['query']!r} — {row['retrieval_detail']}")
+
+        if include_agent:
+            row.update(_evaluate_agent(case, i))
+            status = "PASS" if row["agent_passed"] else "FAIL"
+            print(f"[agent     {status}] {case['query']!r} — {row['agent_detail']}")
+        evaluated.append(row)
+
+    build_html_report(evaluated, include_agent)
     print(f"\nHTML report written to {REPORT_PATH}")
-    return passed, len(evaluated)
+
+    retrieval_passed = sum(r["retrieval_passed"] for r in evaluated)
+    if include_agent:
+        agent_passed = sum(r["agent_passed"] for r in evaluated)
+        print(f"Retrieval layer: {retrieval_passed}/{len(evaluated)} passed")
+        print(f"Agent layer:     {agent_passed}/{len(evaluated)} passed")
+        return agent_passed, len(evaluated)
+    return retrieval_passed, len(evaluated)
 
 
-def build_html_report(evaluated: list[dict]) -> None:
+def build_html_report(evaluated: list[dict], include_agent: bool) -> None:
     """Writes a single self-contained HTML file — query / golden answer /
-    actual retrieved chunk side by side, with the source-hit and
-    content-grounding checks shown separately, so a failure that got the
-    right document but missed the actual fact asked about is visibly
-    distinct from getting the wrong document entirely."""
+    retrieved chunks / real agent reply, side by side, with retrieval and
+    agent pass/fail shown as SEPARATE badges. Keeping them separate (not
+    collapsed into one pass/fail bit) is the whole point: a query that
+    passes retrieval but fails at the agent layer is a routing bug, not a
+    retrieval bug, and the report should make that distinction visible
+    instead of just saying "fail" and leaving the reader to guess why."""
     rows = []
     for r in evaluated:
-        badge = "pass" if r["passed"] else "fail"
         results = r["results"]
         if r["golden_answer"] is None:
-            golden_cell = "<em>(out of scope — should retrieve nothing)</em>"
+            golden_cell = "<em>(out of scope — should decline / not fabricate)</em>"
         else:
             golden_cell = html.escape(r["golden_answer"])
 
@@ -261,16 +311,48 @@ def build_html_report(evaluated: list[dict]) -> None:
             f"{'✓' if r['content_hit'] else '✗'} grounded</span>"
         )
 
+        agent_cell = ""
+        if include_agent:
+            agent_ok = r["agent_passed"]
+            checks += (
+                f" <span class=\"check {'ok' if agent_ok else 'bad'}\">"
+                f"{'✓' if agent_ok else '✗'} agent</span>"
+            )
+            agent_cell = (
+                f"<div class=\"meta\">real /api/chat reply &mdash; "
+                f"{'passed' if agent_ok else html.escape(r['agent_detail'])}</div>"
+                f"<div class=\"chunk\">{html.escape(r['agent_reply'])}</div>"
+            )
+
+        overall_pass = r["retrieval_passed"] and (not include_agent or r["agent_passed"])
+        badge = "pass" if overall_pass else "fail"
+
         rows.append(f"""
         <tr class="{badge}">
           <td class="query">{html.escape(r['query'])}</td>
           <td>{golden_cell}</td>
           <td>{retrieved_cell}</td>
+          {"<td>" + agent_cell + "</td>" if include_agent else ""}
           <td class="checks">{checks}</td>
         </tr>""")
 
-    passed = sum(r["passed"] for r in evaluated)
+    retrieval_passed = sum(r["retrieval_passed"] for r in evaluated)
     total = len(evaluated)
+    if include_agent:
+        agent_passed = sum(r["agent_passed"] for r in evaluated)
+        summary = (
+            f"Retrieval layer: <span class=\"score\">{retrieval_passed}/{total}</span> &mdash; "
+            f"Agent layer (real /api/chat replies): <span class=\"score\">{agent_passed}/{total}</span>. "
+            f"Retrieval passing doesn't imply the agent layer does — they're checked and shown separately "
+            f"on purpose, since a routing bug can make one pass while the other fails."
+        )
+    else:
+        summary = (
+            f"Retrieval layer only: <span class=\"score\">{retrieval_passed}/{total}</span> "
+            f"&mdash; run without --fast to also verify the real agent replies."
+        )
+
+    agent_header = "<th>Real Agent Reply</th>" if include_agent else ""
 
     html_doc = f"""<!doctype html>
 <html>
@@ -280,14 +362,14 @@ def build_html_report(evaluated: list[dict]) -> None:
 <style>
   body {{ font-family: -apple-system, Helvetica, Arial, sans-serif; margin: 2rem; color: #1a1a2e; background: #fafafa; }}
   h1 {{ margin-bottom: 0.25rem; }}
-  .summary {{ font-size: 1.1rem; margin-bottom: 1.5rem; }}
+  .summary {{ font-size: 1.05rem; margin-bottom: 1.5rem; max-width: 80ch; }}
   .summary .score {{ font-weight: 700; }}
   table {{ border-collapse: collapse; width: 100%; background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }}
   th, td {{ border: 1px solid #e2e2e8; padding: 0.75rem; vertical-align: top; text-align: left; font-size: 0.92rem; }}
   th {{ background: #2d3480; color: #fff; position: sticky; top: 0; }}
   tr.pass {{ background: #f3fbf5; }}
   tr.fail {{ background: #fdf3f3; }}
-  .query {{ font-weight: 600; width: 16%; }}
+  .query {{ font-weight: 600; width: 14%; }}
   .meta {{ font-size: 0.78rem; color: #666; margin-bottom: 0.35rem; margin-top: 0.75rem; }}
   .meta:first-child {{ margin-top: 0; }}
   .chunk {{ white-space: pre-wrap; font-size: 0.85rem; }}
@@ -299,11 +381,10 @@ def build_html_report(evaluated: list[dict]) -> None:
 </head>
 <body>
   <h1>RAG Golden Eval Report</h1>
-  <div class="summary">Passed <span class="score">{passed}/{total}</span> ({passed / total:.0%}) &mdash;
-  checks both retrieval hit@k (right document) and content grounding (right facts actually present in the top chunk).</div>
+  <div class="summary">{summary}</div>
   <table>
     <thead>
-      <tr><th>Query</th><th>Golden Answer</th><th>Actual Top Retrieved Chunk</th><th>Checks</th></tr>
+      <tr><th>Query</th><th>Golden Answer</th><th>Retrieved Chunks</th>{agent_header}<th>Checks</th></tr>
     </thead>
     <tbody>
       {''.join(rows)}
@@ -316,6 +397,8 @@ def build_html_report(evaluated: list[dict]) -> None:
 
 
 if __name__ == "__main__":
-    passed, total = run_eval()
+    fast = "--fast" in sys.argv
+    passed, total = run_eval(include_agent=not fast)
     print()
-    print(f"{passed}/{total} passed ({passed / total:.0%})")
+    label = "Retrieval-only" if fast else "Agent-level"
+    print(f"{label} result: {passed}/{total} passed ({passed / total:.0%})")
