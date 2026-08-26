@@ -156,7 +156,10 @@ without actually calling the tool first.
 # description, so a lookup_symptom call for it gets redirected to the correct
 # tool instead of trusting the model to pick the right one every time.
 INFO_QUESTION_RE = re.compile(
-    r"\b(side\s*effects?|dosage|warning|interaction|overdose|how (much|many)\b.*\bmg)\b",
+    r"\b(side\s*effects?|dosage|dosing|dose|warnings?|interactions?|overdose|"
+    r"ingredients?|what'?s in|what is in|composition|"
+    r"can (i|you) take|is it safe|"
+    r"how (much|many)\b.{0,40}(take|mg|dose))\b",
     re.IGNORECASE,
 )
 
@@ -326,7 +329,18 @@ def _trigger_matches(trigger: str, source_text_lower: str, categories: set[str])
 
 def _needs_clarification(source_text: str) -> tuple[str, str] | None:
     """Returns (trigger, question) if source_text mentions an ambiguous
-    symptom without its qualifier already present, else None."""
+    symptom without its qualifier already present, else None.
+
+    Never fires for an info-question (INFO_QUESTION_RE) — observed failure:
+    "dosage for paracetamol 500mg" (one of rag_eval.py's own golden
+    queries) contains "paracetamol", a recognized fever keyword, so this
+    triggered the fever child/adult clarifying question instead of ever
+    reaching lookup_medicine_info. Asking "is this for a child or an
+    adult?" only makes sense when the user might be about to order a
+    product; a factual dosage/side-effect/warning question isn't that,
+    regardless of which symptom keywords happen to appear in it."""
+    if INFO_QUESTION_RE.search(source_text):
+        return None
     s = source_text.lower()
     categories = set(tools.classify_categories(source_text))
     for trigger, rule in CLARIFYING_QUESTIONS.items():
@@ -378,7 +392,10 @@ def _resolve_prequalified_clarification(source_text: str, session_id: str) -> st
     """Handles a qualifier arriving in the same message as the trigger word
     (see run_turn) — same branch-matching as resolve_clarification, just
     entered directly from the original message instead of a follow-up
-    answer to a question that was actually asked."""
+    answer to a question that was actually asked. Same info-question
+    exclusion as _needs_clarification, for the same reason."""
+    if INFO_QUESTION_RE.search(source_text):
+        return None
     s = source_text.lower()
     categories = set(tools.classify_categories(source_text))
     for trigger, rule in CLARIFYING_QUESTIONS.items():
@@ -393,7 +410,19 @@ def _inject_catalog_hint(parts: list, source_text: str, session_id: str) -> None
     images, but the same grounding is needed for plain text too: a user naming
     a product directly ("order Paracetamol") skips the usual symptom-description
     step, and without this the model has no real product_id in context at all —
-    it either has to call lookup_symptom itself (unreliable) or invents one."""
+    it either has to call lookup_symptom itself (unreliable) or invents one.
+
+    Skips injection entirely for an info-question (INFO_QUESTION_RE) — e.g.
+    "dosage for paracetamol 500mg" (one of rag_eval.py's own golden
+    queries) contains "paracetamol", a recognized fever keyword, and the
+    injected hint explicitly instructs the model to "present these as a
+    recommendation and ask if they'd like to order one," which is exactly
+    wrong for a factual question and steers it away from ever calling
+    lookup_medicine_info. The system prompt's own MEDICINE INFO
+    instructions are sufficient without this hint getting in the way."""
+    if INFO_QUESTION_RE.search(source_text):
+        return
+
     clarification = _needs_clarification(source_text)
     if clarification:
         # Deliberately skip the catalog-data injection below this turn — if
