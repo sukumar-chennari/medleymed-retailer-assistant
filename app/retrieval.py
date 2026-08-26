@@ -37,6 +37,15 @@ STRENGTH_BOOST = 0.2
 # a generic "dosage for X" query resembles the Dosage section of *any*
 # product almost equally on pure semantics — there's nothing to boost
 # without a real per-product anchor the way STRENGTH_BOOST has one.
+#
+# "Distinctive" is checked against the whole catalog, not just the one
+# title in isolation — once the catalog grew to include col-005/col-006
+# (both cough/cold syrups), "cough" and "syrup" stopped being unique to
+# col-004's title. "dosage for cough suppressant syrup" then boosted all
+# three products' Dosage sections equally and lost the actual match to
+# col-005/col-006 on raw semantic similarity — matching on any *shared*
+# word is worse than not boosting at all, since it actively promotes the
+# wrong products instead of just failing to promote the right one.
 SECTION_BOOST = 0.15
 SECTION_KEYWORDS = {
     "Dosage": ("dosage", "dose", "dosing", "how much", "how many"),
@@ -50,16 +59,31 @@ def _mg_strengths(text: str) -> set[str]:
     return {m.replace(" ", "").lower() for m in MG_RE.findall(text)}
 
 
+def _distinctive_words_by_title(collection) -> dict[str, set[str]]:
+    """For every product title in the corpus, the 5+ letter words in that
+    title that appear in NO other title — the only words safe to use as a
+    per-product anchor. Computed once at load time from the collection's
+    own metadata, so it stays correct as the catalog grows without needing
+    a hardcoded word list."""
+    titles = {m["title"] for m in collection.get()["metadatas"]}
+    word_to_titles: dict[str, set[str]] = {}
+    for title in titles:
+        for word in {w for w in TITLE_WORD_RE.findall(title.lower()) if len(w) >= 5}:
+            word_to_titles.setdefault(word, set()).add(title)
+    return {
+        title: {w for w, owning_titles in word_to_titles.items() if owning_titles == {title}}
+        for title in titles
+    }
+
+
 def _title_mentioned(query_lower: str, title: str) -> bool:
-    """True if the query names this specific product — shares a
-    distinctive (5+ letter) word with its title, e.g. "cough"/"suppressant"/
-    "syrup" for "Cough Suppressant Syrup (Dextromethorphan)". Short words are
-    excluded for the same reason tools.py's fuzzy symptom matching excludes
-    them: too many unrelated collisions (a generic word like "syrup" alone
-    would be fine, but this keeps the bar consistent with the rest of the
-    codebase's hybrid-matching functions)."""
-    title_words = TITLE_WORD_RE.findall(title.lower())
-    return any(len(w) >= 5 and w in query_lower for w in title_words)
+    """True if the query names this specific product — shares a word with
+    its title that's distinctive across the whole catalog (see
+    _distinctive_words_by_title), e.g. "suppressant" for "Cough Suppressant
+    Syrup (Dextromethorphan)" but not "cough" or "syrup" once other cough/
+    cold syrups exist too."""
+    query_words = set(TITLE_WORD_RE.findall(query_lower))
+    return bool(_distinctive_words.get(title, set()) & query_words)
 
 
 def _load_collection():
@@ -86,6 +110,7 @@ def _load_collection():
 
 
 _collection = _load_collection()
+_distinctive_words = _distinctive_words_by_title(_collection)
 
 
 def search(query: str, top_k: int = 3) -> list[dict]:
@@ -114,7 +139,15 @@ def search(query: str, top_k: int = 3) -> list[dict]:
     query_strengths = _mg_strengths(query)
     query_lower = query.lower()
 
-    fetch_n = min(max(top_k * 3, 10), _collection.count())
+    # A boost can only re-rank a chunk that's already in this candidate
+    # pool — it can't rescue one Chroma's raw nearest-neighbor search
+    # didn't return at all. "col-004" Dosage ranked outside the old
+    # top_k*3 window once the catalog grew to 10 products (more inter-
+    # product semantic competition), so its keyword boost never got a
+    # chance to apply. The corpus is still small (dozens of chunks, not
+    # thousands), so fetching most of it unconditionally is cheap and
+    # removes this whole class of "boost arrived too late" failure.
+    fetch_n = min(30, _collection.count())
     result = _collection.query(query_embeddings=[query_vector], n_results=fetch_n)
 
     scored = []

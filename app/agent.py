@@ -229,15 +229,17 @@ def _remember_products(session_id: str, lookup_result_json: str) -> None:
 
 
 # Symptoms ambiguous enough that recommending the wrong product would be a
-# real mismatch, not just a suboptimal pick — e.g. our only cough product
-# (col-004) is a dry-cough suppressant, explicitly unsuited for a productive
-# ("wet"/"chesty") cough per its own knowledge-base entry; fever products
-# split sharply between adult and child dosing (fev-004 is the only
-# pediatric option) — the wrong pick there is a real dosing mismatch, not
-# just a suboptimal one. Each "branch" maps a set of answer words to either
-# a fixed reply (e.g. "see a pharmacist", no product fits) or a list of
-# product_ids to recommend — one product renders as a direct "would you like
-# to order this?", more than one renders as a normal multi-option list.
+# real mismatch, not just a suboptimal pick — e.g. col-004 (Cough Suppressant
+# Syrup) is a dry-cough suppressant, explicitly unsuited for a productive
+# ("wet"/"chesty") cough per its own knowledge-base entry, so that answer
+# routes to col-005 (Guaifenesin, an expectorant) instead; fever and cold
+# products both split between adult and child formulations/dosing (fev-004
+# and col-006 are the pediatric options) — the wrong pick there is a real
+# dosing/formulation mismatch, not just a suboptimal one. Each "branch" maps
+# a set of answer words to either a fixed reply (e.g. "see a pharmacist", no
+# product fits) or a list of product_ids to recommend — one product renders
+# as a direct "would you like to order this?", more than one renders as a
+# normal multi-option list.
 # Extensible: add more entries here for other symptoms worth narrowing down
 # before recommending, following the same {qualifiers, question, branches} shape.
 CLARIFYING_QUESTIONS = {
@@ -245,20 +247,14 @@ CLARIFYING_QUESTIONS = {
         "qualifiers": ("dry", "wet", "chesty", "productive", "phlegm", "mucus", "sputum"),
         "question": (
             "Is your cough dry, or is it bringing up mucus (a chesty/productive "
-            "cough)? Our cough product is a dry-cough suppressant only, so this "
-            "makes sure it's actually the right fit."
+            "cough)? We carry a different product for each, so this makes sure "
+            "you get the right one."
         ),
         "branches": [
             {"answers": ("dry",), "product_ids": ("col-004",)},
             {
                 "answers": ("wet", "chesty", "productive", "phlegm", "mucus", "sputum"),
-                "product_ids": (),
-                "reply": (
-                    "Our only cough product (Cough Suppressant Syrup) is a dry-cough "
-                    "suppressant, so it isn't the right fit for a productive/chesty "
-                    "cough — I'd recommend checking with a pharmacist for that instead. "
-                    "Is there anything else I can help with?"
-                ),
+                "product_ids": ("col-005",),
             },
         ],
     },
@@ -275,31 +271,17 @@ CLARIFYING_QUESTIONS = {
         ],
     },
     "cold": {
-        # Unlike fever, there's no pediatric-formulated option at all in our
-        # cold catalog (antihistamine, decongestant, and combo relief are all
-        # adult products) — a child mention isn't a narrowing question, it's
-        # a real "nothing here fits" case, same shape as cough's wet-cough
-        # branch.
         "qualifiers": ("child", "kid", "kids", "baby", "infant", "toddler", "adult", "myself", "grown"),
         "question": (
-            "Is this cold for a child, or for an adult/yourself? None of our "
-            "cold products are formulated or dosed for children, so this "
-            "makes sure we don't recommend something unsuitable."
+            "Is this cold for a child, or for an adult/yourself? Our child and "
+            "adult cold products are different formulations, so this makes "
+            "sure the recommendation is the right fit."
         ),
         "branches": [
-            {
-                "answers": ("child", "kid", "kids", "baby", "infant", "toddler"),
-                "product_ids": (),
-                "reply": (
-                    "None of our cold products (antihistamine, decongestant, or "
-                    "combination relief) are formulated or dosed for children — "
-                    "I'd recommend checking with a pharmacist or pediatrician "
-                    "instead. Is there anything else I can help with?"
-                ),
-            },
+            {"answers": ("child", "kid", "kids", "baby", "infant", "toddler"), "product_ids": ("col-006",)},
             {
                 "answers": ("adult", "myself", "grown", "me"),
-                "product_ids": ("col-001", "col-002", "col-003", "col-004"),
+                "product_ids": ("col-001", "col-002", "col-003", "col-004", "col-005"),
             },
         ],
     },
@@ -320,6 +302,35 @@ CLARIFYING_QUESTIONS = {
 # cold sub-symptom, not itself a classify_categories() category.
 _CATEGORY_TRIGGERS = {"fever", "cold"}
 
+# Cough's own qualifiers (dry/wet/...) don't overlap with age at all, but
+# every product a cough answer can resolve to is ALSO split by age (col-004/
+# col-005 are adult, col-006 is the pediatric cough+cold combo). A message
+# can supply both dimensions before either question is ever asked ("my child
+# has a wet cough"), or supply age only in the ORIGINAL message and never
+# repeat it when answering a cough question asked afterward ("my child has a
+# cough" -> asked dry/wet -> answers "wet"). Observed failure: both cases
+# recommended the adult expectorant to a child, since cough's own branch
+# resolution has no idea age was ever mentioned. A pending cough
+# clarification is stored as "cough:child"/"cough:adult" (parsed by
+# _split_trigger) specifically so that context survives to the follow-up
+# turn, not just the same-message case.
+_AGE_WORDS = {
+    "child": ("child", "kid", "kids", "baby", "infant", "toddler"),
+    "adult": ("adult", "myself", "grown", "me"),
+}
+
+
+def _detect_age(text_lower: str) -> str:
+    for age, words in _AGE_WORDS.items():
+        if any(w in text_lower for w in words):
+            return age
+    return ""
+
+
+def _split_trigger(trigger: str) -> tuple[str, str]:
+    base, _, age = trigger.partition(":")
+    return base, age
+
 
 def _trigger_matches(trigger: str, source_text_lower: str, categories: set[str]) -> bool:
     if trigger in _CATEGORY_TRIGGERS:
@@ -329,7 +340,9 @@ def _trigger_matches(trigger: str, source_text_lower: str, categories: set[str])
 
 def _needs_clarification(source_text: str) -> tuple[str, str] | None:
     """Returns (trigger, question) if source_text mentions an ambiguous
-    symptom without its qualifier already present, else None.
+    symptom without its qualifier already present, else None. trigger may
+    carry an age suffix ("cough:child") — see the module comment above
+    _AGE_WORDS.
 
     Never fires for an info-question (INFO_QUESTION_RE) — observed failure:
     "dosage for paracetamol 500mg" (one of rag_eval.py's own golden
@@ -345,6 +358,10 @@ def _needs_clarification(source_text: str) -> tuple[str, str] | None:
     categories = set(tools.classify_categories(source_text))
     for trigger, rule in CLARIFYING_QUESTIONS.items():
         if _trigger_matches(trigger, s, categories) and not any(q in s for q in rule["qualifiers"]):
+            if trigger == "cough":
+                age = _detect_age(s)
+                if age:
+                    trigger = f"cough:{age}"
             return trigger, rule["question"]
     return None
 
@@ -368,19 +385,38 @@ def _render_products(products: list[dict], session_id: str) -> str:
     return "\n".join(lines)
 
 
+def _resolve_child_cough(branch: dict, session_id: str) -> str:
+    """A child's cough always resolves against col-006 (the pediatric
+    cough+cold combo, itself a dry-cough formulation) or a decline — never
+    against cough's own adult branches (col-004/col-005), regardless of
+    which one the dry/wet answer would otherwise have matched."""
+    if "dry" in branch["answers"]:
+        product = store.find_product("col-006")
+        return _render_products([product] if product else [], session_id)
+    return (
+        "We don't have a product for a child's wet/productive cough — "
+        "I'd recommend checking with a pharmacist or pediatrician instead. "
+        "Is there anything else I can help with?"
+    )
+
+
 def resolve_clarification(trigger: str, answer_text: str, session_id: str) -> str | None:
     """Deterministically resolves the user's answer to a previously-asked
     clarifying question — same reasoning as asking it deterministically:
     the model fabricated an answer to a question it never asked once
     (see run_turn), so the resolution doesn't get left to it either.
     Returns None if the answer doesn't clearly match either side, letting
-    the caller fall through to a normal LLM turn instead of guessing."""
-    rule = CLARIFYING_QUESTIONS.get(trigger)
+    the caller fall through to a normal LLM turn instead of guessing.
+    trigger may carry an age suffix ("cough:child") — see _split_trigger."""
+    base_trigger, age = _split_trigger(trigger)
+    rule = CLARIFYING_QUESTIONS.get(base_trigger)
     if not rule:
         return None
     s = answer_text.lower()
     for branch in rule["branches"]:
         if any(a in s for a in branch["answers"]):
+            if base_trigger == "cough" and age == "child":
+                return _resolve_child_cough(branch, session_id)
             if not branch["product_ids"]:
                 return branch["reply"]
             products = [p for p in (store.find_product(pid) for pid in branch["product_ids"]) if p]
@@ -393,10 +429,23 @@ def _resolve_prequalified_clarification(source_text: str, session_id: str) -> st
     (see run_turn) — same branch-matching as resolve_clarification, just
     entered directly from the original message instead of a follow-up
     answer to a question that was actually asked. Same info-question
-    exclusion as _needs_clarification, for the same reason."""
+    exclusion as _needs_clarification, for the same reason.
+
+    Checks the cough+age combination first — "my child has a wet cough"
+    supplies both a cough-type qualifier and an age qualifier in one
+    message, which the plain per-trigger loop below would resolve against
+    whichever trigger it reaches first (cough, ahead of cold in dict
+    order), recommending the adult expectorant to a child."""
     if INFO_QUESTION_RE.search(source_text):
         return None
     s = source_text.lower()
+    if "cough" in s:
+        age = _detect_age(s)
+        if age == "child":
+            for branch in CLARIFYING_QUESTIONS["cough"]["branches"]:
+                if any(a in s for a in branch["answers"]):
+                    return _resolve_child_cough(branch, session_id)
+
     categories = set(tools.classify_categories(source_text))
     for trigger, rule in CLARIFYING_QUESTIONS.items():
         if _trigger_matches(trigger, s, categories) and any(q in s for q in rule["qualifiers"]):

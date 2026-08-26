@@ -70,5 +70,23 @@
     "price_usd": 6.29,
     "otc": true,
     "description": "Relieves dry, persistent cough."
+  },
+  {
+    "id": "col-005",
+    "name": "Guaifenesin Expectorant Syrup",
+    "category": "cold",
+    "active_ingredient": "Guaifenesin",
+    "price_usd": 6.79,
+    "otc": true,
+    "description": "Loosens mucus for a wet, productive cough."
+  },
+  {
+    "id": "col-006",
+    "name": "Children's Cold & Cough Syrup",
+    "category": "cold",
+    "active_ingredient": "Dextromethorphan + Chlorpheniramine",
+    "price_usd": 8.29,
+    "otc": true,
+    "description": "Liquid cold and dry-cough relief formulated for children, dosed by weight/age."
   }
 ]

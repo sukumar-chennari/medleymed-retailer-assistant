@@ -120,6 +120,28 @@ EVAL_CASES = [
         "must_include": ["10-20mg", "4 hours"],
     },
     {
+        "query": "dosage for guaifenesin expectorant syrup",
+        "expected_source": "col-005.md",
+        "expected_section": "Dosage",
+        "golden_answer": (
+            "Adults typically take the dose listed on the label (commonly "
+            "200-400mg) every 4 hours as needed, not exceeding 6 doses "
+            "(2400mg) in 24 hours."
+        ),
+        "must_include": ["200-400mg", "4 hours"],
+    },
+    {
+        "query": "dosing for children's cold and cough syrup",
+        "expected_source": "col-006.md",
+        "expected_section": "Dosage",
+        "golden_answer": (
+            "Dosage is based on weight and age, not a flat adult dose — use "
+            "the dosing cup or syringe provided and follow the weight/age "
+            "chart on the label exactly."
+        ),
+        "must_include": ["weight", "age"],
+    },
+    {
         "query": "credit card refund policy",
         "expected_source": None,
         "expected_section": None,
