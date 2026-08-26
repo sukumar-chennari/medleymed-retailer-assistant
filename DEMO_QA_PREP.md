@@ -9,7 +9,7 @@ actually built this rather than describing a pattern you read about.
 **One-paragraph pitch**, in case you're asked to open with it: *"MedleyMed
 Retailer Assistant is a scoped fever/cold OTC medicine assistant — an agentic
 chatbot that takes symptoms or a photo of a medicine label, recommends a
-product from a fixed 8-item catalog, and places a demo order with address and
+product from a fixed 10-item catalog, and places a demo order with address and
 email confirmation. It runs entirely on free, local resources: Ollama
 (`llama3.2`) for conversation and tool-calling, a local Chroma vector store
 for a small RAG knowledge base, and the free Gemini API only for reading
@@ -132,15 +132,15 @@ effort eliminating elsewhere.
 ## 2. Data Corpus Collection
 
 **Q: Where did the knowledge base content come from?**
-A: `app/data/knowledge_base/` — 8 hand-written Markdown files, one per
-catalog product (`fev-001.md`...`fev-004.md`, `col-001.md`...`col-004.md`).
+A: `app/data/knowledge_base/` — 10 hand-written Markdown files, one per
+catalog product (`fev-001.md`...`fev-004.md`, `col-001.md`...`col-006.md`).
 Content is standard, widely-known OTC reference facts: typical adult dosing
 intervals, commonly documented side effects, and standard label warnings
 (don't exceed the max dose, consult a doctor if pregnant, etc.) — the kind of
 information printed on an actual OTC medicine box.
 
 **Q: Why hand-write the corpus instead of scraping real drug-label data (e.g. DailyMed, FDA)?**
-A: Two reasons. First, scope: this catalog is 8 fictional-brand products
+A: Two reasons. First, scope: this catalog is 10 fictional-brand products
 mapped onto real active ingredients (paracetamol, ibuprofen, cetirizine,
 pseudoephedrine, dextromethorphan) — there's no single real-world label that
 matches "Paracetamol Extra Strength 650mg" from this specific catalog, so a
@@ -159,8 +159,8 @@ One document per product means every chunk's identity is unambiguous from
 the start, before chunking even happens.
 
 **Q: What's the total corpus size?**
-A: 8 documents, 32 chunks after chunking (4 chunks per document — Overview,
-Dosage, Common Side Effects, Warnings — since all 8 follow the identical
+A: 10 documents, 40 chunks after chunking (4 chunks per document — Overview,
+Dosage, Common Side Effects, Warnings — since all 10 follow the identical
 section template).
 
 **Q: How do you keep the corpus in sync with the product catalog (`catalog.json`)?**
@@ -349,7 +349,7 @@ at the end of its answer.
 **Q: Is retrieval used for anything besides the dedicated `lookup_medicine_info` tool?**
 A: No — it's a single-purpose tool, deliberately kept separate from the
 catalog/symptom-matching path (`tools.lookup_symptom`, which is plain keyword
-matching against a fixed 8-item list, not vector search at all). Conflating
+matching against a fixed 10-item list, not vector search at all). Conflating
 the two was actually a real, verified failure mode (see section 9) — an
 info-style question like "side effects of cetirizine" was misrouted through
 `lookup_symptom` (returning a bare cold-product list) instead of
@@ -392,7 +392,7 @@ had more failure modes than this one specific, well-understood gap.
 **Q: Could the strength boost ever hurt — push a wrong chunk above a right one?**
 A: In principle, if two different products' titles happened to share the
 same mg value with the same active ingredient the boost couldn't
-distinguish them by strength alone — but at 8 products with no two sharing
+distinguish them by strength alone — but at 10 products with no two sharing
 both an active ingredient and a dosage strength, this hasn't occurred, and
 the eval suite (section 10) would catch it if it started to as the catalog
 grows.
@@ -400,7 +400,7 @@ grows.
 **Q: Is there any re-ranking based on recency, popularity, or business logic (e.g. margin, stock)?**
 A: No — purely relevance-based (semantic + the two hybrid boosts below).
 That's a reasonable extension for a real e-commerce RAG system, but out of
-scope for a demo where the "business logic" is a fixed 8-item catalog with
+scope for a demo where the "business logic" is a fixed 10-item catalog with
 no stock or pricing tiers to optimize for.
 
 **Q: You mentioned "the strength boost" — is there a second boost too?**
@@ -421,6 +421,42 @@ generic "dosage for X" query resembles the Dosage section of almost any
 product about equally well on pure semantics. Product-gating it closes
 that; `STRENGTH_BOOST` gets the same kind of implicit product-anchor for
 free, since an exact mg number is already fairly product-specific.
+
+**Q: What actually happened when you scaled the catalog from 8 products to 10?**
+A: Two real regressions, both caught by re-running the golden eval
+immediately after adding col-005 (Guaifenesin, a wet-cough expectorant)
+and col-006 (a children's cold/cough syrup) — a good demonstration of why
+the eval exists at all, not just a one-time gate. First,
+`_title_mentioned`'s "distinctive word" check was only ever distinctive
+*within one title*, not across the catalog — once col-005 and col-006 both
+shared "cough"/"syrup" with col-004's title, `SECTION_BOOST` fired for all
+three on the same query and the right chunk lost. Fixed by computing
+distinctiveness against every title in the corpus at load time (any word
+appearing in more than one title is disqualified as an anchor), so
+`SECTION_BOOST` still resolves to "suppressant" — genuinely unique to
+col-004 — instead of the now-ambiguous shared words. Second, the boost
+re-ranks only within a fetched candidate window (`top_k * 3` at the time);
+with more products competing for the same semantic space, col-004's own
+Dosage chunk fell outside that window entirely at `top_k=3`, so the boost
+never got a chance to apply — fixed by widening the fetch to most of the
+corpus unconditionally (still cheap at this scale) rather than tying the
+window size to `top_k`.
+
+**Q: Did scaling the catalog surface anything in the conversation layer too, not just retrieval?**
+A: One real, safety-relevant bug: cough's dry/wet branching and the
+fever/cold age branching are two independent dimensions in
+`CLARIFYING_QUESTIONS`, and nothing composed them. "My child has a wet
+cough" — or even "my child has a cough," asked the dry/wet question, then
+answered "wet" a turn later — resolved through the cough branch alone and
+recommended col-005, the *adult* expectorant, to a child. Fixed by
+detecting an age qualifier alongside a cough qualifier and threading it
+through: a pending cough clarification now carries an age suffix
+(`"cough:child"`) that survives to the follow-up turn, and resolution
+special-cases child+cough to route to col-006 (dry) or a pharmacist
+referral (wet — there's no product for a child's wet cough at all) instead
+of cough's normal adult branches. Verified all four combinations
+(child/adult × same-message/cross-turn) individually before considering it
+fixed.
 
 ---
 
@@ -520,7 +556,7 @@ call a real `decline_out_of_scope` tool for anything else, rather than
 answering off-topic requests itself. Second — and this is the layer that
 actually matters — every tool that could act on a symptom
 (`lookup_symptom`, `start_order`, `lookup_medicine_info`) only ever touches
-the fixed 8-item catalog; there is no code path by which the assistant could
+the fixed 10-item catalog; there is no code path by which the assistant could
 surface a product or answer that isn't in that catalog. The scope boundary
 is enforced by *what the tools are physically capable of doing*, not by the
 model's willingness to follow an instruction.
@@ -572,11 +608,15 @@ user's answer. Any other leak falls back to a generic re-ask.
 **Q: How does clarifying-question logic work, and why is it deterministic rather than left to the model?**
 A: `CLARIFYING_QUESTIONS` in `agent.py` defines symptoms ambiguous enough
 that the wrong product recommendation is a real mismatch, not just
-suboptimal — cough (dry vs. wet: our only cough product is a dry-cough
-suppressant), fever (child vs. adult: only one of four fever products is
-pediatric), and cold (child vs. adult: *none* of the four cold products are
-pediatric at all). Both asking the question and resolving the answer are
-fully deterministic Python, bypassing the LLM entirely for that turn.
+suboptimal — cough (dry vs. wet: a dry-cough suppressant and a wet-cough
+expectorant work by opposite mechanisms, so the wrong one is actively
+counterproductive, not just suboptimal), fever (child vs. adult: only one
+of four fever products is pediatric), and cold (child vs. adult: only one
+of six cold products is pediatric, and it's itself a dry-cough
+formulation — a child's *wet* cough still has no product, which is why
+that specific combination declines rather than recommending anything).
+Both asking the question and resolving the answer are fully deterministic
+Python, bypassing the LLM entirely for that turn.
 Why: I originally left this to a soft prompt hint (`[Clarify: ...]`
 injected into context) and the model simply ignored it — it fabricated an
 answer to a question it never actually asked ("since your cough is bringing
@@ -703,29 +743,29 @@ actions, just *more urgently necessary* at 3B scale.
 ## 10. Evaluation
 
 **Q: How do you evaluate retrieval quality?**
-A: `rag_eval.py` — a golden query set, 12 queries against
-`retrieval.search()`, checked two ways. 8 in-scope queries each carry a
-**golden reference answer** taken directly from the corresponding
-`knowledge_base/*.md` file, plus a `must_include` keyword checklist (e.g.
-for "dosage for paracetamol 500mg": `["4-6 hours", "4000mg"]`). Each case is
-scored on (1) **source hit@k** — did the right document come back at all —
-and (2) **content grounding** — are the actual facts the reference answer
-depends on present across the top-k chunks retrieval returns (what
-`lookup_medicine_info` really hands the model), not just the right
-filename. 4 more queries are deliberately out-of-scope (weather, coding
-help, a made-up drug, a refund policy) and must retrieve *nothing* —
-those guard the `MIN_SIMILARITY` scope boundary and matter as much as the
-positive cases. Every run also writes a self-contained HTML report
-(`app/data/rag_eval_report.html`) — query, golden answer, and every
+A: `rag_eval.py` — a golden query set, 14 queries against
+`retrieval.search()`, checked two ways. 10 in-scope queries (one per
+catalog product) each carry a **golden reference answer** taken directly
+from the corresponding `knowledge_base/*.md` file, plus a `must_include`
+keyword checklist (e.g. for "dosage for paracetamol 500mg": `["4-6 hours",
+"4000mg"]`). Each case is scored on (1) **source hit@k** — did the right
+document come back at all — and (2) **content grounding** — are the actual
+facts the reference answer depends on present across the top-k chunks
+retrieval returns (what `lookup_medicine_info` really hands the model), not
+just the right filename. 4 more queries are deliberately out-of-scope
+(weather, coding help, a made-up drug, a refund policy) and must retrieve
+*nothing* — those guard the `MIN_SIMILARITY` scope boundary and matter as
+much as the positive cases. Every run also writes a self-contained HTML
+report (`app/data/rag_eval_report.html`) — query, golden answer, and every
 retrieved chunk with its score, side by side — so results are reviewable
 at a glance instead of read off the terminal.
 
 **Q: Why hit@k plus a keyword checklist, and not a full precision/recall/MRR suite or an LLM-judge similarity score?**
-A: Proportionality again — at a 32-chunk corpus with 8 unambiguous
+A: Proportionality again — at a 40-chunk corpus with 10 unambiguous
 products, this is enough to catch real regressions (and it has, repeatedly
 — see below) without building evaluation infrastructure disproportionate
 to the corpus size, or introducing the cost/nondeterminism of an LLM judge
-for grading. It's currently 12/12 (100%).
+for grading. It's currently 14/14 (100%).
 
 **Q: Did this evaluation suite actually catch real bugs, or is it just for show?**
 A: Twice, concretely. First, it's what caught the `MIN_SIMILARITY`
@@ -835,14 +875,14 @@ inspection.
 **Q: This whole thing runs on a 3B model — isn't that a toy? Why should anyone trust it?**
 A: For a genuinely open-ended assistant, yes, that skepticism is fair. But
 this isn't an open-ended assistant — the design deliberately narrows what
-the model is *allowed* to affect. It can recommend from a fixed 8-item
+the model is *allowed* to affect. It can recommend from a fixed 10-item
 catalog, and it can trigger a small number of tools whose actual behavior
 (what gets saved, what gets ordered, what claims are allowed through) is
 enforced in plain Python, verified against real tool results, independent
 of what the model says. The model supplies judgment and language; the code
 supplies truth and safety.
 
-**Q: What would break first if you scaled the catalog from 8 products to 800?**
+**Q: What would break first if you scaled the catalog from 10 products to 800?**
 A: Several things, roughly in this order: (1) `tools.classify_categories`'s
 keyword/fuzzy matching, which is fine for 2 broad categories, would need to
 become real retrieval-based product matching; (2) the knowledge base's
