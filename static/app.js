@@ -62,6 +62,21 @@ async function loadDashboard() {
   }
 }
 
+async function loadMetrics() {
+  try {
+    const res = await fetch("/api/metrics");
+    const data = await res.json();
+
+    const confidenceEl = document.getElementById("stat-retrieval-confidence");
+    confidenceEl.textContent =
+      data.avg_retrieval_confidence == null ? "–" : `${Math.round(data.avg_retrieval_confidence * 100)}%`;
+
+    document.getElementById("stat-guardrails").textContent = data.guardrail_total;
+  } catch (err) {
+    console.error("Failed to load metrics", err);
+  }
+}
+
 async function loadCatalog() {
   const catalogEl = document.getElementById("catalog-grid");
   try {
@@ -116,6 +131,7 @@ async function loadCatalog() {
 }
 
 loadDashboard();
+loadMetrics();
 loadCatalog();
 
 let pendingImage = null; // { b64, mediaType, dataUrl }
@@ -191,6 +207,7 @@ formEl.addEventListener("submit", async (e) => {
     pendingBubble.remove();
     addBubble("assistant", data.reply);
     loadDashboard();
+    loadMetrics();
   } catch (err) {
     pendingBubble.remove();
     addBubble("assistant", "Sorry, something went wrong reaching the assistant. Please try again.");

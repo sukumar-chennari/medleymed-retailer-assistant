@@ -39,6 +39,11 @@ def dashboard():
     }
 
 
+@app.get("/api/metrics")
+def metrics():
+    return store.get_metrics_summary()
+
+
 @app.get("/api/catalog")
 def catalog():
     return store.get_catalog()

@@ -592,6 +592,20 @@ def _build_tools(session_id: str) -> list:
     return [lookup_symptom, get_saved_address, save_address, start_order, lookup_medicine_info, decline_out_of_scope]
 
 
+def _log_guard(session_id: str, name: str, detail: str = "") -> None:
+    """Every guardrail intervention gets logged here, not just printed —
+    turns "we have guardrails" from a claim in a doc into a real, queryable
+    count (see store.get_metrics_summary). The print stays for live
+    debugging; the DB row is what /api/metrics and the dashboard read."""
+    print(f"[GUARD] {name}: {detail}" if detail else f"[GUARD] {name}")
+    store.log_metric_event(session_id, "guardrail", name, detail=detail or None)
+
+
+def _log_tool_call(session_id: str, name: str, args: dict, result: str) -> None:
+    print(f"[TOOL CALL] {name}({args}) -> {result}")
+    store.log_metric_event(session_id, "tool_call", name, detail=str(args))
+
+
 class _GuardrailMiddleware(AgentMiddleware):
     """Re-implements every tool-call-time and final-reply-time guardrail that
     used to live inline in the manual tool-calling loop, as two hooks:
@@ -648,7 +662,7 @@ class _GuardrailMiddleware(AgentMiddleware):
                     else None
                 )
                 if category:
-                    print(f"[GUARD] blocked incorrect decline_out_of_scope on grounded input: {user_text!r}")
+                    _log_guard(session_id, "decline_reversal", f"grounded input: {user_text!r}")
                     result = tools.lookup_symptom(category)
                     _remember_products(session_id, result)
                     return ToolMessage(content=result, tool_call_id=call_id, name=name)
@@ -661,8 +675,9 @@ class _GuardrailMiddleware(AgentMiddleware):
 
             if name == "lookup_symptom":
                 if user_text and INFO_QUESTION_RE.search(user_text):
-                    print(f"[GUARD] redirected misrouted lookup_symptom to lookup_medicine_info: {user_text!r}")
+                    _log_guard(session_id, "info_question_redirect", f"{user_text!r}")
                     result = tools.lookup_medicine_info(user_text)
+                    self._track_retrieval(result)
                     return ToolMessage(content=result, tool_call_id=call_id, name=name)
 
                 text_classifies = bool(user_text) and tools.classify(user_text) is not None
@@ -679,16 +694,16 @@ class _GuardrailMiddleware(AgentMiddleware):
                     # message suggesting cold at all.
                     requested = tools.classify(args.get("symptom", ""))
                     if requested != established:
-                        print(
-                            f"[GUARD] blocked lookup_symptom category switch "
-                            f"(requested={args.get('symptom')!r}, established={established!r}): {args}"
+                        _log_guard(
+                            session_id, "category_switch_corrected",
+                            f"requested={args.get('symptom')!r}, established={established!r}: {args}",
                         )
                     result = tools.lookup_symptom(established)
                     _remember_products(session_id, result)
                     return ToolMessage(content=result, tool_call_id=call_id, name=name)
 
                 if not self.symptom_lookup_grounded:
-                    print(f"[GUARD] blocked ungrounded lookup_symptom call: {args}")
+                    _log_guard(session_id, "blocked_ungrounded_lookup", f"{args}")
                     self.turn_state["blocked_ungrounded_lookup"] = True
                     result = json.dumps({
                         "matched": False,
@@ -701,14 +716,14 @@ class _GuardrailMiddleware(AgentMiddleware):
                     return ToolMessage(content=result, tool_call_id=call_id, name=name)
 
                 response = handler(request)
-                print(f"[TOOL CALL] {name}({args}) -> {response.content}")
+                _log_tool_call(session_id, name, args, response.content)
                 _remember_products(session_id, response.content)
                 return response
 
             if name == "start_order":
                 order_intent_this_message = bool(user_text) and ORDER_INTENT_RE.search(user_text)
                 if not self.had_shown_recommendation and not order_intent_this_message:
-                    print(f"[GUARD] blocked premature start_order before user confirmed intent: {args}")
+                    _log_guard(session_id, "blocked_premature_order", f"{args}")
                     result = json.dumps({
                         "order_placed": False,
                         "message": (
@@ -722,7 +737,7 @@ class _GuardrailMiddleware(AgentMiddleware):
                     return ToolMessage(content=result, tool_call_id=call_id, name=name)
 
                 response = handler(request)
-                print(f"[TOOL CALL] {name}({args}) -> {response.content}")
+                _log_tool_call(session_id, name, args, response.content)
                 try:
                     parsed_order = json.loads(response.content)
                 except (TypeError, ValueError):
@@ -739,7 +754,7 @@ class _GuardrailMiddleware(AgentMiddleware):
 
             if name == "save_address":
                 response = handler(request)
-                print(f"[TOOL CALL] {name}({args}) -> {response.content}")
+                _log_tool_call(session_id, name, args, response.content)
                 try:
                     if json.loads(response.content).get("saved"):
                         self.turn_state["real_address_saved"] = True
@@ -747,12 +762,34 @@ class _GuardrailMiddleware(AgentMiddleware):
                     pass
                 return response
 
+            if name == "lookup_medicine_info":
+                response = handler(request)
+                _log_tool_call(session_id, name, args, response.content)
+                self._track_retrieval(response.content)
+                return response
+
             response = handler(request)
-            print(f"[TOOL CALL] {name}({args}) -> {response.content}")
+            _log_tool_call(session_id, name, args, response.content)
             return response
         except Exception as exc:
             print(f"[TOOL ERROR] {name}({args}): {exc}")
             return ToolMessage(content=f"Error calling {name}: {exc}", tool_call_id=call_id, name=name)
+
+    def _track_retrieval(self, result_json: str) -> None:
+        """Records the top retrieval confidence score for this turn — used
+        by after_agent to append a visible confidence indicator to the
+        reply, and logged to the metrics table for the dashboard's running
+        average. This is the concrete "how relevant was what we retrieved"
+        number, computed from real cosine-similarity scores, not guessed."""
+        try:
+            results = json.loads(result_json).get("results", [])
+            scores = [r["score"] for r in results if "score" in r]
+        except (TypeError, ValueError):
+            scores = []
+        if scores:
+            top_score = max(scores)
+            self.turn_state["retrieval_score"] = top_score
+            store.log_metric_event(self.session_id, "retrieval", "lookup_medicine_info", value=top_score)
 
     def after_agent(self, state, runtime) -> dict | None:
         last = state["messages"][-1]
@@ -778,19 +815,19 @@ class _GuardrailMiddleware(AgentMiddleware):
 
         leaked_tool = guardrails.leaked_tool_intent(reply_text, TOOL_NAMES)
         if leaked_tool == "decline_out_of_scope":
-            print(f"[GUARD] converted leaked decline intent to real decline: {reply_text!r}")
+            _log_guard(session_id, "leaked_tool_intent_decline", f"{reply_text!r}")
             final = guardrails.OUT_OF_SCOPE_REPLY
         elif leaked_tool == "lookup_symptom":
             recovered = guardrails.recover_leaked_lookup(reply_text)
             if recovered:
-                print(f"[GUARD] recovered leaked lookup_symptom call: {reply_text!r}")
+                _log_guard(session_id, "leaked_tool_intent_recovered", f"{reply_text!r}")
                 _remember_products(session_id, recovered[1])
                 final = recovered[0]
             else:
-                print(f"[GUARD] blocked leaked tool intent (lookup_symptom, unrecoverable): {reply_text!r}")
+                _log_guard(session_id, "leaked_tool_intent_unrecoverable", f"{reply_text!r}")
                 final = guardrails.FAKE_COMPLETION_GUARD_REPLY
         elif leaked_tool:
-            print(f"[GUARD] blocked leaked tool intent ({leaked_tool}): {reply_text!r}")
+            _log_guard(session_id, "leaked_tool_intent", f"{leaked_tool}: {reply_text!r}")
             final = guardrails.FAKE_COMPLETION_GUARD_REPLY
         elif self.turn_state.get("deferred_order"):
             # Never trust the model's own phrasing here — see
@@ -805,7 +842,17 @@ class _GuardrailMiddleware(AgentMiddleware):
                 self.turn_state.get("real_email_sent", False),
                 self.turn_state.get("real_address_saved", False),
             )
+            if guard_reply:
+                _log_guard(session_id, "unverified_completion_blocked", f"{reply_text!r}")
             final = guard_reply or reply_text
+
+            # Only append when the model's own reply stood untouched — a
+            # confidence number bolted onto a guard-overridden generic
+            # reply (or an order confirmation, a decline, etc.) wouldn't
+            # mean anything, since those aren't RAG-grounded answers.
+            retrieval_score = self.turn_state.get("retrieval_score")
+            if final == reply_text and retrieval_score is not None:
+                final = f"{final}\n\nRetrieval confidence: {round(retrieval_score * 100)}%"
 
         return {"messages": [AIMessage(content=final, id=last.id)]}
 
@@ -919,6 +966,7 @@ def run_turn(
         "deferred_order": None,
         "blocked_ungrounded_lookup": False,
         "declined_forced": False,
+        "retrieval_score": None,
     }
 
     agent_tools = _build_tools(session_id)

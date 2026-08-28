@@ -52,6 +52,15 @@ def _init_db() -> None:
                 last_products_json TEXT,
                 last_recommended_product TEXT
             );
+            CREATE TABLE IF NOT EXISTS metrics_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                session_id TEXT,
+                event_type TEXT NOT NULL,
+                name TEXT NOT NULL,
+                value REAL,
+                detail TEXT
+            );
             """
         )
         # Seed the demo user once — on every later startup the table is
@@ -267,3 +276,60 @@ def get_session_messages(session_id: str) -> list:
 
 def save_session_messages(session_id: str, messages: list) -> None:
     _set_session_column(session_id, "messages_json", json.dumps(messages))
+
+
+def log_metric_event(
+    session_id: Optional[str], event_type: str, name: str, value: Optional[float] = None, detail: Optional[str] = None
+) -> None:
+    """A single append-only observability log — every guardrail trigger,
+    tool call, and retrieval score gets one row here. Deliberately simple
+    (no aggregation at write time, no separate metrics service) since the
+    read side (get_metrics_summary) just aggregates with SQL on demand,
+    which is plenty at this traffic scale and keeps this from becoming its
+    own subsystem to maintain."""
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO metrics_events (session_id, event_type, name, value, detail) VALUES (?, ?, ?, ?, ?)",
+            (session_id, event_type, name, value, detail),
+        )
+
+
+def get_metrics_summary() -> dict:
+    """Aggregates the raw event log into the numbers actually worth
+    showing: how confident retrieval has been on average, and how often
+    each guardrail and tool has fired — turning "we have guardrails" from
+    a claim in a doc into a real, queryable count."""
+    with _connect() as conn:
+        total_events = conn.execute("SELECT COUNT(*) FROM metrics_events").fetchone()[0]
+
+        retrieval_rows = conn.execute(
+            "SELECT value FROM metrics_events WHERE event_type = 'retrieval' AND value IS NOT NULL"
+        ).fetchall()
+        retrieval_scores = [row[0] for row in retrieval_rows]
+        avg_retrieval_confidence = (
+            round(sum(retrieval_scores) / len(retrieval_scores), 3) if retrieval_scores else None
+        )
+
+        guardrail_counts = [
+            {"name": row[0], "count": row[1]}
+            for row in conn.execute(
+                "SELECT name, COUNT(*) FROM metrics_events WHERE event_type = 'guardrail' "
+                "GROUP BY name ORDER BY COUNT(*) DESC"
+            ).fetchall()
+        ]
+        tool_call_counts = [
+            {"name": row[0], "count": row[1]}
+            for row in conn.execute(
+                "SELECT name, COUNT(*) FROM metrics_events WHERE event_type = 'tool_call' "
+                "GROUP BY name ORDER BY COUNT(*) DESC"
+            ).fetchall()
+        ]
+
+        return {
+            "total_events": total_events,
+            "avg_retrieval_confidence": avg_retrieval_confidence,
+            "retrieval_sample_count": len(retrieval_scores),
+            "guardrail_counts": guardrail_counts,
+            "guardrail_total": sum(g["count"] for g in guardrail_counts),
+            "tool_call_counts": tool_call_counts,
+        }
