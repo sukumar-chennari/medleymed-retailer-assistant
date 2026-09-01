@@ -379,6 +379,38 @@ body {
   opacity: 0.6;
 }
 
+.feedback-controls {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.feedback-btn {
+  border: 1px solid #e2e5e9;
+  background: #f7f8fa;
+  border-radius: 8px;
+  padding: 2px 8px;
+  font-size: 0.85rem;
+  cursor: pointer;
+  opacity: 0.6;
+  line-height: 1.4;
+}
+
+.feedback-btn:hover:not(:disabled) {
+  opacity: 1;
+  background: #eef0f3;
+}
+
+.feedback-btn.chosen {
+  opacity: 1;
+  background: var(--navy);
+  border-color: var(--navy);
+}
+
+.feedback-btn:disabled {
+  cursor: default;
+}
+
 .bubble img {
   max-width: 100%;
   border-radius: 8px;

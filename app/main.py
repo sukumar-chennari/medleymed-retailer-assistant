@@ -7,7 +7,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app import guardrails, store, tools
 from app.agent import resolve_clarification, run_turn
-from app.schemas import ChatRequest, ChatResponse
+from app.schemas import ChatRequest, ChatResponse, FeedbackRequest
 
 logger = logging.getLogger("medicine_assistant")
 
@@ -42,6 +42,14 @@ def dashboard():
 @app.get("/api/metrics")
 def metrics():
     return store.get_metrics_summary()
+
+
+@app.post("/api/feedback")
+def feedback(req: FeedbackRequest):
+    if req.rating not in ("up", "down"):
+        raise HTTPException(status_code=400, detail="rating must be 'up' or 'down'")
+    store.log_metric_event(req.session_id, "feedback", req.rating, detail=req.reply_snippet[:200] or None)
+    return {"ok": True}
 
 
 @app.get("/api/catalog")

@@ -72,9 +72,53 @@ async function loadMetrics() {
       data.avg_retrieval_confidence == null ? "–" : `${Math.round(data.avg_retrieval_confidence * 100)}%`;
 
     document.getElementById("stat-guardrails").textContent = data.guardrail_total;
+
+    const feedbackEl = document.getElementById("stat-feedback");
+    feedbackEl.textContent =
+      data.feedback_positive_rate == null ? "–" : `${Math.round(data.feedback_positive_rate * 100)}%`;
   } catch (err) {
     console.error("Failed to load metrics", err);
   }
+}
+
+async function sendFeedback(rating, replyText, chosenBtn, otherBtn) {
+  chosenBtn.classList.add("chosen");
+  chosenBtn.disabled = true;
+  otherBtn.disabled = true;
+  try {
+    await fetch("/api/feedback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: sessionId, rating, reply_snippet: replyText.slice(0, 200) }),
+    });
+    loadMetrics();
+  } catch (err) {
+    console.error("Failed to send feedback", err);
+  }
+}
+
+function buildFeedbackControls(replyText) {
+  const wrap = document.createElement("div");
+  wrap.className = "feedback-controls";
+
+  const upBtn = document.createElement("button");
+  upBtn.type = "button";
+  upBtn.className = "feedback-btn";
+  upBtn.textContent = "\u{1F44D}";
+  upBtn.setAttribute("aria-label", "Mark this reply as helpful");
+
+  const downBtn = document.createElement("button");
+  downBtn.type = "button";
+  downBtn.className = "feedback-btn";
+  downBtn.textContent = "\u{1F44E}";
+  downBtn.setAttribute("aria-label", "Mark this reply as not helpful");
+
+  upBtn.addEventListener("click", () => sendFeedback("up", replyText, upBtn, downBtn));
+  downBtn.addEventListener("click", () => sendFeedback("down", replyText, downBtn, upBtn));
+
+  wrap.appendChild(upBtn);
+  wrap.appendChild(downBtn);
+  return wrap;
 }
 
 async function loadCatalog() {
@@ -147,6 +191,9 @@ function addBubble(role, text, imageDataUrl) {
   const textNode = document.createElement("span");
   textNode.textContent = text;
   bubble.appendChild(textNode);
+  if (role === "assistant") {
+    bubble.appendChild(buildFeedbackControls(text));
+  }
   chatEl.appendChild(bubble);
   chatEl.scrollTop = chatEl.scrollHeight;
   return bubble;

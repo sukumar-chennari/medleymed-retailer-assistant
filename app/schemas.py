@@ -10,3 +10,9 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     reply: str
+
+
+class FeedbackRequest(BaseModel):
+    session_id: str
+    rating: str
+    reply_snippet: str = ""

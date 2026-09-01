@@ -325,6 +325,18 @@ def get_metrics_summary() -> dict:
             ).fetchall()
         ]
 
+        feedback_counts = dict(
+            conn.execute(
+                "SELECT name, COUNT(*) FROM metrics_events WHERE event_type = 'feedback' GROUP BY name"
+            ).fetchall()
+        )
+        feedback_positive = feedback_counts.get("up", 0)
+        feedback_negative = feedback_counts.get("down", 0)
+        feedback_total = feedback_positive + feedback_negative
+        feedback_positive_rate = (
+            round(feedback_positive / feedback_total, 3) if feedback_total else None
+        )
+
         return {
             "total_events": total_events,
             "avg_retrieval_confidence": avg_retrieval_confidence,
@@ -332,4 +344,8 @@ def get_metrics_summary() -> dict:
             "guardrail_counts": guardrail_counts,
             "guardrail_total": sum(g["count"] for g in guardrail_counts),
             "tool_call_counts": tool_call_counts,
+            "feedback_positive": feedback_positive,
+            "feedback_negative": feedback_negative,
+            "feedback_total": feedback_total,
+            "feedback_positive_rate": feedback_positive_rate,
         }
