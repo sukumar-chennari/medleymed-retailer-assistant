@@ -8,6 +8,7 @@ out-of-scope. None of this is prompt-only — each guard is a deterministic
 check applied to the model's actual output or actual tool results.
 """
 
+import difflib
 import json
 import re
 
@@ -254,6 +255,17 @@ GREETING_PHRASES = {
 MAX_PLEASANTRY_WORDS = 6
 
 
+def _close_to_any(word: str, vocabulary: set[str]) -> bool:
+    """Tolerates one-off typos ("morinig" for "morning") without matching
+    short, unrelated words — a plain difflib.get_close_matches on a 2-3
+    letter word is too unstable to trust, so those rely on an exact hit."""
+    if word in vocabulary:
+        return True
+    if len(word) < 4:
+        return False
+    return bool(difflib.get_close_matches(word, vocabulary, n=1, cutoff=0.75))
+
+
 def deterministic_pleasantry_reply(text: str) -> str | None:
     """Greeting/pleasantry handling relies on a rule the model followed
     inconsistently in testing (a plain "hi" sometimes still triggered
@@ -273,8 +285,8 @@ def deterministic_pleasantry_reply(text: str) -> str | None:
 
     if len(words) > MAX_PLEASANTRY_WORDS:
         return None
-    if any(w in BYE_WORDS for w in words):
+    if any(_close_to_any(w, BYE_WORDS) for w in words):
         return BYE_REPLY
-    if any(w in GREETING_WORDS for w in words):
+    if any(_close_to_any(w, GREETING_WORDS) for w in words):
         return GREETING_REPLY
     return None
