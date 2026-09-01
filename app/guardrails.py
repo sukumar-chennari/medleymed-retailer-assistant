@@ -8,6 +8,7 @@ out-of-scope. None of this is prompt-only — each guard is a deterministic
 check applied to the model's actual output or actual tool results.
 """
 
+import datetime
 import json
 import re
 
@@ -227,7 +228,8 @@ def remember_recommended_product(session_id: str, reply_text: str) -> None:
             store.set_last_recommended_product(session_id, product_id)
 
 
-GREETING_REPLY = "Hi! I can help with fever or cold symptoms, or a photo of a medicine label — what's going on?"
+GREETING_REPLY_TEMPLATE = "{opener} I can help with fever or cold symptoms, or a photo of a medicine label — what's going on?"
+GREETING_REPLY = GREETING_REPLY_TEMPLATE.format(opener="Hi!")
 
 BYE_REPLY = "Take care! Come back anytime you have fever or cold questions."
 
@@ -239,9 +241,42 @@ BYE_REPLY = "Take care! Come back anytime you have fever or cold questions."
 GREETING_WORDS = {
     "hi", "hii", "hiii", "hio", "hello", "helo", "hey", "hiya", "yo", "sup",
     "whatup", "whatsup", "wassup", "morning", "morinig", "mornign",
-    "evening", "buddy",
+    "afternoon", "evening", "buddy",
 }
 BYE_WORDS = {"thanks", "thank", "thx", "ty", "bye", "goodbye", "cya", "cheers"}
+
+# Maps every recognized time-of-day word (including its typo variants) to the
+# canonical period, so a message naming a period gets checked against the
+# real current time rather than just echoed back — a user who types "good
+# morning" during the afternoon gets corrected to "Good afternoon!" instead
+# of the bot parroting the wrong time of day back at them.
+_TIME_OF_DAY_WORDS = {
+    "morning": "morning", "morinig": "morning", "mornign": "morning",
+    "afternoon": "afternoon",
+    "evening": "evening",
+}
+
+
+def _current_time_of_day_opener(now: datetime.datetime | None = None) -> str:
+    """Buckets the current hour into a greeting opener. Late night (9pm-5am)
+    has no natural "good ___" opener for an incoming chat, so it falls back
+    to a plain "Hi!" rather than an odd "Good night!" said to someone
+    arriving, not leaving."""
+    hour = (now or datetime.datetime.now()).hour
+    if 5 <= hour < 12:
+        return "Good morning!"
+    if 12 <= hour < 17:
+        return "Good afternoon!"
+    if 17 <= hour < 21:
+        return "Good evening!"
+    return "Hi!"
+
+
+def _greeting_reply(words: list[str], now: datetime.datetime | None = None) -> str:
+    named_period = next((w for w in words if w in _TIME_OF_DAY_WORDS), None)
+    opener = _current_time_of_day_opener(now) if named_period else "Hi!"
+    return GREETING_REPLY_TEMPLATE.format(opener=opener)
+
 
 # Idiom-level phrases ("how are you") use generic words (how/are/you) that
 # would cause false positives if added to GREETING_WORDS individually, so
@@ -255,12 +290,13 @@ GREETING_PHRASES = {
 MAX_PLEASANTRY_WORDS = 6
 
 
-def deterministic_pleasantry_reply(text: str) -> str | None:
+def deterministic_pleasantry_reply(text: str, now: datetime.datetime | None = None) -> str | None:
     """Greeting/pleasantry handling relies on a rule the model followed
     inconsistently in testing (a plain "hi" sometimes still triggered
     decline_out_of_scope, a 3B-model reliability gap, not a prompt-wording
     problem). Short-circuiting known pleasantries in code guarantees
-    consistent behavior instead of hoping the model applies the instruction."""
+    consistent behavior instead of hoping the model applies the instruction.
+    `now` is exposed only so tests can pin the clock; real calls omit it."""
     if tools.classify(text) is not None:
         return None  # real symptom/medicine content — let the normal flow handle it
 
@@ -277,5 +313,5 @@ def deterministic_pleasantry_reply(text: str) -> str | None:
     if any(w in BYE_WORDS for w in words):
         return BYE_REPLY
     if any(w in GREETING_WORDS for w in words):
-        return GREETING_REPLY
+        return _greeting_reply(words, now)
     return None
