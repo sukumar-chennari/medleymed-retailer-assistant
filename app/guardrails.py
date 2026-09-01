@@ -8,7 +8,6 @@ out-of-scope. None of this is prompt-only — each guard is a deterministic
 check applied to the model's actual output or actual tool results.
 """
 
-import difflib
 import json
 import re
 
@@ -238,8 +237,9 @@ BYE_REPLY = "Take care! Come back anytime you have fever or cold questions."
 # short, and (c) contains one of these words is treated as a pleasantry. (a)
 # is what stops this from swallowing a real request like "hi, I have a fever".
 GREETING_WORDS = {
-    "hi", "hii", "hiii", "hello", "helo", "hey", "hiya", "yo", "sup",
-    "whatup", "whatsup", "wassup", "morning", "evening", "buddy",
+    "hi", "hii", "hiii", "hio", "hello", "helo", "hey", "hiya", "yo", "sup",
+    "whatup", "whatsup", "wassup", "morning", "morinig", "mornign",
+    "evening", "buddy",
 }
 BYE_WORDS = {"thanks", "thank", "thx", "ty", "bye", "goodbye", "cya", "cheers"}
 
@@ -253,17 +253,6 @@ GREETING_PHRASES = {
     "what's good", "how is it going", "how's everything",
 }
 MAX_PLEASANTRY_WORDS = 6
-
-
-def _close_to_any(word: str, vocabulary: set[str]) -> bool:
-    """Tolerates one-off typos ("morinig" for "morning") without matching
-    short, unrelated words — a plain difflib.get_close_matches on a 2-3
-    letter word is too unstable to trust, so those rely on an exact hit."""
-    if word in vocabulary:
-        return True
-    if len(word) < 4:
-        return False
-    return bool(difflib.get_close_matches(word, vocabulary, n=1, cutoff=0.75))
 
 
 def deterministic_pleasantry_reply(text: str) -> str | None:
@@ -285,8 +274,8 @@ def deterministic_pleasantry_reply(text: str) -> str | None:
 
     if len(words) > MAX_PLEASANTRY_WORDS:
         return None
-    if any(_close_to_any(w, BYE_WORDS) for w in words):
+    if any(w in BYE_WORDS for w in words):
         return BYE_REPLY
-    if any(_close_to_any(w, GREETING_WORDS) for w in words):
+    if any(w in GREETING_WORDS for w in words):
         return GREETING_REPLY
     return None
