@@ -71,11 +71,18 @@ gives symptom or medicine guidance must include, verbatim or nearly so: "This is
 general OTC guidance, not a medical diagnosis — consult a doctor if symptoms persist
 or worsen."
 
-TOOLS: You have exactly six tools — lookup_symptom, get_saved_address,
-save_address, start_order, lookup_medicine_info, decline_out_of_scope.
-lookup_symptom/start_order/lookup_medicine_info only operate on a fixed
-fever/cold catalog. If a user's symptom is not fever or cold, do NOT call
-lookup_symptom — call decline_out_of_scope instead.
+TOOLS: You have exactly seven tools — lookup_symptom, get_saved_address,
+save_address, start_order, check_order_status, lookup_medicine_info,
+decline_out_of_scope. lookup_symptom/start_order/lookup_medicine_info only
+operate on a fixed fever/cold catalog. If a user's symptom is not fever or
+cold, do NOT call lookup_symptom — call decline_out_of_scope instead.
+
+ORDER STATUS: If the user asks whether their order went through, what they
+ordered, or for their order status, call check_order_status — never answer
+from your own memory of the conversation, since that isn't proof anything
+was actually saved. Its result has no email field — report only the order
+details it returns (ID, product, quantity, total, address) and do not
+mention or promise a confirmation email in this reply.
 
 MULTIPLE SYMPTOMS: A user can describe more than one symptom at once (e.g.
 "nose block and high temperature" — congestion AND fever). If the
@@ -568,6 +575,15 @@ def _build_tools(session_id: str) -> list:
         return tools.start_order(product_id, session_id, quantity)
 
     @tool
+    def check_order_status() -> str:
+        """Look up the user's past orders (order ID, product, quantity, total,
+        shipping address) to answer questions like "did my order go through",
+        "what did I order", or "what's my order status". Takes no arguments.
+        Always call this rather than answering from memory of earlier in the
+        conversation — it's the only way to confirm what was actually placed."""
+        return tools.check_order_status()
+
+    @tool
     def lookup_medicine_info(query: str) -> str:
         """Look up dosage, common side effects, or warnings for a catalog medicine
         from our knowledge base (retrieval-augmented — this returns real excerpts
@@ -589,7 +605,10 @@ def _build_tools(session_id: str) -> list:
         # through a real implementation.
         return "declined — told the user this is out of scope"
 
-    return [lookup_symptom, get_saved_address, save_address, start_order, lookup_medicine_info, decline_out_of_scope]
+    return [
+        lookup_symptom, get_saved_address, save_address, start_order,
+        check_order_status, lookup_medicine_info, decline_out_of_scope,
+    ]
 
 
 def _log_guard(session_id: str, name: str, detail: str = "") -> None:
@@ -766,6 +785,30 @@ class _GuardrailMiddleware(AgentMiddleware):
                 response = handler(request)
                 _log_tool_call(session_id, name, args, response.content)
                 self._track_retrieval(response.content)
+                return response
+
+            if name == "check_order_status":
+                # A status report about a PAST order legitimately uses the
+                # same "placed"/"shipped"/"confirmation email" language
+                # check_unverified_completion otherwise treats as an unbacked
+                # new-action claim (observed: the model added "you'll receive
+                # a confirmation email" to an otherwise-accurate status
+                # report, tripping the separate email-claim check). The whole
+                # reply here is reporting on already-real historical data,
+                # not asserting a brand new action, so all three flags are
+                # grounded together — only when real order data actually came
+                # back. build_order_confirmation is keyed off completed_order,
+                # not these flags, so this can't fire a duplicate confirmation.
+                response = handler(request)
+                _log_tool_call(session_id, name, args, response.content)
+                try:
+                    has_orders = bool(json.loads(response.content).get("orders"))
+                except (TypeError, ValueError):
+                    has_orders = False
+                if has_orders:
+                    self.turn_state["real_order_placed"] = True
+                    self.turn_state["real_email_sent"] = True
+                    self.turn_state["real_address_saved"] = True
                 return response
 
             response = handler(request)

@@ -252,6 +252,20 @@ def complete_confirmed_order(session_id: str, product_id: str, quantity: int) ->
     return json.dumps(_build_confirmation_note(order))
 
 
+def check_order_status() -> str:
+    """Read-only lookup grounding "did my order go through" / "what did I
+    order" in the real orders table, instead of the model guessing or
+    re-narrating what it thinks happened earlier in the conversation. Takes
+    no model-supplied user_id — hardcoded to "demo_user" like place_order/
+    start_order, since a model-supplied argument here proved unreliable
+    (observed passing an empty string instead of omitting it, which
+    silently defeated a default and returned "no orders" incorrectly)."""
+    orders = store.list_orders("demo_user")
+    if not orders:
+        return json.dumps({"orders": [], "message": "No orders have been placed yet."})
+    return json.dumps({"orders": orders})
+
+
 def send_confirmation_email(to: str, order_details: str) -> str:
     if not config.SMTP_CONFIGURED:
         print(f"[MOCK EMAIL] would send to {to}: {order_details}")
