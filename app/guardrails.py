@@ -58,6 +58,18 @@ def build_order_confirmation(order: dict) -> str:
     )
 
 
+def build_cancellation_confirmation(order: dict) -> str:
+    """Same rationale as build_order_confirmation: a cancellation actually
+    happened, so it's rendered from the real result rather than left to the
+    model's own phrasing — which would also risk tripping
+    check_unverified_completion, since "your order has been cancelled" reads
+    as order-completion language to that guard."""
+    return (
+        f"Order {order['order_id']} ({order['product_name']}) has been cancelled.\n\n"
+        f"You're welcome to place a new order anytime."
+    )
+
+
 def reply_for_deferred_order(order: dict) -> str:
     """The correct thing to say after a start_order call that deferred
     (never completes synchronously — see tools.start_order) rather than

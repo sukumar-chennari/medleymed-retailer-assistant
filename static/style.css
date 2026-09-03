@@ -256,6 +256,11 @@ body {
   border-bottom: none;
 }
 
+.order-item.order-cancelled {
+  color: #999;
+  text-decoration: line-through;
+}
+
 .card-cta {
   background: var(--teal-tint);
   border-color: var(--teal-tint-border);

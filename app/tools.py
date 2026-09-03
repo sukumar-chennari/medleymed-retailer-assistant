@@ -266,6 +266,20 @@ def check_order_status() -> str:
     return json.dumps({"orders": orders})
 
 
+def cancel_order(order_id: str = "") -> str:
+    """Cancels a real order, hardcoded to "demo_user" for the same reason as
+    check_order_status. An empty order_id means "cancel the most recent
+    active order" — resolved here from real order data rather than asking
+    the model to infer which order_id that was from earlier chat turns."""
+    orders = store.list_orders("demo_user")
+    if not order_id:
+        active = [o for o in orders if o.get("status") != "cancelled"]
+        if not active:
+            return json.dumps({"error": "No active orders to cancel."})
+        order_id = max(active, key=lambda o: int(o["order_id"].split("-")[-1]))["order_id"]
+    return json.dumps(store.cancel_order(order_id, "demo_user"))
+
+
 def send_confirmation_email(to: str, order_details: str) -> str:
     if not config.SMTP_CONFIGURED:
         print(f"[MOCK EMAIL] would send to {to}: {order_details}")

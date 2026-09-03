@@ -31,8 +31,8 @@ from app import config, guardrails, store, tools
 MAX_TOOL_ROUNDS = 6
 
 TOOL_NAMES = {
-    "lookup_symptom", "get_saved_address", "save_address",
-    "start_order", "lookup_medicine_info", "decline_out_of_scope",
+    "lookup_symptom", "get_saved_address", "save_address", "start_order",
+    "check_order_status", "cancel_order", "lookup_medicine_info", "decline_out_of_scope",
 }
 
 _chat_model = ChatOllama(model=config.TEXT_MODEL, base_url=config.OLLAMA_HOST, temperature=0.2)
@@ -71,11 +71,12 @@ gives symptom or medicine guidance must include, verbatim or nearly so: "This is
 general OTC guidance, not a medical diagnosis — consult a doctor if symptoms persist
 or worsen."
 
-TOOLS: You have exactly seven tools — lookup_symptom, get_saved_address,
-save_address, start_order, check_order_status, lookup_medicine_info,
-decline_out_of_scope. lookup_symptom/start_order/lookup_medicine_info only
-operate on a fixed fever/cold catalog. If a user's symptom is not fever or
-cold, do NOT call lookup_symptom — call decline_out_of_scope instead.
+TOOLS: You have exactly eight tools — lookup_symptom, get_saved_address,
+save_address, start_order, check_order_status, cancel_order,
+lookup_medicine_info, decline_out_of_scope.
+lookup_symptom/start_order/lookup_medicine_info only operate on a fixed
+fever/cold catalog. If a user's symptom is not fever or cold, do NOT call
+lookup_symptom — call decline_out_of_scope instead.
 
 ORDER STATUS: If the user asks whether their order went through, what they
 ordered, or for their order status, call check_order_status — never answer
@@ -83,6 +84,11 @@ from your own memory of the conversation, since that isn't proof anything
 was actually saved. Its result has no email field — report only the order
 details it returns (ID, product, quantity, total, address) and do not
 mention or promise a confirmation email in this reply.
+
+ORDER CANCELLATION: Only call cancel_order when the user has explicitly and
+clearly asked to cancel an order — never as a guess, and never in reaction
+to an unrelated complaint. Pass the order ID if they named one; otherwise
+pass an empty string to cancel their most recent order.
 
 MULTIPLE SYMPTOMS: A user can describe more than one symptom at once (e.g.
 "nose block and high temperature" — congestion AND fever). If the
@@ -183,6 +189,8 @@ ORDER_INTENT_RE = re.compile(
     r"\b(order|buy|purchase|checkout|add to cart|get me|place (an|the) order)\b",
     re.IGNORECASE,
 )
+
+CANCEL_INTENT_RE = re.compile(r"\bcancel\b", re.IGNORECASE)
 
 # Gates the decline_out_of_scope reversal's established-category fallback
 # (see wrap_tool_call) — a message has to actually read as a follow-up to
@@ -584,6 +592,15 @@ def _build_tools(session_id: str) -> list:
         return tools.check_order_status()
 
     @tool
+    def cancel_order(order_id: str = "") -> str:
+        """Cancel a previously placed order. Pass the specific order ID if the
+        user named one (e.g. "ord-0002"); pass an empty string if they didn't
+        name one, which cancels their most recent active order. Only call
+        this when the user has clearly and explicitly asked to cancel an
+        order — never proactively, and never as a guess at what they meant."""
+        return tools.cancel_order(order_id)
+
+    @tool
     def lookup_medicine_info(query: str) -> str:
         """Look up dosage, common side effects, or warnings for a catalog medicine
         from our knowledge base (retrieval-augmented — this returns real excerpts
@@ -607,7 +624,7 @@ def _build_tools(session_id: str) -> list:
 
     return [
         lookup_symptom, get_saved_address, save_address, start_order,
-        check_order_status, lookup_medicine_info, decline_out_of_scope,
+        check_order_status, cancel_order, lookup_medicine_info, decline_out_of_scope,
     ]
 
 
@@ -771,6 +788,33 @@ class _GuardrailMiddleware(AgentMiddleware):
                     self.turn_state["real_email_sent"] = True
                 return response
 
+            if name == "cancel_order":
+                # Same "never trust the model's own judgment for a
+                # state-changing action" pattern as blocked_premature_order —
+                # only actually cancel when this message itself says so.
+                if not (user_text and CANCEL_INTENT_RE.search(user_text)):
+                    _log_guard(session_id, "blocked_unconfirmed_cancel", f"{args}")
+                    result = json.dumps({
+                        "cancelled": False,
+                        "message": (
+                            "The user has not clearly asked to cancel an order this "
+                            "message — do not call cancel_order. Ask them to confirm "
+                            "they want to cancel (and which order, if they have more "
+                            "than one), then stop without calling any tool this turn."
+                        ),
+                    })
+                    return ToolMessage(content=result, tool_call_id=call_id, name=name)
+
+                response = handler(request)
+                _log_tool_call(session_id, name, args, response.content)
+                try:
+                    parsed_cancel = json.loads(response.content)
+                except (TypeError, ValueError):
+                    parsed_cancel = {}
+                if parsed_cancel.get("cancelled"):
+                    self.turn_state["cancelled_order"] = parsed_cancel
+                return response
+
             if name == "save_address":
                 response = handler(request)
                 _log_tool_call(session_id, name, args, response.content)
@@ -854,6 +898,13 @@ class _GuardrailMiddleware(AgentMiddleware):
             # address the user needs, even though the order itself was
             # genuinely placed.
             final = guardrails.build_order_confirmation(self.turn_state["completed_order"])
+            return {"messages": [AIMessage(content=final, id=last.id)]}
+
+        if self.turn_state.get("cancelled_order"):
+            # Same rationale as completed_order above — a real cancellation
+            # happened this turn, so the confirmation is rendered from the
+            # real result rather than the model's own phrasing.
+            final = guardrails.build_cancellation_confirmation(self.turn_state["cancelled_order"])
             return {"messages": [AIMessage(content=final, id=last.id)]}
 
         leaked_tool = guardrails.leaked_tool_intent(reply_text, TOOL_NAMES)
@@ -1006,6 +1057,7 @@ def run_turn(
         "real_email_sent": False,
         "real_address_saved": False,
         "completed_order": None,
+        "cancelled_order": None,
         "deferred_order": None,
         "blocked_ungrounded_lookup": False,
         "declined_forced": False,

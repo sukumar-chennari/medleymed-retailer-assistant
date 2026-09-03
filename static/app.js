@@ -53,7 +53,11 @@ async function loadDashboard() {
       data.orders.forEach((order) => {
         const item = document.createElement("div");
         item.className = "order-item";
-        item.textContent = `${order.product_name} — $${order.price_usd} (${order.order_id})`;
+        const cancelledTag = order.status === "cancelled" ? " — Cancelled" : "";
+        item.textContent = `${order.product_name} — $${order.price_usd} (${order.order_id})${cancelledTag}`;
+        if (order.status === "cancelled") {
+          item.classList.add("order-cancelled");
+        }
         ordersEl.appendChild(item);
       });
     }

@@ -40,7 +40,8 @@ def _init_db() -> None:
                 price_usd REAL NOT NULL,
                 quantity INTEGER NOT NULL,
                 total_price_usd REAL NOT NULL,
-                address TEXT NOT NULL
+                address TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'placed'
             );
             CREATE TABLE IF NOT EXISTS session_state (
                 session_id TEXT PRIMARY KEY,
@@ -63,6 +64,14 @@ def _init_db() -> None:
             );
             """
         )
+        # A DB file created before the "status" column existed won't get it
+        # from CREATE TABLE IF NOT EXISTS above — that only applies to a
+        # brand new table. Add it in place so an existing demo DB (with real
+        # orders already in it) keeps working after this upgrade.
+        order_columns = {row[1] for row in conn.execute("PRAGMA table_info(orders)")}
+        if "status" not in order_columns:
+            conn.execute("ALTER TABLE orders ADD COLUMN status TEXT NOT NULL DEFAULT 'placed'")
+
         # Seed the demo user once — on every later startup the table is
         # already non-empty, so a previously saved address/email survives a
         # restart instead of resetting to the demo_user.json defaults.
@@ -178,6 +187,22 @@ def get_order(order_id: str) -> Optional[dict]:
     with _connect() as conn:
         row = conn.execute("SELECT * FROM orders WHERE order_id = ?", (order_id,)).fetchone()
         return dict(row) if row else None
+
+
+def cancel_order(order_id: str, user_id: str) -> dict:
+    """Marks an order cancelled rather than deleting it, so it stays visible
+    in order history/status with its real final state instead of vanishing
+    without a trace."""
+    order = get_order(order_id)
+    if order is None or order["user_id"] != user_id:
+        return {"error": f"No order found with ID '{order_id}'."}
+    if order["status"] == "cancelled":
+        return {"error": f"Order {order_id} is already cancelled."}
+    with _connect() as conn:
+        conn.execute("UPDATE orders SET status = 'cancelled' WHERE order_id = ?", (order_id,))
+    order["status"] = "cancelled"
+    order["cancelled"] = True
+    return order
 
 
 def _ensure_session_row(conn: sqlite3.Connection, session_id: str) -> None:
