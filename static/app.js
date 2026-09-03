@@ -173,58 +173,86 @@ function buildFeedbackControls(replyText) {
   return wrap;
 }
 
+let allProducts = [];
+
+function renderCatalog(products) {
+  const catalogEl = document.getElementById("catalog-grid");
+  catalogEl.innerHTML = "";
+
+  if (!products.length) {
+    catalogEl.innerHTML = '<p class="catalog-empty">No products match your search.</p>';
+    return;
+  }
+
+  products.forEach((product) => {
+    const card = document.createElement("div");
+    card.className = "product-card";
+
+    const top = document.createElement("div");
+    top.className = "product-card-top";
+
+    const name = document.createElement("span");
+    name.className = "product-name";
+    name.textContent = product.name;
+
+    const pill = document.createElement("span");
+    pill.className = `category-pill ${product.category}`;
+    pill.textContent = product.category;
+
+    top.appendChild(name);
+    top.appendChild(pill);
+
+    const ingredient = document.createElement("div");
+    ingredient.className = "product-ingredient";
+    ingredient.textContent = product.active_ingredient;
+
+    const price = document.createElement("div");
+    price.className = "product-price";
+    price.textContent = `$${product.price_usd}`;
+
+    const askButton = document.createElement("button");
+    askButton.type = "button";
+    askButton.className = "product-ask-button";
+    askButton.textContent = "Ask Assistant";
+    askButton.addEventListener("click", () => {
+      openChat(`I'd like to order ${product.name}`);
+    });
+
+    card.appendChild(top);
+    card.appendChild(ingredient);
+    card.appendChild(price);
+    card.appendChild(askButton);
+    catalogEl.appendChild(card);
+  });
+}
+
+function filterCatalog(query) {
+  const q = query.trim().toLowerCase();
+  if (!q) return allProducts;
+  return allProducts.filter(
+    (product) =>
+      product.name.toLowerCase().includes(q) ||
+      product.category.toLowerCase().includes(q) ||
+      product.active_ingredient.toLowerCase().includes(q)
+  );
+}
+
 async function loadCatalog() {
   const catalogEl = document.getElementById("catalog-grid");
   try {
     const res = await fetch("/api/catalog");
-    const products = await res.json();
-
-    catalogEl.innerHTML = "";
-    products.forEach((product) => {
-      const card = document.createElement("div");
-      card.className = "product-card";
-
-      const top = document.createElement("div");
-      top.className = "product-card-top";
-
-      const name = document.createElement("span");
-      name.className = "product-name";
-      name.textContent = product.name;
-
-      const pill = document.createElement("span");
-      pill.className = `category-pill ${product.category}`;
-      pill.textContent = product.category;
-
-      top.appendChild(name);
-      top.appendChild(pill);
-
-      const ingredient = document.createElement("div");
-      ingredient.className = "product-ingredient";
-      ingredient.textContent = product.active_ingredient;
-
-      const price = document.createElement("div");
-      price.className = "product-price";
-      price.textContent = `$${product.price_usd}`;
-
-      const askButton = document.createElement("button");
-      askButton.type = "button";
-      askButton.className = "product-ask-button";
-      askButton.textContent = "Ask Assistant";
-      askButton.addEventListener("click", () => {
-        openChat(`I'd like to order ${product.name}`);
-      });
-
-      card.appendChild(top);
-      card.appendChild(ingredient);
-      card.appendChild(price);
-      card.appendChild(askButton);
-      catalogEl.appendChild(card);
-    });
+    allProducts = await res.json();
+    renderCatalog(allProducts);
   } catch (err) {
     catalogEl.textContent = "Couldn't load the product catalog.";
     console.error("Failed to load catalog", err);
   }
 }
+
+const catalogSearchInput = document.getElementById("catalog-search");
+catalogSearchInput.addEventListener("input", () => {
+  renderCatalog(filterCatalog(catalogSearchInput.value));
+});
 
 loadDashboard();
 loadMetrics();
