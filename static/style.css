@@ -145,6 +145,53 @@ body {
   color: var(--navy-dark);
 }
 
+.guardrail-log {
+  background: #ffffff;
+  border: 1px solid #e2e5e9;
+  border-radius: 12px;
+  padding: 6px 20px;
+  margin-bottom: 8px;
+}
+
+.guardrail-log-empty {
+  padding: 12px 0;
+  color: #888;
+  font-size: 0.9rem;
+}
+
+.guardrail-log-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid #eef0f2;
+  font-size: 0.88rem;
+}
+
+.guardrail-log-item:last-child {
+  border-bottom: none;
+}
+
+.guardrail-log-name {
+  font-weight: 600;
+  color: var(--navy-dark);
+  white-space: nowrap;
+}
+
+.guardrail-log-detail {
+  color: #666;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.guardrail-log-time {
+  color: #999;
+  white-space: nowrap;
+  font-size: 0.8rem;
+}
+
 .catalog-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));

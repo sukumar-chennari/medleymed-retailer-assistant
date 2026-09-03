@@ -66,6 +66,52 @@ async function loadDashboard() {
   }
 }
 
+function formatGuardrailName(name) {
+  return name.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function timeAgo(sqliteUtcString) {
+  const then = new Date(sqliteUtcString.replace(" ", "T") + "Z");
+  const seconds = Math.max(0, Math.round((Date.now() - then.getTime()) / 1000));
+  if (seconds < 60) return "just now";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
+
+function renderGuardrailLog(events) {
+  const el = document.getElementById("guardrail-log");
+  if (!events.length) {
+    el.innerHTML = '<div class="guardrail-log-empty">No guardrail interventions yet.</div>';
+    return;
+  }
+  el.innerHTML = "";
+  events.forEach((event) => {
+    const item = document.createElement("div");
+    item.className = "guardrail-log-item";
+
+    const name = document.createElement("span");
+    name.className = "guardrail-log-name";
+    name.textContent = formatGuardrailName(event.name);
+
+    const detail = document.createElement("span");
+    detail.className = "guardrail-log-detail";
+    detail.textContent = event.detail || "";
+    detail.title = event.detail || "";
+
+    const time = document.createElement("span");
+    time.className = "guardrail-log-time";
+    time.textContent = timeAgo(event.created_at);
+
+    item.appendChild(name);
+    item.appendChild(detail);
+    item.appendChild(time);
+    el.appendChild(item);
+  });
+}
+
 async function loadMetrics() {
   try {
     const res = await fetch("/api/metrics");
@@ -80,6 +126,8 @@ async function loadMetrics() {
     const feedbackEl = document.getElementById("stat-feedback");
     feedbackEl.textContent =
       data.feedback_positive_rate == null ? "–" : `${Math.round(data.feedback_positive_rate * 100)}%`;
+
+    renderGuardrailLog(data.recent_guardrail_events || []);
   } catch (err) {
     console.error("Failed to load metrics", err);
   }

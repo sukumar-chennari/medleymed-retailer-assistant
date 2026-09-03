@@ -362,6 +362,14 @@ def get_metrics_summary() -> dict:
             round(feedback_positive / feedback_total, 3) if feedback_total else None
         )
 
+        recent_guardrail_events = [
+            {"created_at": row[0], "name": row[1], "detail": row[2]}
+            for row in conn.execute(
+                "SELECT created_at, name, detail FROM metrics_events WHERE event_type = 'guardrail' "
+                "ORDER BY id DESC LIMIT 8"
+            ).fetchall()
+        ]
+
         return {
             "total_events": total_events,
             "avg_retrieval_confidence": avg_retrieval_confidence,
@@ -373,4 +381,5 @@ def get_metrics_summary() -> dict:
             "feedback_negative": feedback_negative,
             "feedback_total": feedback_total,
             "feedback_positive_rate": feedback_positive_rate,
+            "recent_guardrail_events": recent_guardrail_events,
         }
