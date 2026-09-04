@@ -33,6 +33,7 @@ live testing, not just building a happy-path demo."*
 10. [Evaluation](#10-evaluation)
 11. [Persistence / Data Layer](#11-persistence--data-layer)
 12. [Hard / Adversarial Questions](#12-hard--adversarial-questions)
+13. [Observability, Metrics & Recent Feature Additions](#13-observability-metrics--recent-feature-additions)
 
 ---
 
@@ -488,10 +489,15 @@ the same reasonable thing reliably" beats "occasionally says something more
 interesting."
 
 **Q: How many tools does the agent have, and what are they?**
-A: Six: `lookup_symptom` (fixed catalog lookup by fever/cold keyword),
+A: Eight: `lookup_symptom` (fixed catalog lookup by fever/cold keyword),
 `get_saved_address`, `save_address`, `start_order` (defers to an
-address-confirmation step, never completes synchronously), `lookup_medicine_info`
-(the RAG tool), and `decline_out_of_scope`.
+address-confirmation step, never completes synchronously),
+`check_order_status` (read-only lookup grounding "did my order go through"
+in the real orders table instead of the model's own memory of the
+conversation), `cancel_order` (only fires when the user's own message
+actually says "cancel" this turn — same never-trust-the-model pattern as
+`start_order`), `lookup_medicine_info` (the RAG tool), and
+`decline_out_of_scope`.
 
 **Q: How does the tool-calling loop work?**
 A: `agent.run_turn()` builds a LangChain agent per turn via `create_agent(
@@ -729,6 +735,37 @@ then acting on it; (4) **tool-name/mechanism leaks** — narrating internal
 tool-calling machinery as user-facing text instead of using it. Each has a
 dedicated, tested guardrail (section 8).
 
+**Q: Give me an example of a guardrail fix that itself introduced a new bug.**
+A: Yes — worth being honest about this one, since it shows the fix-verify
+loop catching its own mistake rather than just working the first time.
+Fixing "hio" (a typo of "hi") not being recognized as a greeting, I first
+tried fuzzy string matching (`difflib`) instead of exact word matching.
+Live testing then found that "help" fuzzy-matches "helo" (already a typo
+variant of "hello") closely enough that "can you help" got misread as a
+greeting. Fuzzy-matching short vocabulary words turned out to be
+fundamentally unsafe — too many unrelated common words sit within one
+edit of a short word. Reverted to the codebase's existing pattern (literal
+spelling variants, not fuzzy matching) and added only the specific typos
+actually seen ("hio", "morinig", "mornign") as explicit entries.
+
+**Q: Give me an example where a NEW tool broke an EXISTING guardrail.**
+A: Adding `check_order_status` surfaced two distinct failures live. First,
+the model called it with `user_id=""` instead of omitting the argument,
+silently defeating the "demo_user" default and reporting "no orders" when
+orders actually existed — fixed by hardcoding the user server-side, the
+same way `start_order`/`place_order` already do, rather than trusting a
+model-supplied argument for a single-user demo. Second, a genuinely
+accurate status report ("your order has been placed... you'll receive a
+confirmation email") used the same wording the existing
+`check_unverified_completion` guard treats as an *unbacked* claim, and got
+incorrectly blocked. Fixed by treating a status report backed by real
+order data as grounded for all three completion checks (order/email/
+address), not just the order one — the whole reply is reporting on
+already-real historical data, not asserting a brand new action.
+`cancel_order` sidesteps this class of problem entirely by rendering its
+confirmation from a deterministic template instead of the model's own
+phrasing, the same way `start_order`'s success path already did.
+
 **Q: Would a bigger model (GPT-4-class) have avoided all of these?**
 A: Probably fewer of them, but not zero, and that's somewhat beside the
 point for this project's constraint (free/local only). More importantly:
@@ -792,24 +829,33 @@ including right after migrating from the flat-JSON/manual-cosine
 implementation to Chroma, and again after this SECTION_BOOST fix.
 
 **Q: How do you evaluate the agent/conversation layer, as opposed to pure retrieval?**
-A: There's no automated eval suite for the conversational layer (that's a
-real gap, worth naming honestly if asked) — that side was validated through
-live, manual, scenario-based testing: reproducing exact reported transcripts
-(greetings, out-of-scope declines, multi-symptom messages, clarifying
-questions, address-confirmation flows, ordinal product selection) via
-scripted `curl` sequences and live browser testing after every change,
-treating each fixed bug as a permanent regression case I re-ran on
-subsequent changes. It's not automated, but it is systematic and repeated.
+A: Two layers now. `tests/test_guardrails.py` (`pytest`, 22 tests, no LLM
+needed, runs in under a second) covers the deterministic safety-net logic
+in `guardrails.py` — pleasantry/greeting detection, the unverified-
+completion claim checks, order/cancellation confirmation templates, and
+leaked-tool-name detection — including regression tests pinned to the
+exact real bugs found live (the "help"/"helo" fuzzy-match collision, the
+status-report false-positive). What's still manual, and worth naming
+honestly: anything that requires the actual LLM in the loop
+(`agent.run_turn` end-to-end — multi-symptom messages, clarifying
+questions, ordinal product selection, the full order flow) is validated
+through live, scripted `curl` sequences and browser testing after every
+change, treating each fixed bug as a permanent regression case re-run on
+subsequent changes. Systematic and repeated, but not automated — an LLM
+call is nondeterministic enough that a naive pytest assertion on exact
+reply text would be flaky.
 
 **Q: If you had more time, what would you add to evaluation?**
-A: An automated conversation-level eval set — a fixed list of multi-turn
-scripted transcripts (the same ones used for manual regression testing,
-formalized) asserting on specific reply properties (contains "order
+A: An automated conversation-level eval set for the parts pytest can't
+cover — a fixed list of multi-turn scripted transcripts (the same ones
+used for manual regression testing, formalized) asserting on structural
+reply properties robust to LLM nondeterminism (contains "order
 confirmed," doesn't contain a tool name, asks a specific clarifying
-question) so the manual regression sweep becomes a `pytest` run. I'd also
-add retrieval evaluation beyond hit@k — e.g. mean reciprocal rank, to
-catch a *correct-but-lower-ranked* result becoming worse over time even
-while still technically appearing in the top-3.
+question) rather than exact text, so the manual regression sweep becomes
+closer to a real automated suite. I'd also add retrieval evaluation
+beyond hit@k — e.g. mean reciprocal rank, to catch a *correct-but-lower-
+ranked* result becoming worse over time even while still technically
+appearing in the top-3.
 
 **Q: How do you know the guardrails themselves work, versus just believing your own code comments?**
 A: Every guardrail fix in this project follows the same pattern: reproduce
@@ -895,7 +941,7 @@ become a proper auto-increment or UUID at real scale.
 
 **Q: How would you prevent prompt injection — e.g. a malicious image or message trying to manipulate the agent?**
 A: The scope-limiting design already does a lot of this work structurally —
-the model's only levers are 6 narrowly-scoped tools that can't act outside
+the model's only levers are 8 narrowly-scoped tools that can't act outside
 the fixed catalog, so even a successfully "injected" instruction has almost
 nothing dangerous to actually do. The image-analysis path is a real
 attack surface worth naming honestly: a photo could contain adversarial text
@@ -930,3 +976,54 @@ than fix the underlying reliability problem. A hosted fallback model doesn't
 know when to trigger any better than the primary model does; the
 deterministic guardrail approach fixes the actual failure mode regardless of
 which model is generating text.
+
+---
+
+## 13. Observability, Metrics & Recent Feature Additions
+
+**Q: You said guardrails work — how do you know, beyond "I tested it live"? Is there any real metrics/monitoring?**
+A: Yes — a small local observability layer, deliberately not an external
+service (no LangSmith, no third-party tracing), consistent with the
+free/local constraint. Every retrieval call, guardrail trigger, and tool
+call gets logged to an append-only `metrics_events` table in the same
+SQLite DB (`store.log_metric_event`), read back on demand via
+`store.get_metrics_summary()` — no separate aggregation service, just SQL
+run at read time. This turns "the guardrails work" from a claim into a
+queryable count.
+
+**Q: Where does that actually show up — is it just a backend table nobody sees?**
+A: Two visible places. (1) Every RAG-grounded chat reply gets a real
+retrieval-confidence percentage appended (`Retrieval confidence: 86%`) —
+computed from the actual cosine-similarity score of what was retrieved
+that turn, not a canned number. (2) The dashboard shows aggregate stat
+tiles (avg. retrieval confidence, guardrail interventions, helpful-reply
+rate) plus a live "Recent Guardrail Activity" log — the 8 most recent
+guardrail events with their real name, detail, and a relative timestamp,
+so a guardrail intervention is something you can point at on screen
+during a demo instead of just a number going up.
+
+**Q: What's the "Helpful Rate" tile — is that a real signal or decorative?**
+A: Real, if lightweight: every assistant chat bubble has 👍/👎 buttons; a
+click logs a `feedback` event (same `metrics_events` table, same
+`/api/feedback` endpoint) and the dashboard tile recomputes the positive
+rate live. It's a basic human-feedback loop — the same category of signal
+production agents use to catch quality regressions — not a full RLHF
+pipeline, which would be disproportionate at this scale.
+
+**Q: What other features got added after the initial core build?**
+A: `check_order_status` and `cancel_order` (tools 5 and 6 of 8, covered in
+section 7 and section 9's bug writeups); a client-side search box on the
+product catalog (filters by name/category/ingredient against the already-
+fetched catalog, no new endpoint — relevant now that the catalog grew to
+10 products); and the `pytest` suite covered in section 10. All of these
+followed the same loop as the original build: implement, verify live
+against the running app, run the full regression sweep, then commit.
+
+**Q: The order-cancellation feature changes real data — how did you avoid breaking the existing demo database?**
+A: `orders` gained a `status` column via an in-place `ALTER TABLE`,
+guarded by a `PRAGMA table_info` check so it's idempotent — safe to run
+against a demo DB that already had real orders in it from earlier testing
+sessions, without a migration tool or downtime. Cancelling marks
+`status = 'cancelled'` rather than deleting the row, so cancelled orders
+stay visible in order history (the dashboard shows them struck through)
+instead of vanishing without a trace.
