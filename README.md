@@ -90,3 +90,18 @@ uvicorn app.main:app --reload
 Then open http://localhost:8000 in a browser.
 
 To stop the server, press `Ctrl+C` in that terminal (or `pkill -f "uvicorn app.main:app"`).
+
+## Tests
+
+`tests/test_guardrails.py` covers the deterministic safety-net logic in
+`app/guardrails.py` (greeting/pleasantry handling, unverified-completion
+checks, order/cancellation confirmation templates, leaked-tool-name
+detection) — no LLM or live server needed, runs in under a second:
+
+```bash
+python -m pytest tests/ -v
+```
+
+This doesn't replace `python -m app.rag_eval`, which needs the real agent
+and knowledge base and checks a different thing (retrieval/answer quality
+against golden queries, not guardrail correctness).
