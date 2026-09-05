@@ -96,7 +96,9 @@ To stop the server, press `Ctrl+C` in that terminal (or `pkill -f "uvicorn app.m
 `tests/test_guardrails.py` covers the deterministic safety-net logic in
 `app/guardrails.py` (greeting/pleasantry handling, unverified-completion
 checks, order/cancellation confirmation templates, leaked-tool-name
-detection) — no LLM or live server needed, runs in under a second:
+detection), and `tests/test_tools.py` covers the pure symptom-classification
+logic in `app/tools.py` — no LLM or live server needed, runs in a few
+seconds:
 
 ```bash
 python -m pytest tests/ -v
@@ -105,3 +107,8 @@ python -m pytest tests/ -v
 This doesn't replace `python -m app.rag_eval`, which needs the real agent
 and knowledge base and checks a different thing (retrieval/answer quality
 against golden queries, not guardrail correctness).
+
+`.github/workflows/tests.yml` runs this same suite on every push/PR to
+`main` — it installs Ollama and pulls `nomic-embed-text` first, since
+importing `app.tools` pulls in `app.retrieval`, which builds/loads the RAG
+index at import time.

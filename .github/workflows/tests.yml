@@ -1,0 +1,39 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      # Only the embedding model is needed here — importing app.tools pulls
+      # in app.retrieval, which builds/loads the RAG index at import time
+      # (see retrieval.py's _load_collection). The chat model (llama3.2)
+      # isn't needed since these tests never touch app.agent.
+      - name: Install Ollama and pull the embedding model
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          ollama serve &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:11434/ >/dev/null && break
+            sleep 1
+          done
+          ollama pull nomic-embed-text
+
+      - name: Run tests
+        run: python -m pytest tests/ -v
