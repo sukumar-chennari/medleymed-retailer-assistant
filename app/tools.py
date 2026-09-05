@@ -223,6 +223,19 @@ def start_order(product_id: str, session_id: str, quantity: int = 1) -> str:
     })
 
 
+def reorder_last(session_id: str, quantity: int = 1) -> str:
+    """Resolves "reorder"/"order that again" to the most recent past order's
+    product (any status — reordering something previously cancelled is
+    reasonable), then delegates straight to start_order so it gets the exact
+    same deferred address-confirmation flow as any other order. The product
+    is resolved from real order data, never guessed by the model itself."""
+    orders = store.list_orders("demo_user")
+    if not orders:
+        return json.dumps({"error": "No previous orders to reorder."})
+    last = max(orders, key=lambda o: int(o["order_id"].split("-")[-1]))
+    return start_order(last["product_id"], session_id, quantity)
+
+
 def _build_confirmation_note(order: dict) -> dict:
     recipient_email = store.get_email("demo_user")
     if recipient_email:

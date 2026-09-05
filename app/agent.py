@@ -31,7 +31,7 @@ from app import config, guardrails, store, tools
 MAX_TOOL_ROUNDS = 6
 
 TOOL_NAMES = {
-    "lookup_symptom", "get_saved_address", "save_address", "start_order",
+    "lookup_symptom", "get_saved_address", "save_address", "start_order", "reorder_last",
     "check_order_status", "cancel_order", "lookup_medicine_info", "decline_out_of_scope",
 }
 
@@ -71,8 +71,8 @@ gives symptom or medicine guidance must include, verbatim or nearly so: "This is
 general OTC guidance, not a medical diagnosis — consult a doctor if symptoms persist
 or worsen."
 
-TOOLS: You have exactly eight tools — lookup_symptom, get_saved_address,
-save_address, start_order, check_order_status, cancel_order,
+TOOLS: You have exactly nine tools — lookup_symptom, get_saved_address,
+save_address, start_order, reorder_last, check_order_status, cancel_order,
 lookup_medicine_info, decline_out_of_scope.
 lookup_symptom/start_order/lookup_medicine_info only operate on a fixed
 fever/cold catalog. If a user's symptom is not fever or cold, do NOT call
@@ -89,6 +89,11 @@ ORDER CANCELLATION: Only call cancel_order when the user has explicitly and
 clearly asked to cancel an order — never as a guess, and never in reaction
 to an unrelated complaint. Pass the order ID if they named one; otherwise
 pass an empty string to cancel their most recent order.
+
+REORDERING: If the user asks to reorder, order the same thing again, or
+order it/that again without naming a specific product, call reorder_last —
+never guess which past product they mean yourself. This goes through the
+same address confirmation flow as any other order.
 
 MULTIPLE SYMPTOMS: A user can describe more than one symptom at once (e.g.
 "nose block and high temperature" — congestion AND fever). If the
@@ -191,6 +196,11 @@ ORDER_INTENT_RE = re.compile(
 )
 
 CANCEL_INTENT_RE = re.compile(r"\bcancel\b", re.IGNORECASE)
+
+REORDER_INTENT_RE = re.compile(
+    r"\b(reorder|re-order|order (it|that|this|the same) again|same (thing|order) again|order again)\b",
+    re.IGNORECASE,
+)
 
 # Gates the decline_out_of_scope reversal's established-category fallback
 # (see wrap_tool_call) — a message has to actually read as a follow-up to
@@ -583,6 +593,15 @@ def _build_tools(session_id: str) -> list:
         return tools.start_order(product_id, session_id, quantity)
 
     @tool
+    def reorder_last(quantity: int = 1) -> str:
+        """Re-order the same product from the user's most recent past order —
+        call this when the user asks to "reorder", "order that again", or
+        "order the same thing again" without naming a specific product. This
+        goes through the exact same flow as start_order (still asks to
+        confirm/provide a shipping address, never completes silently)."""
+        return tools.reorder_last(session_id, quantity)
+
+    @tool
     def check_order_status() -> str:
         """Look up the user's past orders (order ID, product, quantity, total,
         shipping address) to answer questions like "did my order go through",
@@ -623,7 +642,7 @@ def _build_tools(session_id: str) -> list:
         return "declined — told the user this is out of scope"
 
     return [
-        lookup_symptom, get_saved_address, save_address, start_order,
+        lookup_symptom, get_saved_address, save_address, start_order, reorder_last,
         check_order_status, cancel_order, lookup_medicine_info, decline_out_of_scope,
     ]
 
@@ -785,6 +804,41 @@ class _GuardrailMiddleware(AgentMiddleware):
                 elif "error" not in parsed_order:
                     self.turn_state["deferred_order"] = parsed_order
                 if parsed_order.get("email_sent"):
+                    self.turn_state["real_email_sent"] = True
+                return response
+
+            if name == "reorder_last":
+                # Same never-trust-the-model pattern as blocked_premature_order/
+                # blocked_unconfirmed_cancel — only actually reorder when this
+                # message itself asks to. Result shape matches start_order's
+                # exactly (reorder_last delegates straight to it), so the
+                # rest of this branch mirrors start_order's parsing.
+                if not (user_text and REORDER_INTENT_RE.search(user_text)):
+                    _log_guard(session_id, "blocked_unconfirmed_reorder", f"{args}")
+                    result = json.dumps({
+                        "order_placed": False,
+                        "message": (
+                            "The user has not clearly asked to reorder something "
+                            "this message — do not call reorder_last. Ask them to "
+                            "confirm they want to reorder their last order, then "
+                            "stop without calling any tool this turn."
+                        ),
+                    })
+                    return ToolMessage(content=result, tool_call_id=call_id, name=name)
+
+                response = handler(request)
+                _log_tool_call(session_id, name, args, response.content)
+                try:
+                    parsed_reorder = json.loads(response.content)
+                except (TypeError, ValueError):
+                    parsed_reorder = {}
+                if parsed_reorder.get("order_placed"):
+                    self.turn_state["real_order_placed"] = True
+                    self.turn_state["completed_order"] = parsed_reorder
+                    store.clear_last_recommended_product(session_id)
+                elif "error" not in parsed_reorder:
+                    self.turn_state["deferred_order"] = parsed_reorder
+                if parsed_reorder.get("email_sent"):
                     self.turn_state["real_email_sent"] = True
                 return response
 
