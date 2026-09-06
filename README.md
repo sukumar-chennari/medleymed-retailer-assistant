@@ -98,12 +98,16 @@ To stop the server, press `Ctrl+C` in that terminal (or `pkill -f "uvicorn app.m
 checks, order/cancellation confirmation templates, leaked-tool-name
 detection); `tests/test_tools.py` covers the pure symptom-classification
 logic in `app/tools.py`; `tests/test_retrieval.py` covers the per-product
-matching logic in `app/retrieval.py`; and `tests/test_store.py` covers
-`app/store.py`'s persistence layer (orders, cancellation, addresses,
-session state, metrics aggregation) against an isolated temp database
-(see `tests/conftest.py`'s `isolated_db` fixture) rather than the real
-`app/data/app.db` the live demo uses. No LLM or live server needed, runs
-in under a second:
+matching logic in `app/retrieval.py`; `tests/test_data_ingest.py` covers
+the knowledge-base chunking logic in `app/data_ingest.py`; `tests/test_store.py`
+covers `app/store.py`'s persistence layer (orders, cancellation, addresses,
+session state, metrics aggregation); and `tests/test_main.py` covers the
+FastAPI routes in `app/main.py` that don't need a live LLM call
+(`/health`, `/api/dashboard`, `/api/catalog`, `/api/metrics`,
+`/api/feedback`) — the DB-touching files all run against an isolated temp
+database (see `tests/conftest.py`'s `isolated_db` fixture) rather than the
+real `app/data/app.db` the live demo uses. No LLM or live server needed,
+runs in a couple seconds:
 
 ```bash
 python -m pytest tests/ -v
