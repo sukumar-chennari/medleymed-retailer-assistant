@@ -284,7 +284,7 @@
 
     <!-- Tools -->
     <rect x="130" y="566" width="340" height="60" rx="8" fill="none" stroke="currentColor" stroke-width="1.4"/>
-    <text x="300" y="587" text-anchor="middle" font-weight="600">6 tools</text>
+    <text x="300" y="587" text-anchor="middle" font-weight="600">9 tools</text>
     <text x="300" y="603" text-anchor="middle" class="mono" font-size="10" opacity="0.75">lookup_symptom &#183; get/save_address &#183; start_order</text>
     <text x="300" y="616" text-anchor="middle" class="mono" font-size="10" opacity="0.75">lookup_medicine_info &#183; decline_out_of_scope</text>
 
@@ -372,7 +372,7 @@
 <ol class="steps">
   <li><div><b>Message arrives</b> at <code>/api/chat</code>.<span class="detail">Text, or an image (routed to Gemini first — see below).</span></div></li>
   <li><div><b>Dispatch checks pending state first.</b><span class="detail">Is there a clarifying question awaiting an answer, an address/email being collected, or a bare selection ("2", "last one") against a just-shown list? If so, resolve it in plain Python — the model is never called.</span></div></li>
-  <li><div><b>No match &#8594; build the agent fresh.</b><span class="detail">A new set of 6 tools and a new <code>GuardrailMiddleware</code> instance are constructed, closing over this turn's <code>session_id</code>, raw user text, and grounding state.</span></div></li>
+  <li><div><b>No match &#8594; build the agent fresh.</b><span class="detail">A new set of 9 tools and a new <code>GuardrailMiddleware</code> instance are constructed, closing over this turn's <code>session_id</code>, raw user text, and grounding state.</span></div></li>
   <li><div><b>ChatOllama decides</b> whether to answer directly or call a tool.<span class="detail">System prompt + full conversation history + the injected catalog hint (if the text names a symptom).</span></div></li>
   <li><div><b><code>wrap_tool_call</code> intercepts before execution.</b><span class="detail">A premature order, a hallucinated category switch, a misrouted info-question, or an incorrect decline can all be blocked, corrected, or redirected here — the underlying tool may never even run.</span></div></li>
   <li><div><b>Tool runs, result feeds back to the model.</b><span class="detail">Loops up to ~6 rounds. <code>lookup_medicine_info</code> calls into the RAG subsystem; <code>save_address</code>/<code>start_order</code> write through <code>store.py</code>.</span></div></li>
