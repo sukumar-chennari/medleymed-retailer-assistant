@@ -766,6 +766,28 @@ already-real historical data, not asserting a brand new action.
 confirmation from a deterministic template instead of the model's own
 phrasing, the same way `start_order`'s success path already did.
 
+**Q: Give me an example of a bug that writing a unit test found, rather than live testing.**
+A: Yes — this one inverted the usual order (normally a live bug gets fixed,
+*then* pinned as a test). Writing a test asserting `_needs_clarification("I
+have a dry cough")` returns `None` (type already given, shouldn't need to
+ask again) failed unexpectedly: it actually returned the generic "cold"
+clarifying question. Root cause: "cough" classifies into the "cold"
+category too (it's a cold sub-symptom), so once cough's own dry/wet
+qualifier is satisfied, the loop fell through and matched "cold"'s
+separate age qualifier — which wasn't mentioned — and asked a generic
+age question that, if answered "adult," rendered the full 5-product cold
+list instead of specifically the dry-cough product the user already named.
+(Answering "child" happened to still land correctly, by coincidence — cold's
+child branch is col-006, itself a cough+cold combo.) This is the third
+distinct bug from the same root cause (cough overlapping with the broader
+"cold" category) — after the SECTION_BOOST cross-catalog fix (section 5)
+and the original cough+age composition fix (this section). Fixed by
+encoding the already-known cough type into the pending trigger itself
+(`"cold:cough_dry"`) so `resolve_clarification` can narrow correctly once
+age is answered, instead of losing that qualifier the moment the "cold"
+trigger takes over. Verified live for all four combinations (dry/wet ×
+child/adult) before writing this up.
+
 **Q: Would a bigger model (GPT-4-class) have avoided all of these?**
 A: Probably fewer of them, but not zero, and that's somewhat beside the
 point for this project's constraint (free/local only). More importantly:

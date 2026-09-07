@@ -387,6 +387,19 @@ def _needs_clarification(source_text: str) -> tuple[str, str] | None:
                 age = _detect_age(s)
                 if age:
                     trigger = f"cough:{age}"
+            elif trigger == "cold" and "cough" in s:
+                # Real bug: "I have a dry cough" classifies as "cold" (cough
+                # is a cold sub-symptom) and has no age mentioned, so this
+                # branch used to fire the plain cold-age question — losing
+                # the "dry" qualifier the message already gave, so an
+                # "adult" answer showed all 5 generic cold products instead
+                # of specifically the dry-cough one. Encoding the known
+                # cough type into the trigger lets resolve_clarification
+                # narrow correctly once age is answered (see
+                # _resolve_cold_with_known_cough_type).
+                cough_type = _detect_cough_type(s)
+                if cough_type:
+                    trigger = f"cold:cough_{cough_type}"
             return trigger, rule["question"]
     return None
 
@@ -410,6 +423,13 @@ def _render_products(products: list[dict], session_id: str) -> str:
     return "\n".join(lines)
 
 
+_NO_PEDIATRIC_WET_COUGH_REPLY = (
+    "We don't have a product for a child's wet/productive cough — "
+    "I'd recommend checking with a pharmacist or pediatrician instead. "
+    "Is there anything else I can help with?"
+)
+
+
 def _resolve_child_cough(branch: dict, session_id: str) -> str:
     """A child's cough always resolves against col-006 (the pediatric
     cough+cold combo, itself a dry-cough formulation) or a decline — never
@@ -418,11 +438,32 @@ def _resolve_child_cough(branch: dict, session_id: str) -> str:
     if "dry" in branch["answers"]:
         product = store.find_product("col-006")
         return _render_products([product] if product else [], session_id)
-    return (
-        "We don't have a product for a child's wet/productive cough — "
-        "I'd recommend checking with a pharmacist or pediatrician instead. "
-        "Is there anything else I can help with?"
-    )
+    return _NO_PEDIATRIC_WET_COUGH_REPLY
+
+
+def _detect_cough_type(text_lower: str) -> str:
+    for branch in CLARIFYING_QUESTIONS["cough"]["branches"]:
+        if any(a in text_lower for a in branch["answers"]):
+            return branch["answers"][0]  # canonical "dry" or "wet"
+    return ""
+
+
+def _resolve_cold_with_known_cough_type(branch: dict, cough_type: str, session_id: str) -> str:
+    """The mirror image of _resolve_child_cough's composition problem: here
+    the cough TYPE was already known (from the original message) before the
+    generic "cold" age question was asked, encoded into the pending trigger
+    as "cold:cough_<type>" (see _needs_clarification). Without this, the
+    plain cold-trigger resolution below would answer "adult" with the full
+    5-product generic cold list, silently discarding the dry/wet qualifier
+    the user already gave — a real observed failure, not hypothetical."""
+    if "child" in branch["answers"]:
+        if cough_type == "wet":
+            return _NO_PEDIATRIC_WET_COUGH_REPLY
+        product = store.find_product("col-006")
+        return _render_products([product] if product else [], session_id)
+    product_id = "col-004" if cough_type == "dry" else "col-005"
+    product = store.find_product(product_id)
+    return _render_products([product] if product else [], session_id)
 
 
 def resolve_clarification(trigger: str, answer_text: str, session_id: str) -> str | None:
@@ -432,16 +473,22 @@ def resolve_clarification(trigger: str, answer_text: str, session_id: str) -> st
     (see run_turn), so the resolution doesn't get left to it either.
     Returns None if the answer doesn't clearly match either side, letting
     the caller fall through to a normal LLM turn instead of guessing.
-    trigger may carry an age suffix ("cough:child") — see _split_trigger."""
-    base_trigger, age = _split_trigger(trigger)
+    trigger may carry a suffix after ":" — either a known age ("cough:child",
+    see _split_trigger) or a known cough type ("cold:cough_dry", see
+    _resolve_cold_with_known_cough_type) — depending on which qualifier was
+    already given in the original message and which one this question is
+    actually asking for."""
+    base_trigger, suffix = _split_trigger(trigger)
     rule = CLARIFYING_QUESTIONS.get(base_trigger)
     if not rule:
         return None
     s = answer_text.lower()
     for branch in rule["branches"]:
         if any(a in s for a in branch["answers"]):
-            if base_trigger == "cough" and age == "child":
+            if base_trigger == "cough" and suffix == "child":
                 return _resolve_child_cough(branch, session_id)
+            if base_trigger == "cold" and suffix.startswith("cough_"):
+                return _resolve_cold_with_known_cough_type(branch, suffix.removeprefix("cough_"), session_id)
             if not branch["product_ids"]:
                 return branch["reply"]
             products = [p for p in (store.find_product(pid) for pid in branch["product_ids"]) if p]
