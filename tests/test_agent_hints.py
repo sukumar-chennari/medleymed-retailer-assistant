@@ -1,18 +1,21 @@
-"""Tests for the deterministic message-building/session-tracking helpers in
-app/agent.py that aren't part of the clarifying-question state machine
-covered by test_agent.py: _inject_catalog_hint (grounds a plain-text or
-image-description mention in real catalog data before the model ever sees
-it), _established_category, and _remember_products (both back the
-"don't trust the model to remember what category/products it just showed"
-guards documented throughout agent.py).
+"""Tests for the deterministic message-building/session-tracking/logging
+helpers in app/agent.py that aren't part of the clarifying-question state
+machine covered by test_agent.py: _inject_catalog_hint (grounds a
+plain-text or image-description mention in real catalog data before the
+model ever sees it), _established_category and _remember_products (back
+the "don't trust the model to remember what category/products it just
+showed" guards documented throughout agent.py), and _log_guard/
+_log_tool_call (the two functions that turn "we have guardrails" from a
+doc claim into the real, queryable metrics_events rows the dashboard
+reads).
 
 Uses the isolated_db fixture (see conftest.py) since these read/write
-session state through store.py.
+session state and metrics through store.py.
 """
 
 import pytest
 
-from app import agent
+from app import agent, store
 
 pytestmark = pytest.mark.usefixtures("isolated_db")
 
@@ -67,16 +70,56 @@ class TestEstablishedCategory:
 
 class TestRememberProducts:
     def test_stores_products_from_a_matched_result(self):
-        from app import store
-
         agent._remember_products("s1", '{"matched": true, "products": [{"id": "fev-001"}]}')
         assert store.get_last_products("s1") == [{"id": "fev-001"}]
 
     def test_does_not_store_anything_for_an_unmatched_result(self):
-        from app import store
-
         agent._remember_products("s1", '{"matched": false, "message": "no match"}')
         assert store.get_last_products("s1") is None
 
     def test_invalid_json_does_not_raise(self):
         agent._remember_products("s1", "not valid json")  # must not raise
+
+
+class TestRenderProducts:
+    def test_single_product_asks_to_order_and_remembers_it_as_recommended(self):
+        product = store.find_product("fev-001")
+        reply = agent._render_products([product], "s1")
+        assert "Would you like to order this?" in reply
+        assert product["name"] in reply
+        assert store.get_last_recommended_product("s1") == "fev-001"
+        assert store.get_last_products("s1") == [product]
+
+    def test_multiple_products_lists_them_without_a_single_recommendation(self):
+        products = [store.find_product("fev-001"), store.find_product("fev-002")]
+        reply = agent._render_products(products, "s1")
+        assert "Which one would you like to try?" in reply
+        assert "fev-001" in reply and "fev-002" in reply
+        assert store.get_last_recommended_product("s1") is None
+        assert store.get_last_products("s1") == products
+
+    def test_every_reply_includes_the_disclaimer(self):
+        from app import guardrails
+
+        reply = agent._render_products([store.find_product("fev-001")], "s1")
+        assert guardrails.DISCLAIMER in reply
+
+
+class TestLogGuardAndLogToolCall:
+    def test_log_guard_writes_a_queryable_guardrail_event(self):
+        agent._log_guard("s1", "blocked_premature_order", "some detail")
+        summary = store.get_metrics_summary()
+        counts = {row["name"]: row["count"] for row in summary["guardrail_counts"]}
+        assert counts["blocked_premature_order"] == 1
+        assert summary["recent_guardrail_events"][0]["detail"] == "some detail"
+
+    def test_log_guard_without_detail_still_logs(self):
+        agent._log_guard("s1", "blocked_unconfirmed_cancel")
+        summary = store.get_metrics_summary()
+        assert summary["guardrail_total"] == 1
+
+    def test_log_tool_call_writes_a_queryable_tool_call_event(self):
+        agent._log_tool_call("s1", "start_order", {"product_id": "fev-001"}, "{}")
+        summary = store.get_metrics_summary()
+        counts = {row["name"]: row["count"] for row in summary["tool_call_counts"]}
+        assert counts["start_order"] == 1
