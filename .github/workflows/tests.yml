@@ -24,7 +24,11 @@ jobs:
       # Only the embedding model is needed here — importing app.tools pulls
       # in app.retrieval, which builds/loads the RAG index at import time
       # (see retrieval.py's _load_collection). The chat model (llama3.2)
-      # isn't needed since these tests never touch app.agent.
+      # isn't needed since none of these tests call the real agent.run_turn
+      # loop (that needs a live, nondeterministic LLM call and stays in the
+      # manual/live-testing category — see DEMO_QA_PREP.md's evaluation
+      # section) even though some of them do import app.agent directly to
+      # exercise its deterministic, non-LLM helper functions.
       - name: Install Ollama and pull the embedding model
         run: |
           curl -fsSL https://ollama.com/install.sh | sh
@@ -35,5 +39,5 @@ jobs:
           done
           ollama pull nomic-embed-text
 
-      - name: Run tests
-        run: python -m pytest tests/ -v
+      - name: Run tests with coverage
+        run: python -m pytest --cov=app --cov-report=term-missing tests/ -v

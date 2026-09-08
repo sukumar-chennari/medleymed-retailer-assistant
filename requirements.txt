@@ -9,4 +9,5 @@ langchain
 langchain-core
 langchain-ollama
 pytest
+pytest-cov
 httpx

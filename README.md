@@ -93,25 +93,33 @@ To stop the server, press `Ctrl+C` in that terminal (or `pkill -f "uvicorn app.m
 
 ## Tests
 
-`tests/test_guardrails.py` covers the deterministic safety-net logic in
-`app/guardrails.py` (greeting/pleasantry handling, unverified-completion
-checks, order/cancellation confirmation templates, leaked-tool-name
-detection); `tests/test_tools.py` covers the pure symptom-classification
-logic in `app/tools.py`; `tests/test_retrieval.py` covers the per-product
-matching logic in `app/retrieval.py`; `tests/test_data_ingest.py` covers
-the knowledge-base chunking logic in `app/data_ingest.py`; `tests/test_store.py`
-covers `app/store.py`'s persistence layer (orders, cancellation, addresses,
-session state, metrics aggregation); and `tests/test_main.py` covers the
-FastAPI routes in `app/main.py` that don't need a live LLM call
-(`/health`, `/api/dashboard`, `/api/catalog`, `/api/metrics`,
-`/api/feedback`) — the DB-touching files all run against an isolated temp
-database (see `tests/conftest.py`'s `isolated_db` fixture) rather than the
-real `app/data/app.db` the live demo uses. No LLM or live server needed,
-runs in a couple seconds:
+`tests/` covers every deterministic, non-LLM part of the app — one file per
+module (`test_guardrails.py`, `test_tools.py`, `test_retrieval.py`,
+`test_data_ingest.py`, `test_agent.py`/`test_agent_hints.py`,
+`test_catalog_integrity.py`, `test_main.py`) — plus `test_store.py` for
+`app/store.py`'s own persistence layer. Anything touching the database
+runs against an isolated temp DB (see `tests/conftest.py`'s `isolated_db`
+fixture), never the real `app/data/app.db` the live demo uses. No LLM or
+live server needed, runs in a couple seconds:
 
 ```bash
 python -m pytest tests/ -v
 ```
+
+To see coverage (which lines are actually exercised, module by module):
+
+```bash
+python -m pytest --cov=app --cov-report=term-missing tests/
+```
+
+`.coveragerc` excludes `app/rag_eval.py` from that report — it's a
+standalone script run directly (`python -m app.rag_eval`), not application
+code these tests exercise; its own methodology is the golden-query eval
+below, not something meant to have unit tests. Everything else genuinely
+needing a live LLM call (`run_turn`, the LangChain tool wrappers,
+`_GuardrailMiddleware`) is intentionally left uncovered here and stays in
+the manual/live-testing category described below — an LLM reply is
+nondeterministic enough that asserting on exact text would be flaky.
 
 This doesn't replace `python -m app.rag_eval`, which needs the real agent
 and knowledge base and checks a different thing (retrieval/answer quality

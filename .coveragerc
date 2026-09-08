@@ -1,0 +1,8 @@
+[run]
+# rag_eval.py is a standalone script run directly (`python -m app.rag_eval`),
+# not application code exercised by pytest — its own methodology IS the
+# golden-query eval, not something meant to have unit tests. Omitting it here
+# keeps the coverage number honest about what these tests actually check,
+# rather than penalizing pytest for not covering a different kind of tool.
+omit =
+    app/rag_eval.py

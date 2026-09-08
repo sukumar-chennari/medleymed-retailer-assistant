@@ -1,3 +1,4 @@
+import contextlib
 import json
 import sqlite3
 from pathlib import Path
@@ -11,15 +12,31 @@ _catalog_by_id: dict[str, dict] = {p["id"]: p for p in _catalog}
 _catalog_by_id_normalized: dict[str, dict] = {p["id"].strip().lower(): p for p in _catalog}
 
 
-def _connect() -> sqlite3.Connection:
+@contextlib.contextmanager
+def _connect():
     """A fresh short-lived connection per call rather than one shared
     connection — FastAPI's sync routes run in a thread pool, and sqlite3
     connections aren't safe to share across threads. SQLite itself already
     serializes writes, and this app's traffic is a single live demo user,
-    so the per-call connection cost is irrelevant here."""
+    so the per-call connection cost is irrelevant here.
+
+    A plain sqlite3.Connection used as `with conn:` only commits/rolls back
+    on exit — it never closes the connection, a well-known gotcha that left
+    every one of these to the garbage collector (surfaced as a
+    ResourceWarning per test once pytest-cov's GC behavior made it visible).
+    Wrapping it as a real context manager here means every existing
+    `with _connect() as conn:` call site gets the same commit/rollback
+    semantics as before, plus an actual close(), with no call-site changes."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    return conn
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def _init_db() -> None:
