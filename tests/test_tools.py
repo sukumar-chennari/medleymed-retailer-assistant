@@ -22,6 +22,11 @@ class TestClassifyCategories:
     def test_cold_only(self):
         assert tools.classify_categories("I have a runny nose") == ["cold"]
 
+    def test_exact_match_shortcuts(self):
+        assert tools.classify_categories("fever") == ["fever"]
+        assert tools.classify_categories("cold") == ["cold"]
+        assert tools.classify_categories("  Cold  ") == ["cold"]
+
     def test_both_categories_in_one_message(self):
         # Both must come back, not just whichever matched first — see
         # _category_hit's own docstring for the bug this covers.
