@@ -93,14 +93,19 @@ To stop the server, press `Ctrl+C` in that terminal (or `pkill -f "uvicorn app.m
 
 ## Tests
 
-`tests/` covers every deterministic, non-LLM part of the app — one file per
-module (`test_guardrails.py`, `test_tools.py`, `test_retrieval.py`,
-`test_data_ingest.py`, `test_agent.py`/`test_agent_hints.py`,
-`test_catalog_integrity.py`, `test_main.py`) — plus `test_store.py` for
-`app/store.py`'s own persistence layer. Anything touching the database
-runs against an isolated temp DB (see `tests/conftest.py`'s `isolated_db`
-fixture), never the real `app/data/app.db` the live demo uses. No LLM or
-live server needed, runs in a couple seconds:
+`tests/` covers every deterministic part of the app — one file per module
+(`test_guardrails.py`, `test_tools.py`, `test_data_ingest.py`,
+`test_agent.py`/`test_agent_hints.py`, `test_catalog_integrity.py`,
+`test_main.py`) — plus `test_store.py` for `app/store.py`'s own persistence
+layer. Anything touching the database runs against an isolated temp DB (see
+`tests/conftest.py`'s `isolated_db` fixture), never the real
+`app/data/app.db` the live demo uses. Needs no *chat* model — but
+`test_retrieval.py`/`test_retrieval_search.py` do call the real, local
+embedding model (`nomic-embed-text`) against the real, already-ingested
+knowledge base, since unlike the chat model that call has no sampling
+anywhere in it (verified: the same query returns byte-identical results
+every time), so it's safe to assert on exactly — not flaky the way an LLM
+*generation* would be. Runs in a couple seconds:
 
 ```bash
 python -m pytest tests/ -v
