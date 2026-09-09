@@ -15,6 +15,8 @@ described in DEMO_QA_PREP.md.
 
 import datetime
 
+import pytest
+
 from app import guardrails
 
 
@@ -80,6 +82,14 @@ class TestDeterministicPleasantryReply:
         for hour in (2, 8, 14, 19):
             reply = guardrails.deterministic_pleasantry_reply("hi", now=at(hour))
             assert reply == guardrails.GREETING_REPLY
+
+    def test_evening_bucket(self):
+        reply = guardrails.deterministic_pleasantry_reply("good evening", now=at(18))
+        assert reply.startswith("Good evening!")
+
+    def test_message_with_no_letters_returns_none(self):
+        assert guardrails.deterministic_pleasantry_reply("123") is None
+        assert guardrails.deterministic_pleasantry_reply("!!!") is None
 
 
 class TestCompletionClaims:
@@ -171,3 +181,79 @@ class TestLeakedToolIntent:
     def test_plain_reply_has_no_leak(self):
         text = "Sure! What's your shipping address so I can send that out?"
         assert guardrails.leaked_tool_intent(text, self.TOOL_NAMES) is None
+
+
+class TestReplyForDeferredOrder:
+    def test_needs_address_confirmation_quotes_the_address_on_file(self):
+        order = {"needs_address_confirmation": True, "address_on_file": "123 Main St, Springfield"}
+        reply = guardrails.reply_for_deferred_order(order)
+        assert "123 Main St, Springfield" in reply
+        assert "ship to this address" in reply
+
+    def test_no_address_on_file_asks_for_one(self):
+        order = {"needs_address_confirmation": False}
+        reply = guardrails.reply_for_deferred_order(order)
+        assert "shipping address" in reply.lower()
+        assert "123 Main St" not in reply
+
+    def test_clamp_note_is_appended_when_quantity_was_capped(self):
+        order = {"needs_address_confirmation": False, "quantity_clamped": True}
+        reply = guardrails.reply_for_deferred_order(order)
+        assert "capped" in reply.lower()
+
+    def test_no_clamp_note_when_quantity_was_not_capped(self):
+        order = {"needs_address_confirmation": False, "quantity_clamped": False}
+        reply = guardrails.reply_for_deferred_order(order)
+        assert "capped" not in reply.lower()
+
+
+class TestRecoverLeakedLookup:
+    def test_recovers_a_real_matched_symptom(self):
+        # The leaked JSON still names the real symptom the model meant to
+        # look up — recovering it (rather than a dead-end "please rephrase")
+        # is the whole point of this function.
+        leaked = 'I\'ll call lookup_symptom with {"symptom": "fever"} now.'
+        result = guardrails.recover_leaked_lookup(leaked)
+        assert result is not None
+        reply_text, result_json = result
+        assert "Would you like to order one of these?" in reply_text
+        assert "fev-001" in result_json or "fev-" in reply_text
+
+    def test_unmatched_symptom_returns_the_out_of_scope_reply(self):
+        leaked = '{"symptom": "a broken leg"}'
+        reply_text, _ = guardrails.recover_leaked_lookup(leaked)
+        assert reply_text == guardrails.OUT_OF_SCOPE_REPLY
+
+    def test_no_symptom_pattern_returns_none(self):
+        assert guardrails.recover_leaked_lookup("I'll call start_order now.") is None
+
+
+@pytest.mark.usefixtures("isolated_db")
+class TestRememberRecommendedProduct:
+    def test_remembers_a_product_named_by_id(self):
+        from app import store
+
+        guardrails.remember_recommended_product("s1", "Paracetamol 500mg Tablets (fev-001) would be a good fit.")
+        assert store.get_last_recommended_product("s1") == "fev-001"
+
+    def test_remembers_a_product_named_only_by_full_catalog_name(self):
+        from app import store
+
+        # Real bug fix: a reply naming the product only by its human-
+        # readable name (no id) used to leave this blind, and a later "yes"
+        # fell through to the model's own memory, which ordered a
+        # *different* product than the one actually shown.
+        guardrails.remember_recommended_product("s1", "Paracetamol Extra Strength 650mg would be a good fit.")
+        assert store.get_last_recommended_product("s1") == "fev-002"
+
+    def test_multiple_products_mentioned_is_too_ambiguous_to_remember(self):
+        from app import store
+
+        guardrails.remember_recommended_product("s1", "Options: fev-001 or fev-002, either would work.")
+        assert store.get_last_recommended_product("s1") is None
+
+    def test_no_product_mentioned_remembers_nothing(self):
+        from app import store
+
+        guardrails.remember_recommended_product("s1", "Could you tell me more about your symptoms?")
+        assert store.get_last_recommended_product("s1") is None
