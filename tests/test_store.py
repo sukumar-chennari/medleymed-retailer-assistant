@@ -10,6 +10,7 @@ that the dashboard reads.
 """
 
 import json
+import sqlite3
 
 import pytest
 
@@ -142,3 +143,94 @@ class TestMetrics:
         assert events[0]["name"] == "second_event"
         assert events[0]["detail"] == "newest"
         assert events[1]["name"] == "first_event"
+
+
+class TestFindProduct:
+    def test_empty_string_returns_none(self):
+        assert store.find_product("") is None
+
+
+class TestNextOrderIdResilience:
+    def test_ignores_a_malformed_order_id_when_computing_the_next_one(self):
+        # Defensive path in _next_order_id: parses the numeric suffix of
+        # every existing order_id and must not crash if one doesn't match
+        # the expected "ord-NNNN" shape.
+        with store._connect() as conn:
+            conn.execute(
+                "INSERT INTO orders (order_id, user_id, product_id, product_name, price_usd, "
+                "quantity, total_price_usd, address) VALUES ('not-a-real-id', 'demo_user', "
+                "'fev-001', 'Paracetamol', 4.99, 1, 4.99, '1 Test Way')"
+            )
+        order = store.create_order(user_id="demo_user", product_id="fev-001", address="1 Test Way")
+        assert order["order_id"] == "ord-0001"
+
+
+class TestSessionStateExtended:
+    def test_pending_address_confirmation_round_trip(self):
+        assert store.get_pending_address_confirmation("s1") is None
+        store.set_pending_address_confirmation("s1", "fev-001", quantity=2)
+        assert store.get_pending_address_confirmation("s1") == {"product_id": "fev-001", "quantity": 2}
+        store.clear_pending_address_confirmation("s1")
+        assert store.get_pending_address_confirmation("s1") is None
+
+    def test_pending_email_round_trip(self):
+        assert store.get_pending_email("s1") is None
+        store.set_pending_email("s1", "ord-0001")
+        assert store.get_pending_email("s1") == "ord-0001"
+        store.clear_pending_email("s1")
+        assert store.get_pending_email("s1") is None
+
+    def test_last_recommended_product_round_trip(self):
+        assert store.get_last_recommended_product("s1") is None
+        store.set_last_recommended_product("s1", "fev-001")
+        assert store.get_last_recommended_product("s1") == "fev-001"
+        store.clear_last_recommended_product("s1")
+        assert store.get_last_recommended_product("s1") is None
+
+    def test_session_messages_round_trip(self):
+        assert store.get_session_messages("s1") == []
+        messages = [{"role": "user", "content": "hi"}]
+        store.save_session_messages("s1", messages)
+        assert store.get_session_messages("s1") == messages
+
+
+class TestSchemaMigration:
+    def test_status_column_is_added_to_a_pre_existing_orders_table(self, tmp_path, monkeypatch):
+        # Simulates a demo DB created before the "status" column existed
+        # (see the migration comment in store._init_db) — CREATE TABLE IF
+        # NOT EXISTS alone wouldn't add it to an already-existing table.
+        old_db_path = tmp_path / "pre_migration.db"
+        monkeypatch.setattr(store, "DB_PATH", old_db_path)
+        with sqlite3.connect(old_db_path) as conn:
+            conn.execute(
+                """
+                CREATE TABLE orders (
+                    order_id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    product_id TEXT NOT NULL,
+                    product_name TEXT NOT NULL,
+                    price_usd REAL NOT NULL,
+                    quantity INTEGER NOT NULL,
+                    total_price_usd REAL NOT NULL,
+                    address TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO orders (order_id, user_id, product_id, product_name, price_usd, "
+                "quantity, total_price_usd, address) VALUES ('ord-0001', 'demo_user', 'fev-001', "
+                "'Paracetamol', 4.99, 1, 4.99, '1 Test Way')"
+            )
+        store._init_db()
+        assert store.get_order("ord-0001")["status"] == "placed"
+
+
+class TestConnectRollsBackOnException:
+    def test_a_write_before_an_exception_is_not_persisted(self):
+        # Regression for the _connect() rewrite: confirms the rollback path
+        # (not just the happy commit-and-close path) actually works.
+        with pytest.raises(RuntimeError):
+            with store._connect() as conn:
+                conn.execute("UPDATE users SET name = 'should not persist' WHERE user_id = 'demo_user'")
+                raise RuntimeError("boom")
+        assert store.get_user("demo_user")["name"] != "should not persist"
