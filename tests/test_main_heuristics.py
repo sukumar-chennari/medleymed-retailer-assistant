@@ -161,11 +161,23 @@ class TestResolveBareSelection:
         assert main._resolve_bare_selection("2", None) is None
         assert main._resolve_bare_selection("2", []) is None
 
-    def test_bare_digit_matches_by_list_position(self):
+    def test_bare_digit_matches_by_product_id_suffix_first(self):
+        # "2" matches fev-002's numeric suffix directly, which happens to
+        # also be list position 2 here — see the next test for a case where
+        # the two disagree and the suffix match must win.
         assert main._resolve_bare_selection("2", self.PRODUCTS) == self.PRODUCTS[1]
+
+    def test_bare_digit_falls_back_to_list_position_when_no_suffix_matches(self):
+        # Neither col-004 nor col-005 has a suffix equal to 1 — "1" must
+        # still resolve, by plain list position, to the first item shown.
+        cold_products = [{"id": "col-004", "name": "Cough Suppressant Syrup"}, {"id": "col-005", "name": "Guaifenesin"}]
+        assert main._resolve_bare_selection("1", cold_products) == cold_products[0]
 
     def test_bare_digit_out_of_range_resolves_to_none(self):
         assert main._resolve_bare_selection("99", self.PRODUCTS) is None
+
+    def test_only_filler_words_resolves_to_none(self):
+        assert main._resolve_bare_selection("the item please", self.PRODUCTS) is None
 
     def test_ordinal_word_resolves_by_position(self):
         assert main._resolve_bare_selection("the second one", self.PRODUCTS) == self.PRODUCTS[1]
