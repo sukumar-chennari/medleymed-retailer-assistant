@@ -330,13 +330,3 @@ def lookup_medicine_info(query: str) -> str:
             "message": "No information found in our knowledge base for that.",
         })
     return json.dumps({"results": results})
-
-
-TOOL_FUNCTIONS = {
-    "lookup_symptom": lambda args: lookup_symptom(args.get("symptom", "")),
-    "get_saved_address": lambda args: get_saved_address(args.get("user_id", "demo_user")),
-    "save_address": lambda args: save_address(
-        args.get("user_id", "demo_user"), args.get("address", "")
-    ),
-    "lookup_medicine_info": lambda args: lookup_medicine_info(args.get("query", "")),
-}
