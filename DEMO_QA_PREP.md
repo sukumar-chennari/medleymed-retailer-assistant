@@ -167,10 +167,14 @@ section template).
 **Q: How do you keep the corpus in sync with the product catalog (`catalog.json`)?**
 A: Manually, by convention — the knowledge base filename matches the catalog
 product id (`fev-001.md` ↔ `fev-001` in `catalog.json`), and the doc's H1
-title matches the catalog product name. At this scale that's an acceptable
-manual contract; at real scale I'd generate a stub knowledge-base file
-automatically whenever a catalog product is added, and fail CI if one is
-missing.
+title matches the catalog product name. That manual contract is now backed
+by an automated check, not just a hope: `tests/test_catalog_integrity.py`
+(real CI, every push) asserts every catalog product has a matching
+knowledge-base file and vice versa — an orphaned or missing file fails the
+build the moment it's introduced, rather than silently under/over-covering
+the catalog. At a bigger scale I'd go further and generate the stub file
+automatically whenever a catalog product is added, rather than just
+flagging its absence.
 
 **Q: Is there any PII or real patient data in the corpus?**
 A: No — it's reference-only content (dosage/side-effects/warnings), not
@@ -851,21 +855,41 @@ including right after migrating from the flat-JSON/manual-cosine
 implementation to Chroma, and again after this SECTION_BOOST fix.
 
 **Q: How do you evaluate the agent/conversation layer, as opposed to pure retrieval?**
-A: Two layers now. `tests/test_guardrails.py` (`pytest`, 22 tests, no LLM
-needed, runs in under a second) covers the deterministic safety-net logic
-in `guardrails.py` — pleasantry/greeting detection, the unverified-
-completion claim checks, order/cancellation confirmation templates, and
-leaked-tool-name detection — including regression tests pinned to the
-exact real bugs found live (the "help"/"helo" fuzzy-match collision, the
-status-report false-positive). What's still manual, and worth naming
-honestly: anything that requires the actual LLM in the loop
-(`agent.run_turn` end-to-end — multi-symptom messages, clarifying
-questions, ordinal product selection, the full order flow) is validated
-through live, scripted `curl` sequences and browser testing after every
-change, treating each fixed bug as a permanent regression case re-run on
+A: Two layers now, and the first one grew a lot since it was first added.
+`pytest` (259 tests, runs in a couple seconds, `.github/workflows/tests.yml`
+runs it on every push/PR) covers every deterministic part of the app —
+`guardrails.py`, `store.py`, and `tools.py` are all at 100% line coverage;
+`main.py`'s pre-agent dispatch heuristics and order-completion functions
+(the address/email/bare-selection/affirmative-decline detection — real
+bug-history-laden code, previously only checked by hand) and
+`agent.py`'s clarifying-question state machine are covered too. Even
+`retrieval.search()` itself is in there — its embedding call has no
+sampling anywhere in it, so unlike the chat model it's fully
+deterministic and safe to assert on exactly. What's still manual, and
+worth naming honestly: anything needing the actual chat model's own
+generation (`agent.run_turn` end-to-end — multi-symptom messages, the
+full order flow through real replies) is validated through live,
+scripted `curl` sequences and browser testing after every change,
+treating each fixed bug as a permanent regression case re-run on
 subsequent changes. Systematic and repeated, but not automated — an LLM
-call is nondeterministic enough that a naive pytest assertion on exact
-reply text would be flaky.
+*generation* is nondeterministic enough that a naive pytest assertion on
+exact reply text would be flaky.
+
+**Q: Did writing all these tests ever find a bug pytest wasn't originally meant to find?**
+A: Yes, twice, both worth knowing cold. First: writing a test for the
+cough+cold clarifying-question logic (asserting `_needs_clarification("I
+have a dry cough")` returns `None` since the type was already given)
+failed — it actually returned the generic "cold" age question, losing the
+already-given "dry" qualifier, because cough classifies into the "cold"
+category too. A real bug, found by the test before it was ever reported
+live (see the dedicated Q&A earlier in this section). Second, unrelated to
+a bug in this app's own logic: adding `pytest-cov` surfaced a
+`ResourceWarning: unclosed database` on nearly every test — `sqlite3
+.Connection` used as `with conn:` only commits/rolls back on exit, it
+never actually closes the connection, a genuine Python gotcha that had
+every one of `store.py`'s database calls leaking a connection to the
+garbage collector. Fixed by making `_connect()` a real
+`@contextlib.contextmanager`.
 
 **Q: If you had more time, what would you add to evaluation?**
 A: An automated conversation-level eval set for the parts pytest can't
@@ -1033,13 +1057,31 @@ production agents use to catch quality regressions — not a full RLHF
 pipeline, which would be disproportionate at this scale.
 
 **Q: What other features got added after the initial core build?**
-A: `check_order_status` and `cancel_order` (tools 5 and 6 of 8, covered in
-section 7 and section 9's bug writeups); a client-side search box on the
-product catalog (filters by name/category/ingredient against the already-
-fetched catalog, no new endpoint — relevant now that the catalog grew to
-10 products); and the `pytest` suite covered in section 10. All of these
+A: `check_order_status`, `cancel_order`, and `reorder_last` (tools 5-7 of
+9, covered in section 7 and section 9's bug writeups — `reorder_last`
+resolves "order that again" to the most recent past order's product and
+delegates straight to `start_order`, so it gets the exact same deferred
+address-confirmation flow as any other order rather than a separate
+completion path); a client-side search box on the product catalog
+(filters by name/category/ingredient against the already-fetched
+catalog, no new endpoint — relevant now that the catalog grew to 10
+products); and the `pytest` suite covered in section 10. All of these
 followed the same loop as the original build: implement, verify live
 against the running app, run the full regression sweep, then commit.
+
+**Q: Is there CI, or does "tests pass" just mean "passed on my laptop"?**
+A: Real CI — `.github/workflows/tests.yml` runs the full `pytest` suite
+on every push and PR to `main`, not just locally. The interesting
+engineering wrinkle: importing `app.tools` pulls in `app.retrieval`,
+which builds/loads the RAG index at import time (see `retrieval.py`'s
+`_load_collection`) — so a bare `pip install` isn't enough for the test
+suite to even import cleanly in a fresh GitHub-hosted runner. The
+workflow installs Ollama and pulls `nomic-embed-text` before running
+pytest, verified by literally reproducing that exact scenario locally
+first (moved the real `chroma_db` cache and `kb_meta.json` aside,
+confirmed the suite still passes against a genuine cold-started
+rebuild, then restored them) rather than just hoping the CI environment
+would behave the same as a laptop with an already-built index.
 
 **Q: The order-cancellation feature changes real data — how did you avoid breaking the existing demo database?**
 A: `orders` gained a `status` column via an in-place `ALTER TABLE`,
