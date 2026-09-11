@@ -77,6 +77,25 @@ class TestLookupSymptom:
         assert "products" not in result
 
 
+class TestLookupMedicineInfo:
+    """This is a deterministic wrapper around retrieval.search (itself
+    already covered end-to-end in test_retrieval_search.py) — these tests
+    just confirm tools.lookup_medicine_info shapes that result correctly
+    at the tool-call boundary, using the real knowledge base."""
+
+    def test_matched_query_returns_real_results(self):
+        result = json.loads(tools.lookup_medicine_info("dosage for paracetamol 500mg"))
+        assert result["results"]
+        assert result["results"][0]["product"] == "Paracetamol 500mg Tablets"
+
+    def test_unmatched_query_returns_an_empty_result_with_a_message(self):
+        result = json.loads(tools.lookup_medicine_info("credit card refund policy"))
+        assert result == {
+            "results": [],
+            "message": "No information found in our knowledge base for that.",
+        }
+
+
 class TestClampQuantity:
     def test_normal_quantity_passes_through(self):
         assert tools._clamp_quantity(1) == (1, False)

@@ -15,6 +15,8 @@ real environment looks like.
 """
 
 import json
+import smtplib
+from unittest import mock
 
 import pytest
 
@@ -32,6 +34,48 @@ class TestSendConfirmationEmail:
     def test_mock_mode_reports_sent_without_a_real_smtp_call(self):
         result = json.loads(tools.send_confirmation_email("a@example.com", "order summary"))
         assert result == {"sent": True, "mode": "mock"}
+
+
+class TestSendConfirmationEmailRealSmtpPath:
+    """Exercises the branch send_confirmation_email takes when
+    config.SMTP_CONFIGURED is True — smtplib.SMTP itself is mocked out
+    entirely (never a real socket/network call), since a test suite must
+    never risk contacting a real mail server, let alone with this
+    machine's real live-demo credentials."""
+
+    def _configure_smtp(self, monkeypatch):
+        monkeypatch.setattr(config, "SMTP_CONFIGURED", True)
+        monkeypatch.setattr(config, "SMTP_HOST", "smtp.example.com")
+        monkeypatch.setattr(config, "SMTP_PORT", "587")
+        monkeypatch.setattr(config, "SMTP_USER", "sender@example.com")
+        monkeypatch.setattr(config, "SMTP_PASS", "secret")
+        monkeypatch.setattr(config, "SMTP_FROM_NAME", "MedleyMed Orders")
+
+    def test_successful_send(self, monkeypatch):
+        self._configure_smtp(monkeypatch)
+        fake_smtp = mock.MagicMock()
+        fake_smtp.__enter__ = mock.Mock(return_value=fake_smtp)
+        fake_smtp.__exit__ = mock.Mock(return_value=False)
+
+        with mock.patch("app.tools.smtplib.SMTP", return_value=fake_smtp) as mock_smtp_cls:
+            result = json.loads(tools.send_confirmation_email("a@example.com", "order summary"))
+
+        assert result == {"sent": True, "mode": "smtp"}
+        mock_smtp_cls.assert_called_once_with("smtp.example.com", 587, timeout=10)
+        fake_smtp.starttls.assert_called_once()
+        fake_smtp.login.assert_called_once_with("sender@example.com", "secret")
+        fake_smtp.send_message.assert_called_once()
+
+    def test_smtp_failure_is_caught_and_reported_not_raised(self, monkeypatch):
+        # An order should never fail just because email delivery did — see
+        # send_confirmation_email's own comment on this.
+        self._configure_smtp(monkeypatch)
+        with mock.patch("app.tools.smtplib.SMTP", side_effect=smtplib.SMTPConnectError(421, "connection refused")):
+            result = json.loads(tools.send_confirmation_email("a@example.com", "order summary"))
+
+        assert result["sent"] is False
+        assert result["mode"] == "error"
+        assert "error" in result
 
 
 class TestSavedAddress:
