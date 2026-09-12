@@ -15,7 +15,10 @@ products sharing a "distinctive" word) fails here instead of only
 surfacing live in a chat reply.
 """
 
-from app import retrieval
+import json
+from unittest import mock
+
+from app import data_ingest, retrieval
 
 
 class FakeCollection:
@@ -99,3 +102,72 @@ class TestIdentifySingleProduct:
 
     def test_generic_query_resolves_to_none(self):
         assert retrieval._identify_single_product("what's the weather today") is None
+
+
+class TestLoadCollection:
+    """_load_collection is the self-invalidating cache in front of the RAG
+    index — the actual correctness question here is "does it rebuild
+    exactly when it should," not "does build_index() work" (that needs a
+    live embedding call and is already exercised by CI's cold-start path,
+    see .github/workflows/tests.yml). So build_index and chromadb's client
+    are both mocked out here entirely: no real embedding call, no real
+    Chroma write, just verifying which branch each cache state takes.
+    Without this, a knowledge-base edit that silently failed to invalidate
+    the cache would serve stale embeddings indefinitely with nothing
+    catching it."""
+
+    def _mock_chroma_client(self, mock_client_cls, get_collection_result):
+        mock_client_cls.return_value.get_collection = mock.Mock(side_effect=get_collection_result) if isinstance(
+            get_collection_result, list
+        ) else mock.Mock(return_value=get_collection_result)
+
+    def test_no_cached_metadata_triggers_a_rebuild(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(data_ingest, "META_PATH", tmp_path / "kb_meta.json")
+        fake_collection = mock.Mock(name="fake_collection")
+        with mock.patch.object(data_ingest, "build_index") as mock_build, \
+                mock.patch("app.retrieval.chromadb.PersistentClient") as mock_client_cls:
+            self._mock_chroma_client(mock_client_cls, fake_collection)
+            result = retrieval._load_collection()
+        mock_build.assert_called_once()
+        assert result is fake_collection
+
+    def test_stale_content_hash_triggers_a_rebuild(self, monkeypatch, tmp_path):
+        meta_path = tmp_path / "kb_meta.json"
+        meta_path.write_text(json.dumps({"content_hash": "a-stale-hash-from-before-a-kb-edit"}))
+        monkeypatch.setattr(data_ingest, "META_PATH", meta_path)
+        fake_collection = mock.Mock(name="fake_collection")
+        with mock.patch.object(data_ingest, "build_index") as mock_build, \
+                mock.patch("app.retrieval.chromadb.PersistentClient") as mock_client_cls:
+            self._mock_chroma_client(mock_client_cls, fake_collection)
+            result = retrieval._load_collection()
+        mock_build.assert_called_once()
+        assert result is fake_collection
+
+    def test_matching_hash_but_missing_collection_triggers_a_rebuild(self, monkeypatch, tmp_path):
+        # Metadata says the cache should be valid, but the actual Chroma
+        # collection is gone (e.g. chroma_db/ deleted without also
+        # deleting kb_meta.json) — must still rebuild, not raise.
+        real_hash = data_ingest.compute_content_hash()
+        meta_path = tmp_path / "kb_meta.json"
+        meta_path.write_text(json.dumps({"content_hash": real_hash}))
+        monkeypatch.setattr(data_ingest, "META_PATH", meta_path)
+        fake_collection = mock.Mock(name="fake_collection")
+        with mock.patch.object(data_ingest, "build_index") as mock_build, \
+                mock.patch("app.retrieval.chromadb.PersistentClient") as mock_client_cls:
+            self._mock_chroma_client(mock_client_cls, [Exception("no such collection"), fake_collection])
+            result = retrieval._load_collection()
+        mock_build.assert_called_once()
+        assert result is fake_collection
+
+    def test_matching_hash_and_present_collection_skips_the_rebuild(self, monkeypatch, tmp_path):
+        real_hash = data_ingest.compute_content_hash()
+        meta_path = tmp_path / "kb_meta.json"
+        meta_path.write_text(json.dumps({"content_hash": real_hash}))
+        monkeypatch.setattr(data_ingest, "META_PATH", meta_path)
+        fake_collection = mock.Mock(name="fake_collection")
+        with mock.patch.object(data_ingest, "build_index") as mock_build, \
+                mock.patch("app.retrieval.chromadb.PersistentClient") as mock_client_cls:
+            self._mock_chroma_client(mock_client_cls, fake_collection)
+            result = retrieval._load_collection()
+        mock_build.assert_not_called()
+        assert result is fake_collection
