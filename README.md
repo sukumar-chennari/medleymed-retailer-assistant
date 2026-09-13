@@ -128,7 +128,16 @@ nondeterministic enough that asserting on exact text would be flaky.
 
 This doesn't replace `python -m app.rag_eval`, which needs the real agent
 and knowledge base and checks a different thing (retrieval/answer quality
-against golden queries, not guardrail correctness).
+against golden queries, not guardrail correctness) — or
+`python -m app.conversation_eval`, which drives scripted multi-turn
+conversations through the real `/api/chat` route (the actual pipeline,
+`main.py`'s pending-state dispatch chain together with the LLM's own
+tool-calling) and asserts on structural reply properties (contains "Order
+confirmed!" with a real order id, cites a real source, doesn't leak a
+tool name) robust to the model's own wording, rather than exact text.
+Runs against an isolated temp database, never the real demo data. Both of
+these are intentionally slow and excluded from CI, the same reasoning as
+above.
 
 `.github/workflows/tests.yml` runs this same suite on every push/PR to
 `main` — it installs Ollama and pulls `nomic-embed-text` first, since

@@ -181,6 +181,18 @@ INFO_QUESTION_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Found via conversation_eval.py, not a live report: the system prompt
+# instructs citing "(Source: fev-001.md § Dosage)" for every RAG-grounded
+# answer, but a real reply correctly used the retrieved dosage facts while
+# describing them only as "based on the product label ... in our knowledge
+# base" — grounded, not fabricated, but missing the actual citation the
+# instruction asked for. Rather than hope a stronger prompt fixes this
+# every time, after_agent deterministically appends the real
+# source/section pairs actually retrieved this turn (see
+# _track_retrieval/_GuardrailMiddleware.after_agent) whenever the model's
+# own reply has no "(Source:" citation in it at all.
+CITATION_RE = re.compile(r"\(Source:", re.IGNORECASE)
+
 # Catches an observed failure where merely describing a symptom for the
 # first time ("i have fever") produced an immediate start_order call and
 # skipped ever asking "would you like to order this?" — the catalog hint
@@ -968,16 +980,29 @@ class _GuardrailMiddleware(AgentMiddleware):
         by after_agent to append a visible confidence indicator to the
         reply, and logged to the metrics table for the dashboard's running
         average. This is the concrete "how relevant was what we retrieved"
-        number, computed from real cosine-similarity scores, not guessed."""
+        number, computed from real cosine-similarity scores, not guessed.
+
+        Also records the distinct (source, section) pairs actually
+        retrieved, in first-seen order — after_agent's deterministic
+        citation fallback needs the real ones, not anything the model
+        might name itself."""
         try:
             results = json.loads(result_json).get("results", [])
             scores = [r["score"] for r in results if "score" in r]
         except (TypeError, ValueError):
+            results = []
             scores = []
         if scores:
             top_score = max(scores)
             self.turn_state["retrieval_score"] = top_score
             store.log_metric_event(self.session_id, "retrieval", "lookup_medicine_info", value=top_score)
+        sources = []
+        for r in results:
+            pair = (r.get("source"), r.get("section"))
+            if all(pair) and pair not in sources:
+                sources.append(pair)
+        if sources:
+            self.turn_state["retrieval_sources"] = sources
 
     def after_agent(self, state, runtime) -> dict | None:
         last = state["messages"][-1]
@@ -1041,13 +1066,21 @@ class _GuardrailMiddleware(AgentMiddleware):
                 _log_guard(session_id, "unverified_completion_blocked", f"{reply_text!r}")
             final = guard_reply or reply_text
 
-            # Only append when the model's own reply stood untouched — a
-            # confidence number bolted onto a guard-overridden generic
-            # reply (or an order confirmation, a decline, etc.) wouldn't
-            # mean anything, since those aren't RAG-grounded answers.
-            retrieval_score = self.turn_state.get("retrieval_score")
-            if final == reply_text and retrieval_score is not None:
-                final = f"{final}\n\nRetrieval confidence: {round(retrieval_score * 100)}%"
+            # Only touch a reply that stood untouched by the guard above —
+            # a citation or confidence number bolted onto a guard-
+            # overridden generic reply (or an order confirmation, a
+            # decline, etc.) wouldn't mean anything, since those aren't
+            # RAG-grounded answers.
+            if final == reply_text:
+                retrieval_sources = self.turn_state.get("retrieval_sources")
+                if retrieval_sources and not CITATION_RE.search(final):
+                    citation = " ".join(f"(Source: {source} § {section})" for source, section in retrieval_sources)
+                    _log_guard(session_id, "citation_appended", f"added {citation!r} to {final!r}")
+                    final = f"{final}\n\n{citation}"
+
+                retrieval_score = self.turn_state.get("retrieval_score")
+                if retrieval_score is not None:
+                    final = f"{final}\n\nRetrieval confidence: {round(retrieval_score * 100)}%"
 
         return {"messages": [AIMessage(content=final, id=last.id)]}
 
@@ -1163,6 +1196,7 @@ def run_turn(
         "blocked_ungrounded_lookup": False,
         "declined_forced": False,
         "retrieval_score": None,
+        "retrieval_sources": None,
     }
 
     agent_tools = _build_tools(session_id)
