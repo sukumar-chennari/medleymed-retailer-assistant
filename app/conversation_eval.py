@@ -99,6 +99,68 @@ CONVERSATION_CASES = [
         ],
     },
     {
+        "name": "cancel_then_reorder",
+        # Real bug this pins, found by this exact case: "please cancel my
+        # order" right after an order was placed (with no email on file
+        # yet, so pending_email_order_id is set) used to be silently
+        # swallowed as "no, skip the confirmation email" — "cancel" is a
+        # generic decline word — and the real order was never touched. See
+        # main.py's _looks_like_order_cancellation.
+        "turns": [
+            {"text": "I have a dry cough", "checks": [("asks the clarifying question", lambda r: _contains_any(r, ["child", "adult"]))]},
+            {"text": "for myself", "checks": [("recommends the real product", lambda r: "Cough Suppressant" in r)]},
+            {"text": "yes", "checks": [("asks for a shipping address", lambda r: "shipping address" in r.lower())]},
+            {
+                "text": "123 Cancel Reorder Rd",
+                "checks": [("first order confirmed", lambda r: "Order confirmed!" in r and "ord-0001" in r)],
+            },
+            {
+                "text": "please cancel my order",
+                "checks": [
+                    ("actually cancels the real order, not the email offer", lambda r: "cancelled" in r.lower() and "ord-0001" in r),
+                ],
+            },
+            {
+                "text": "reorder that for me",
+                "checks": [
+                    ("confirms the address on file for the same product", lambda r: "Cancel Reorder Rd" in r),
+                ],
+            },
+            {
+                "text": "yes",
+                "checks": [
+                    ("second order confirmed with a new order id", lambda r: "Order confirmed!" in r and "ord-0002" in r),
+                    ("same product reordered", lambda r: "Cough Suppressant" in r),
+                ],
+            },
+        ],
+    },
+    {
+        "name": "bare_numeric_selection_from_a_product_list",
+        # Fully deterministic — proves main.py's _resolve_bare_selection
+        # dispatch is actually wired correctly end-to-end through the real
+        # endpoint, complementing the unit tests that exercise it in
+        # isolation (tests/test_main_heuristics.py).
+        "turns": [
+            {
+                "text": "I have a runny nose, just for myself",
+                "checks": [("shows a multi-product list", lambda r: "Which one would you like to try?" in r)],
+            },
+            {
+                "text": "2",
+                "checks": [
+                    ("selected a product and asks for an address, not 'which one'", lambda r: "shipping address" in r.lower()),
+                ],
+            },
+            {
+                "text": "123 Bare Selection Rd",
+                "checks": [
+                    ("confirms the order for the second listed product", lambda r: "Order confirmed!" in r and "Pseudoephedrine" in r),
+                ],
+            },
+        ],
+    },
+    {
         "name": "wet_cough_for_a_child_declines_safely",
         # Real, previously-shipped bug (see agent.py's _AGE_WORDS comment):
         # this used to recommend the ADULT expectorant to a child.
@@ -142,12 +204,18 @@ CONVERSATION_CASES = [
 
 
 def run_eval() -> tuple[int, int]:
-    _use_isolated_db()
     client = TestClient(main.app)
 
     passed = 0
     total = 0
     for case in CONVERSATION_CASES:
+        # A fresh isolated DB per case, not just once for the whole run —
+        # this is a single-demo-user app by design, so without this a
+        # later case would inherit the previous case's saved address/
+        # orders (real, correct behavior for one shared user across
+        # sessions — just not what each case's scripted turns assume
+        # starting from a blank slate).
+        _use_isolated_db()
         session_id = f"conversation-eval-{case['name']}"
         print(f"\n=== {case['name']} ===")
         for i, turn in enumerate(case["turns"], start=1):

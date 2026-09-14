@@ -150,6 +150,27 @@ class TestDeclines:
         assert not main._declines("yes please")
 
 
+class TestLooksLikeOrderCancellation:
+    def test_cancel_and_order_together_counts(self):
+        # Real bug this guards: found live via conversation_eval.py — this
+        # exact message used to be swallowed as "no, skip the confirmation
+        # email" (pending_email_order_id + _declines("cancel")) instead of
+        # ever reaching the real cancel_order tool.
+        assert main._looks_like_order_cancellation("please cancel my order")
+        assert main._looks_like_order_cancellation("can you cancel order ord-0002")
+
+    def test_bare_cancel_alone_does_not_count(self):
+        # Genuinely ambiguous with no other context — stays interpreted as
+        # declining whichever pending ask is actually in front of it.
+        assert not main._looks_like_order_cancellation("cancel")
+
+    def test_order_without_cancel_does_not_count(self):
+        assert not main._looks_like_order_cancellation("order fev-001")
+
+    def test_unrelated_decline_does_not_count(self):
+        assert not main._looks_like_order_cancellation("no thanks")
+
+
 class TestResolveBareSelection:
     PRODUCTS = [
         {"id": "fev-001", "name": "Paracetamol 500mg Tablets"},

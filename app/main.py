@@ -311,6 +311,18 @@ def _declines(text: str) -> bool:
     return any(w in DECLINE_WORDS for w in words)
 
 
+def _looks_like_order_cancellation(text: str) -> bool:
+    """"cancel" is in DECLINE_WORDS because "cancel that"/"cancel" alone is a
+    natural way to opt out of a pending email/address ask — but "cancel my
+    order" right after an order was just placed (pending_email_order_id
+    context) is almost never that; it's a request to actually cancel the
+    real order, which needs the agent's real cancel_order tool. Found via
+    conversation_eval.py: "please cancel my order" was silently swallowed
+    as "no, skip the confirmation email" and the order was never touched."""
+    words = set(re.findall(r"[a-z']+", text.lower()))
+    return "cancel" in words and "order" in words
+
+
 def _reply_for_start_order_result(order: dict) -> str:
     if "error" in order:
         return f"Sorry, {order['error']}"
@@ -412,7 +424,7 @@ def chat(req: ChatRequest):
             reply = _complete_pending_order(req.session_id, pending_product_id, text)
             messages.append({"role": "user", "content": text})
             messages.append({"role": "assistant", "content": reply})
-        elif pending_email_order_id and text and _declines(text):
+        elif pending_email_order_id and text and _declines(text) and not _looks_like_order_cancellation(text):
             store.clear_pending_email(req.session_id)
             reply = "No problem — the order's already confirmed without an email receipt. Anything else I can help with?"
             messages.append({"role": "user", "content": text})
