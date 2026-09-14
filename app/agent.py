@@ -273,10 +273,14 @@ def _remember_products(session_id: str, lookup_result_json: str) -> None:
 # products both split between adult and child formulations/dosing (fev-004
 # and col-006 are the pediatric options) — the wrong pick there is a real
 # dosing/formulation mismatch, not just a suboptimal one. Each "branch" maps
-# a set of answer words to either a fixed reply (e.g. "see a pharmacist", no
-# product fits) or a list of product_ids to recommend — one product renders
-# as a direct "would you like to order this?", more than one renders as a
-# normal multi-option list.
+# a set of answer words to a list of product_ids to recommend — one product
+# renders as a direct "would you like to order this?", more than one renders
+# as a normal multi-option list. A branch with no real product for that
+# answer (e.g. a child's wet cough) isn't expressed here as static reply
+# text — it's handled by a dedicated age/type-aware resolver function
+# (_resolve_child_cough, _resolve_cold_with_known_cough_type) instead, since
+# which product (if any) actually fits depends on more than this one
+# qualifier alone.
 # Extensible: add more entries here for other symptoms worth narrowing down
 # before recommending, following the same {qualifiers, question, branches} shape.
 CLARIFYING_QUESTIONS = {
@@ -501,8 +505,6 @@ def resolve_clarification(trigger: str, answer_text: str, session_id: str) -> st
                 return _resolve_child_cough(branch, session_id)
             if base_trigger == "cold" and suffix.startswith("cough_"):
                 return _resolve_cold_with_known_cough_type(branch, suffix.removeprefix("cough_"), session_id)
-            if not branch["product_ids"]:
-                return branch["reply"]
             products = [p for p in (store.find_product(pid) for pid in branch["product_ids"]) if p]
             return _render_products(products, session_id)
     return None

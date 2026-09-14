@@ -4,13 +4,16 @@ machine covered by test_agent.py: _inject_catalog_hint (grounds a
 plain-text or image-description mention in real catalog data before the
 model ever sees it), _established_category and _remember_products (back
 the "don't trust the model to remember what category/products it just
-showed" guards documented throughout agent.py), and _log_guard/
-_log_tool_call (the two functions that turn "we have guardrails" from a
-doc claim into the real, queryable metrics_events rows the dashboard
-reads).
+showed" guards documented throughout agent.py), _log_guard/_log_tool_call
+(the two functions that turn "we have guardrails" from a doc claim into
+the real, queryable metrics_events rows the dashboard reads), and
+describe_image (the Gemini vision call — mocked entirely here, same
+reasoning as test_tools_orders.py mocking smtplib.SMTP: never a real
+network/API call in a test suite, whether or not this machine's real
+.env has a real GEMINI_API_KEY configured).
 
-Uses the isolated_db fixture (see conftest.py) since these read/write
-session state and metrics through store.py.
+Uses the isolated_db fixture (see conftest.py) since most of these
+read/write session state and metrics through store.py.
 """
 
 import pytest
@@ -123,3 +126,38 @@ class TestLogGuardAndLogToolCall:
         summary = store.get_metrics_summary()
         counts = {row["name"]: row["count"] for row in summary["tool_call_counts"]}
         assert counts["start_order"] == 1
+
+
+class TestDescribeImage:
+    """_gemini_client is a module-level singleton set once at import time —
+    monkeypatched directly here so these tests behave the same regardless
+    of whether this machine's real .env has a real GEMINI_API_KEY."""
+
+    def test_no_client_configured_returns_a_fallback_message(self, monkeypatch):
+        monkeypatch.setattr(agent, "_gemini_client", None)
+        result = agent.describe_image("ZmFrZSBpbWFnZSBieXRlcw==", "image/jpeg")
+        assert "ask the user to type the medicine name" in result.lower()
+
+    def test_successful_call_returns_the_stripped_description(self, monkeypatch):
+        from unittest import mock
+
+        fake_client = mock.Mock()
+        fake_client.models.generate_content.return_value = mock.Mock(text="  Paracetamol 500mg Tablets  ")
+        monkeypatch.setattr(agent, "_gemini_client", fake_client)
+
+        result = agent.describe_image("ZmFrZSBpbWFnZSBieXRlcw==", "image/jpeg")
+
+        assert result == "Paracetamol 500mg Tablets"
+        fake_client.models.generate_content.assert_called_once()
+
+    def test_api_error_is_caught_and_reported_not_raised(self, monkeypatch):
+        from unittest import mock
+
+        fake_client = mock.Mock()
+        fake_client.models.generate_content.side_effect = RuntimeError("API unavailable")
+        monkeypatch.setattr(agent, "_gemini_client", fake_client)
+
+        result = agent.describe_image("ZmFrZSBpbWFnZSBieXRlcw==", "image/jpeg")
+
+        assert "could not be read" in result.lower()
+        assert "ask the user to type the medicine name" in result.lower()
