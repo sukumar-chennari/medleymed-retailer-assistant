@@ -206,3 +206,10 @@ class TestResolvePrequalifiedClarification:
 
     def test_message_with_no_qualifier_returns_none(self):
         assert agent._resolve_prequalified_clarification("I have a cough", "s1") is None
+
+    def test_fever_with_age_qualifier_in_the_same_message_resolves_directly(self):
+        # No "cough" involved — exercises the generic per-trigger loop at
+        # the end of the function, not the cough+age special case above it.
+        reply = agent._resolve_prequalified_clarification("my baby has a fever", "s1")
+        assert reply is not None
+        assert "Children's Paracetamol Syrup" in reply

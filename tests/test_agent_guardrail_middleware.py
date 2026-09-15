@@ -208,6 +208,13 @@ class TestReorderLast:
         assert turn_state["real_order_placed"] is True
         assert turn_state["completed_order"]["order_id"] == "ord-0002"
 
+    def test_email_sent_is_grounded_too(self):
+        turn_state = {}
+        mw = _middleware(user_text="reorder that", turn_state=turn_state)
+        handler = _handler_returning(json.dumps({"order_placed": True, "order_id": "ord-0002", "email_sent": True}))
+        mw.wrap_tool_call(_FakeRequest("reorder_last", {}), handler)
+        assert turn_state["real_email_sent"] is True
+
     def test_non_json_handler_response_does_not_raise(self):
         turn_state = {}
         mw = _middleware(user_text="reorder that", turn_state=turn_state)
@@ -273,6 +280,14 @@ class TestLookupMedicineInfo:
         mw.wrap_tool_call(_FakeRequest("lookup_medicine_info", {"query": "dosage"}), handler)
         assert turn_state["retrieval_score"] == 0.9
         assert turn_state["retrieval_sources"] == [("fev-001.md", "Dosage")]
+
+    def test_non_json_handler_response_does_not_raise(self):
+        turn_state = {}
+        mw = _middleware(session_id="s1", turn_state=turn_state)
+        handler = _handler_returning("not valid json")
+        mw.wrap_tool_call(_FakeRequest("lookup_medicine_info", {"query": "dosage"}), handler)
+        assert "retrieval_score" not in turn_state
+        assert "retrieval_sources" not in turn_state
 
 
 class TestCheckOrderStatus:
@@ -422,3 +437,52 @@ class TestAfterAgentStructuralOverrides:
         result = _after_agent(mw, "Your order has been placed.")
         assert result == guardrails.FAKE_COMPLETION_GUARD_REPLY
         assert "Retrieval confidence" not in result
+
+
+class TestInvokeAgentWithRetry:
+    """_invoke_agent_with_retry takes agent_graph as a plain parameter — a
+    fake with a scripted .invoke() is enough to test the retry logic
+    without ever needing a real agent graph or LLM."""
+
+    def test_succeeds_on_the_first_attempt(self):
+        calls = []
+        graph = SimpleNamespace(invoke=lambda payload, config: calls.append(1) or "result")
+        result = agent._invoke_agent_with_retry(graph, {}, {})
+        assert result == "result"
+        assert len(calls) == 1
+
+    def test_retries_once_after_a_transient_failure_then_succeeds(self):
+        attempts = {"n": 0}
+
+        def invoke(payload, config):
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                raise RuntimeError("transient Ollama failure")
+            return "result"
+
+        graph = SimpleNamespace(invoke=invoke)
+        result = agent._invoke_agent_with_retry(graph, {}, {})
+        assert result == "result"
+        assert attempts["n"] == 2
+
+    def test_raises_the_last_exception_if_both_attempts_fail(self):
+        def invoke(payload, config):
+            raise RuntimeError("still failing")
+
+        graph = SimpleNamespace(invoke=invoke)
+        with pytest.raises(RuntimeError, match="still failing"):
+            agent._invoke_agent_with_retry(graph, {}, {})
+
+    def test_a_recursion_limit_hit_is_never_retried(self):
+        from langgraph.errors import GraphRecursionError
+
+        attempts = {"n": 0}
+
+        def invoke(payload, config):
+            attempts["n"] += 1
+            raise GraphRecursionError("recursion limit reached")
+
+        graph = SimpleNamespace(invoke=invoke)
+        with pytest.raises(GraphRecursionError):
+            agent._invoke_agent_with_retry(graph, {}, {})
+        assert attempts["n"] == 1

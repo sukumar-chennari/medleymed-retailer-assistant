@@ -23,6 +23,25 @@ from app import agent, store
 pytestmark = pytest.mark.usefixtures("isolated_db")
 
 
+class TestBuildUserText:
+    def test_plain_text_with_no_image_passes_through_with_a_hint(self):
+        result = agent._build_user_text("I have a fever", None, None, "s1")
+        assert result.startswith("I have a fever")
+        assert "[Clarify:" in result  # fever always needs the child/adult question
+
+    def test_no_text_and_no_image_returns_empty(self):
+        assert agent._build_user_text("", None, None, "s1") == ""
+
+    def test_image_present_describes_it_and_injects_a_hint_from_the_description(self, monkeypatch):
+        monkeypatch.setattr(agent, "describe_image", lambda image_b64, media_type: "Paracetamol 500mg Tablets box")
+        result = agent._build_user_text("", "ZmFrZQ==", "image/jpeg", "s1")
+        assert "[Image analysis: Paracetamol 500mg Tablets box]" in result
+        # The description classifies as fever, which (same as plain text)
+        # needs the age clarifying question before any catalog hint.
+        assert "[Clarify:" in result
+        assert "child" in result.lower()
+
+
 class TestInjectCatalogHint:
     def test_info_question_appends_nothing(self):
         # Real bug this guards: the injected hint used to bias the model
