@@ -16,6 +16,8 @@ SECTION_BOOST, and the single-product filter — see retrieval.py's own
 comments for the full story on each.
 """
 
+from unittest import mock
+
 from app import retrieval
 
 
@@ -93,3 +95,21 @@ class TestSearchResultShape:
 
     def test_search_is_deterministic_across_repeated_calls(self):
         assert retrieval.search("dosage for paracetamol 500mg") == retrieval.search("dosage for paracetamol 500mg")
+
+
+class TestEmptyCollection:
+    def test_an_empty_collection_returns_nothing_without_calling_the_embedding_model(self, monkeypatch):
+        # _collection is a module-level singleton (the real, already-
+        # ingested one) — mocked here only for its .count(), never
+        # replacing the real collection, so no other test in this file is
+        # affected. The short-circuit happens before the embed call, so
+        # this also confirms no real network call is attempted either.
+        fake_collection = mock.Mock()
+        fake_collection.count.return_value = 0
+        monkeypatch.setattr(retrieval, "_collection", fake_collection)
+
+        with mock.patch.object(retrieval, "_client") as fake_client:
+            result = retrieval.search("dosage for paracetamol 500mg")
+
+        assert result == []
+        fake_client.embed.assert_not_called()
