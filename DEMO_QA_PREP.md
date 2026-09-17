@@ -855,25 +855,40 @@ including right after migrating from the flat-JSON/manual-cosine
 implementation to Chroma, and again after this SECTION_BOOST fix.
 
 **Q: How do you evaluate the agent/conversation layer, as opposed to pure retrieval?**
-A: Two layers now, and the first one grew a lot since it was first added.
-`pytest` (259 tests, runs in a couple seconds, `.github/workflows/tests.yml`
-runs it on every push/PR) covers every deterministic part of the app —
-`guardrails.py`, `store.py`, and `tools.py` are all at 100% line coverage;
-`main.py`'s pre-agent dispatch heuristics and order-completion functions
-(the address/email/bare-selection/affirmative-decline detection — real
-bug-history-laden code, previously only checked by hand) and
-`agent.py`'s clarifying-question state machine are covered too. Even
-`retrieval.search()` itself is in there — its embedding call has no
-sampling anywhere in it, so unlike the chat model it's fully
-deterministic and safe to assert on exactly. What's still manual, and
-worth naming honestly: anything needing the actual chat model's own
-generation (`agent.run_turn` end-to-end — multi-symptom messages, the
-full order flow through real replies) is validated through live,
-scripted `curl` sequences and browser testing after every change,
-treating each fixed bug as a permanent regression case re-run on
+A: Two layers now, and the first one grew far more than originally
+planned. `pytest` (354 tests, runs in a few seconds, `.github/workflows/
+tests.yml` runs it on every push/PR) covers **96% of the whole app** by
+line — `guardrails.py`, `store.py`, `tools.py`, and `retrieval.py` are all
+at 100%; `main.py` and `agent.py` are at 98% and 96%. The last one is the
+most interesting engineering story: `_GuardrailMiddleware` (every
+"blocked_X"/citation-append/leaked-tool-intent guard in the project),
+`run_turn`'s own deterministic short-circuits, and every `@tool` closure
+inside `_build_tools` all turned out to have zero dependency on the live
+chat model — `_GuardrailMiddleware.__init__` takes plain parameters, a
+`StructuredTool` is directly invokable via `.invoke({...})`, and
+`run_turn`'s pleasantry/clarification paths return before the LLM is ever
+touched. What's *actually* left uncovered is exactly one thing:
+`run_turn`'s own LLM-invoking body — the real token generation itself,
+which is validated through live, scripted `curl` sequences,
+`app/conversation_eval.py` (see below), and browser testing after every
+change, treating each fixed bug as a permanent regression case re-run on
 subsequent changes. Systematic and repeated, but not automated — an LLM
 *generation* is nondeterministic enough that a naive pytest assertion on
 exact reply text would be flaky.
+
+**Q: What's app/conversation_eval.py?**
+A: A second, separate eval script (`python -m app.conversation_eval`,
+excluded from CI like `rag_eval.py` — both are genuinely slow) that runs
+scripted multi-turn conversations through the real `/api/chat` route
+(main.py's full pending-state dispatch chain together with the LLM's own
+tool-calling, not a shortcut around either) and asserts on *structural*
+reply properties — contains a real order id, cites a real source, never
+leaks a tool name — robust to the chat model's own wording, instead of
+exact text. It's the one thing pytest structurally can't do (an LLM
+generation is nondeterministic), and it's already found two real bugs
+before they were ever reported live: a missing citation format, and
+"cancel my order" being silently swallowed as declining a pending email
+offer.
 
 **Q: Did writing all these tests ever find a bug pytest wasn't originally meant to find?**
 A: Yes, twice, both worth knowing cold. First: writing a test for the
