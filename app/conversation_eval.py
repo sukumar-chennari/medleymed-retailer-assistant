@@ -136,6 +136,42 @@ CONVERSATION_CASES = [
         ],
     },
     {
+        "name": "rejecting_the_address_on_file_for_a_new_one",
+        # Real, previously-shipped bugs this shape pins (see main.py's
+        # ADDRESS_REJECTION_WORDS comment): several rejection phrasings
+        # ("no new one", "i will give another address") used to all hit
+        # the same unhelpful "should I ship to X, or a different one?"
+        # re-ask verbatim, producing a stuck loop with no progress. The
+        # order must also actually ship to the NEW address, not silently
+        # keep the old one.
+        "turns": [
+            {"text": "I have a dry cough", "checks": [("asks the clarifying question", lambda r: _contains_any(r, ["child", "adult"]))]},
+            {"text": "for myself", "checks": [("recommends the real product", lambda r: "Cough Suppressant" in r)]},
+            {"text": "yes", "checks": [("asks for a shipping address", lambda r: "shipping address" in r.lower())]},
+            {
+                "text": "123 First Rd",
+                "checks": [("first order confirmed", lambda r: "Order confirmed!" in r and "ord-0001" in r)],
+            },
+            {
+                "text": "reorder that",
+                "checks": [("confirms the address already on file", lambda r: "123 First Rd" in r)],
+            },
+            {
+                "text": "no, i will give a different one",
+                "checks": [
+                    ("asks for the new address without repeating the compound question", lambda r: "new shipping address" in r.lower()),
+                ],
+            },
+            {
+                "text": "456 Second Ave",
+                "checks": [
+                    ("second order confirmed", lambda r: "Order confirmed!" in r and "ord-0002" in r),
+                    ("ships to the new address, not the old one", lambda r: "456 Second Ave" in r and "123 First Rd" not in r),
+                ],
+            },
+        ],
+    },
+    {
         "name": "bare_numeric_selection_from_a_product_list",
         # Fully deterministic — proves main.py's _resolve_bare_selection
         # dispatch is actually wired correctly end-to-end through the real
