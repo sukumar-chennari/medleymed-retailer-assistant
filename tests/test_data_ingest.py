@@ -1,10 +1,19 @@
-"""Regression tests for the pure parts of app/data_ingest.py: document
-loading and the header-based chunking strategy. Deliberately excludes
-build_index, which needs a live Ollama embedding call and a real Chroma
-write — that path is already exercised indirectly by CI (see
-.github/workflows/tests.yml's comment: importing app.tools triggers
-retrieval.py's cold-start rebuild whenever no cached index exists yet).
+"""Regression tests for app/data_ingest.py: document loading, the
+header-based chunking strategy, and build_index itself — the only real
+network dependency there is the embedding call (_client.embed), mocked
+below the same way smtplib.SMTP and the Gemini client were mocked
+elsewhere, so no live Ollama call is needed and no real chroma_db/
+kb_meta.json is touched (CHROMA_DIR/META_PATH redirected to a temp
+directory). This still exercises the real chunking, real Chroma writes,
+and the real content-hash metadata — just not the embedding model itself,
+which CI's cold-start path (see .github/workflows/tests.yml) already
+exercises for real when it needs to.
 """
+
+import json
+from types import SimpleNamespace
+
+import chromadb
 
 from app import data_ingest
 
@@ -88,3 +97,44 @@ class TestChunkDocument:
             chunks = data_ingest.chunk_document(filename, text)
             sections = {c["section"] for c in chunks}
             assert sections == {"Overview", "Dosage", "Common Side Effects", "Warnings"}, filename
+
+
+class TestBuildIndex:
+    def test_builds_a_real_index_with_a_mocked_embedding_model(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(data_ingest, "CHROMA_DIR", tmp_path / "chroma_db")
+        monkeypatch.setattr(data_ingest, "META_PATH", tmp_path / "kb_meta.json")
+
+        def fake_embed(model, input):
+            return SimpleNamespace(embeddings=[[0.1, 0.2, 0.3, 0.4]])
+
+        monkeypatch.setattr(data_ingest._client, "embed", fake_embed)
+
+        chunks = data_ingest.build_index()
+
+        # Real chunking: 10 knowledge-base files x 4 sections each.
+        assert len(chunks) == 40
+        assert all("embedding" in c for c in chunks)
+
+        meta = json.loads(data_ingest.META_PATH.read_text())
+        assert meta["content_hash"] == data_ingest.compute_content_hash()
+        assert meta["embed_model"] == data_ingest.config.EMBED_MODEL
+
+        # Real Chroma write, readable back from the same temp directory.
+        client = chromadb.PersistentClient(path=str(data_ingest.CHROMA_DIR))
+        collection = client.get_collection(data_ingest.COLLECTION_NAME)
+        assert collection.count() == 40
+
+    def test_rebuilding_drops_the_old_collection_first(self, tmp_path, monkeypatch):
+        # A chunk from a since-edited/removed document must never linger.
+        monkeypatch.setattr(data_ingest, "CHROMA_DIR", tmp_path / "chroma_db")
+        monkeypatch.setattr(data_ingest, "META_PATH", tmp_path / "kb_meta.json")
+        monkeypatch.setattr(
+            data_ingest._client, "embed", lambda model, input: SimpleNamespace(embeddings=[[0.1, 0.2, 0.3, 0.4]])
+        )
+
+        data_ingest.build_index()
+        data_ingest.build_index()  # must not raise or duplicate on a second run
+
+        client = chromadb.PersistentClient(path=str(data_ingest.CHROMA_DIR))
+        collection = client.get_collection(data_ingest.COLLECTION_NAME)
+        assert collection.count() == 40
