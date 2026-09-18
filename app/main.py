@@ -57,6 +57,15 @@ def catalog():
     return store.get_catalog()
 
 
+@app.post("/api/reset-demo")
+def reset_demo():
+    """Wipes orders, session state, and metrics, and resets the saved
+    address/email — lets a live demo be re-run from a clean slate without
+    restarting the server or touching the database file by hand."""
+    store.reset_demo_data()
+    return {"ok": True}
+
+
 def _extract_email(text: str) -> tuple[str | None, str]:
     """Pulls an email address out of free text if present, e.g. a user typing
     their address and email in the same message. Returns (email_or_None,

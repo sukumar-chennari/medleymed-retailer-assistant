@@ -234,3 +234,44 @@ class TestConnectRollsBackOnException:
                 conn.execute("UPDATE users SET name = 'should not persist' WHERE user_id = 'demo_user'")
                 raise RuntimeError("boom")
         assert store.get_user("demo_user")["name"] != "should not persist"
+
+
+class TestResetDemoData:
+    def test_clears_orders(self):
+        store.save_address("demo_user", "1 Test Way")
+        store.create_order(user_id="demo_user", product_id="fev-001", address="1 Test Way")
+        store.reset_demo_data()
+        assert store.list_orders("demo_user") == []
+
+    def test_a_new_order_after_reset_starts_back_at_ord_0001(self):
+        store.save_address("demo_user", "1 Test Way")
+        store.create_order(user_id="demo_user", product_id="fev-001", address="1 Test Way")
+        store.create_order(user_id="demo_user", product_id="fev-002", address="1 Test Way")
+        store.reset_demo_data()
+        order = store.create_order(user_id="demo_user", product_id="fev-001", address="1 Test Way")
+        assert order["order_id"] == "ord-0001"
+
+    def test_resets_address_and_email_to_the_demo_defaults(self):
+        store.save_address("demo_user", "1 Test Way")
+        store.save_email("demo_user", "a@example.com")
+        store.reset_demo_data()
+        assert store.get_address("demo_user") is None
+        assert store.get_email("demo_user") is None
+
+    def test_keeps_the_demo_users_name(self):
+        store.reset_demo_data()
+        assert store.get_user("demo_user")["name"] == "Demo User"
+
+    def test_clears_session_state(self):
+        store.set_pending_order("s1", "fev-001", quantity=1)
+        store.set_last_products("s1", [{"id": "fev-001"}])
+        store.reset_demo_data()
+        assert store.get_pending_order("s1") is None
+        assert store.get_last_products("s1") is None
+
+    def test_clears_metrics_events(self):
+        store.log_metric_event("s1", "guardrail", "blocked_premature_order")
+        store.reset_demo_data()
+        summary = store.get_metrics_summary()
+        assert summary["guardrail_total"] == 0
+        assert summary["total_events"] == 0

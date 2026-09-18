@@ -83,3 +83,18 @@ class TestFeedback:
     def test_invalid_rating_is_rejected(self):
         res = client.post("/api/feedback", json={"session_id": "s1", "rating": "sideways"})
         assert res.status_code == 400
+
+
+class TestResetDemo:
+    def test_wipes_orders_metrics_and_the_saved_address(self):
+        store.save_address("demo_user", "1 Test Way")
+        store.create_order(user_id="demo_user", product_id="fev-001", address="1 Test Way")
+        store.log_metric_event("s1", "guardrail", "blocked_premature_order")
+
+        res = client.post("/api/reset-demo")
+
+        assert res.status_code == 200
+        assert res.json() == {"ok": True}
+        assert store.list_orders("demo_user") == []
+        assert store.get_address("demo_user") is None
+        assert store.get_metrics_summary()["guardrail_total"] == 0

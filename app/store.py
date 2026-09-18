@@ -400,3 +400,23 @@ def get_metrics_summary() -> dict:
             "feedback_positive_rate": feedback_positive_rate,
             "recent_guardrail_events": recent_guardrail_events,
         }
+
+
+def reset_demo_data() -> None:
+    """Wipes every order, session (pending state + chat history), and
+    metrics event, and resets demo_user's address/email back to the
+    demo_user.json defaults (address/email null, name kept). Exists so a
+    live demo can be re-run from a clean slate — orders, saved addresses,
+    and guardrail counts accumulated across earlier test runs or a
+    previous audience would otherwise carry over and confuse a fresh
+    walkthrough — without needing to restart the server or touch the
+    database file by hand."""
+    demo_user = json.loads((DATA_DIR / "demo_user.json").read_text())
+    with _connect() as conn:
+        conn.execute("DELETE FROM orders")
+        conn.execute("DELETE FROM session_state")
+        conn.execute("DELETE FROM metrics_events")
+        conn.execute(
+            "UPDATE users SET address = ?, email = ? WHERE user_id = ?",
+            (demo_user.get("address"), demo_user.get("email"), demo_user["user_id"]),
+        )
