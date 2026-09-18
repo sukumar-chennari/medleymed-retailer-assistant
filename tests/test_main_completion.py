@@ -102,3 +102,15 @@ class TestCompletePendingEmail:
         reply = main._complete_pending_email("a@example.com", "ord-9999")
         assert "couldn't find that earlier order" in reply
         assert store.get_email("demo_user") == "a@example.com"
+
+    def test_email_saved_even_if_the_confirmation_could_not_be_sent(self, monkeypatch):
+        import json
+
+        store.save_address("demo_user", "123 Main St")
+        order = store.create_order(user_id="demo_user", product_id="fev-001", address="123 Main St")
+        monkeypatch.setattr(main.tools, "send_confirmation_email", lambda to, details: json.dumps({"sent": False}))
+
+        reply = main._complete_pending_email("a@example.com", order["order_id"])
+
+        assert "couldn't be sent right now" in reply
+        assert store.get_email("demo_user") == "a@example.com"
