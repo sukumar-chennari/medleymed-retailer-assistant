@@ -65,11 +65,34 @@ body {
   padding: 3px 9px;
 }
 
+.topbar-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  flex-shrink: 0;
+}
+
 .topbar-user {
   font-size: 0.9rem;
   color: #555;
   white-space: nowrap;
-  flex-shrink: 0;
+}
+
+.reset-demo-button {
+  font-size: 0.78rem;
+  color: #888;
+  background: transparent;
+  border: 1px solid #d8dce1;
+  border-radius: 6px;
+  padding: 5px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.reset-demo-button:hover {
+  color: #b3261e;
+  border-color: #e5b4af;
+  background: #fdf3f2;
 }
 
 .topbar {

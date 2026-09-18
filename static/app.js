@@ -258,6 +258,32 @@ loadDashboard();
 loadMetrics();
 loadCatalog();
 
+const resetDemoButton = document.getElementById("reset-demo-button");
+resetDemoButton.addEventListener("click", async () => {
+  const confirmed = confirm(
+    "Reset demo data? This clears all orders, the saved address, and metrics — for starting a fresh demo run."
+  );
+  if (!confirmed) return;
+
+  resetDemoButton.disabled = true;
+  try {
+    await fetch("/api/reset-demo", { method: "POST" });
+    // Start a genuinely fresh conversation too — the server no longer
+    // remembers the old session, so continuing it would be confusing.
+    sessionId = crypto.randomUUID();
+    localStorage.setItem("session_id", sessionId);
+    chatEl.innerHTML = "";
+    closeChat();
+    loadDashboard();
+    loadMetrics();
+  } catch (err) {
+    console.error("Failed to reset demo data", err);
+    alert("Couldn't reset demo data — check the server is running.");
+  } finally {
+    resetDemoButton.disabled = false;
+  }
+});
+
 let pendingImage = null; // { b64, mediaType, dataUrl }
 
 function addBubble(role, text, imageDataUrl) {
