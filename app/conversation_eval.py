@@ -211,6 +211,31 @@ CONVERSATION_CASES = [
         ],
     },
     {
+        "name": "combined_fever_and_cold_symptoms",
+        # Real bug this pins: fever is checked before cold in
+        # CLARIFYING_QUESTIONS dict order, so a message describing BOTH
+        # used to ask only the fever age question and, once answered, only
+        # ever recommend fever products — the cold side was silently
+        # dropped from the entire conversation. See agent.py's
+        # FEVER_AND_COLD_COMBINED_QUESTION / _resolve_fever_and_cold.
+        "turns": [
+            {
+                "text": "i think i have running nose and high temperature",
+                "checks": [
+                    ("asks one combined child/adult question", lambda r: _contains_any(r, ["child", "adult"])),
+                    ("no leaked tool name", _no_leaked_tool_name),
+                ],
+            },
+            {
+                "text": "for myself",
+                "checks": [
+                    ("recommends a real fever product", lambda r: "Paracetamol 500mg" in r),
+                    ("also recommends a real cold product, not just fever", lambda r: "Cetirizine" in r),
+                ],
+            },
+        ],
+    },
+    {
         "name": "out_of_scope_decline",
         # Needs the real LLM to decide to call decline_out_of_scope.
         "turns": [

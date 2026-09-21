@@ -328,6 +328,19 @@ CLARIFYING_QUESTIONS = {
     },
 }
 
+# fever and cold's CLARIFYING_QUESTIONS entries above have IDENTICAL
+# "qualifiers" (the same age words) — this single combined question is what
+# lets _needs_clarification ask about age ONCE for a message describing
+# both, instead of two separate questions, or (the real bug this fixes)
+# only ever asking about whichever one is checked first and silently
+# dropping the other. See _resolve_fever_and_cold for how the answer
+# resolves both categories' products together.
+FEVER_AND_COLD_COMBINED_QUESTION = (
+    "Is this for a child, or for an adult/yourself? Our child and adult "
+    "fever and cold products use different dosing/formulations, so this "
+    "makes sure the recommendation is the right fit for both."
+)
+
 
 # "fever" and "cold" are checked against tools.classify_categories rather
 # than a literal substring of the trigger word — a message like "high
@@ -397,27 +410,47 @@ def _needs_clarification(source_text: str) -> tuple[str, str] | None:
         return None
     s = source_text.lower()
     categories = set(tools.classify_categories(source_text))
-    for trigger, rule in CLARIFYING_QUESTIONS.items():
-        if _trigger_matches(trigger, s, categories) and not any(q in s for q in rule["qualifiers"]):
-            if trigger == "cough":
-                age = _detect_age(s)
-                if age:
-                    trigger = f"cough:{age}"
-            elif trigger == "cold" and "cough" in s:
-                # Real bug: "I have a dry cough" classifies as "cold" (cough
-                # is a cold sub-symptom) and has no age mentioned, so this
-                # branch used to fire the plain cold-age question — losing
-                # the "dry" qualifier the message already gave, so an
-                # "adult" answer showed all 5 generic cold products instead
-                # of specifically the dry-cough one. Encoding the known
-                # cough type into the trigger lets resolve_clarification
-                # narrow correctly once age is answered (see
-                # _resolve_cold_with_known_cough_type).
-                cough_type = _detect_cough_type(s)
-                if cough_type:
-                    trigger = f"cold:cough_{cough_type}"
-            return trigger, rule["question"]
-    return None
+    matched_triggers = [
+        trigger
+        for trigger, rule in CLARIFYING_QUESTIONS.items()
+        if _trigger_matches(trigger, s, categories) and not any(q in s for q in rule["qualifiers"])
+    ]
+    if not matched_triggers:
+        return None
+
+    # Real bug, found by conversation_eval.py: "i think i have running nose
+    # and high temperature" plainly describes BOTH categories, but fever is
+    # checked before cold above (dict order) and this used to just return
+    # on the first match, silently dropping cold — a later "for myself"
+    # only ever recommended fever products, never mentioning the cold side
+    # again. fever and cold happen to share the exact same age-qualifier
+    # dimension (child vs adult), which is what makes asking ONE combined
+    # question — rather than two separate ones — the right fix instead of
+    # a deeper rearchitecture: see _resolve_fever_and_cold for how the
+    # answer to it resolves both categories' products together.
+    if set(matched_triggers) == {"fever", "cold"}:
+        return "fever+cold", FEVER_AND_COLD_COMBINED_QUESTION
+
+    trigger = matched_triggers[0]
+    rule = CLARIFYING_QUESTIONS[trigger]
+    if trigger == "cough":
+        age = _detect_age(s)
+        if age:
+            trigger = f"cough:{age}"
+    elif trigger == "cold" and "cough" in s:
+        # Real bug: "I have a dry cough" classifies as "cold" (cough
+        # is a cold sub-symptom) and has no age mentioned, so this
+        # branch used to fire the plain cold-age question — losing
+        # the "dry" qualifier the message already gave, so an
+        # "adult" answer showed all 5 generic cold products instead
+        # of specifically the dry-cough one. Encoding the known
+        # cough type into the trigger lets resolve_clarification
+        # narrow correctly once age is answered (see
+        # _resolve_cold_with_known_cough_type).
+        cough_type = _detect_cough_type(s)
+        if cough_type:
+            trigger = f"cold:cough_{cough_type}"
+    return trigger, rule["question"]
 
 
 def _render_products(products: list[dict], session_id: str) -> str:
@@ -482,6 +515,26 @@ def _resolve_cold_with_known_cough_type(branch: dict, cough_type: str, session_i
     return _render_products([product] if product else [], session_id)
 
 
+def _resolve_fever_and_cold(answer_text: str, session_id: str) -> str | None:
+    """Resolves the combined age question for a message that plainly
+    described BOTH fever and cold symptoms (see FEVER_AND_COLD_COMBINED_
+    QUESTION) — merges the matching branch's product_ids from EACH
+    category into one recommendation instead of only ever resolving
+    whichever category happened to be checked first, the real bug this
+    exists to fix."""
+    s = answer_text.lower()
+    product_ids: list[str] = []
+    for category in ("fever", "cold"):
+        for branch in CLARIFYING_QUESTIONS[category]["branches"]:
+            if any(a in s for a in branch["answers"]):
+                product_ids.extend(branch["product_ids"])
+                break
+    if not product_ids:
+        return None
+    products = [p for p in (store.find_product(pid) for pid in product_ids) if p]
+    return _render_products(products, session_id)
+
+
 def resolve_clarification(trigger: str, answer_text: str, session_id: str) -> str | None:
     """Deterministically resolves the user's answer to a previously-asked
     clarifying question — same reasoning as asking it deterministically:
@@ -493,7 +546,11 @@ def resolve_clarification(trigger: str, answer_text: str, session_id: str) -> st
     see _split_trigger) or a known cough type ("cold:cough_dry", see
     _resolve_cold_with_known_cough_type) — depending on which qualifier was
     already given in the original message and which one this question is
-    actually asking for."""
+    actually asking for. trigger == "fever+cold" is the combined-category
+    case (see _needs_clarification/_resolve_fever_and_cold), not a real
+    CLARIFYING_QUESTIONS key."""
+    if trigger == "fever+cold":
+        return _resolve_fever_and_cold(answer_text, session_id)
     base_trigger, suffix = _split_trigger(trigger)
     rule = CLARIFYING_QUESTIONS.get(base_trigger)
     if not rule:
@@ -521,7 +578,12 @@ def _resolve_prequalified_clarification(source_text: str, session_id: str) -> st
     supplies both a cough-type qualifier and an age qualifier in one
     message, which the plain per-trigger loop below would resolve against
     whichever trigger it reaches first (cough, ahead of cold in dict
-    order), recommending the adult expectorant to a child."""
+    order), recommending the adult expectorant to a child.
+
+    Collects EVERY matched trigger rather than resolving on the first —
+    same real bug as _needs_clarification ("my baby has a runny nose and a
+    fever" plainly gives the age for BOTH categories at once; resolving on
+    the first match alone used to silently drop the other one)."""
     if INFO_QUESTION_RE.search(source_text):
         return None
     s = source_text.lower()
@@ -533,10 +595,16 @@ def _resolve_prequalified_clarification(source_text: str, session_id: str) -> st
                     return _resolve_child_cough(branch, session_id)
 
     categories = set(tools.classify_categories(source_text))
-    for trigger, rule in CLARIFYING_QUESTIONS.items():
-        if _trigger_matches(trigger, s, categories) and any(q in s for q in rule["qualifiers"]):
-            return resolve_clarification(trigger, source_text, session_id)
-    return None
+    matched_triggers = [
+        trigger
+        for trigger, rule in CLARIFYING_QUESTIONS.items()
+        if _trigger_matches(trigger, s, categories) and any(q in s for q in rule["qualifiers"])
+    ]
+    if not matched_triggers:
+        return None
+    if set(matched_triggers) == {"fever", "cold"}:
+        return resolve_clarification("fever+cold", source_text, session_id)
+    return resolve_clarification(matched_triggers[0], source_text, session_id)
 
 
 def _inject_catalog_hint(parts: list, source_text: str, session_id: str) -> None:

@@ -121,6 +121,14 @@ class TestNeedsClarification:
         result = agent._needs_clarification("i think i have running nose and high temperature")
         assert result is not None
 
+    def test_message_describing_both_fever_and_cold_asks_one_combined_question(self):
+        # Real bug: fever is checked before cold (dict order) and this used
+        # to return on the first match alone, silently dropping cold — a
+        # later age answer only ever recommended fever products.
+        trigger, question = agent._needs_clarification("i think i have running nose and high temperature")
+        assert trigger == "fever+cold"
+        assert "child" in question.lower()
+
     def test_info_question_never_needs_clarification(self):
         # Real bug: this exact golden-eval query used to trigger the fever
         # child/adult question instead of routing to lookup_medicine_info.
@@ -186,6 +194,21 @@ class TestResolveClarification:
     def test_unknown_trigger_returns_none(self):
         assert agent.resolve_clarification("not-a-real-trigger", "dry", "s1") is None
 
+    def test_fever_and_cold_combined_trigger_merges_both_categories_adult(self):
+        # Real bug fix: this used to only ever resolve fever (or cold,
+        # depending on iteration order), never both.
+        reply = agent.resolve_clarification("fever+cold", "for myself", "s1")
+        assert "Paracetamol 500mg" in reply  # fever adult product
+        assert "Cetirizine" in reply  # cold adult product
+
+    def test_fever_and_cold_combined_trigger_merges_both_categories_child(self):
+        reply = agent.resolve_clarification("fever+cold", "it's for my toddler", "s1")
+        assert "Children's Paracetamol Syrup" in reply
+        assert "Children's Cold & Cough Syrup" in reply
+
+    def test_fever_and_cold_combined_trigger_unmatched_answer_returns_none(self):
+        assert agent.resolve_clarification("fever+cold", "maybe, not sure", "s1") is None
+
 
 @pytest.mark.usefixtures("isolated_db")
 class TestResolvePrequalifiedClarification:
@@ -213,3 +236,11 @@ class TestResolvePrequalifiedClarification:
         reply = agent._resolve_prequalified_clarification("my baby has a fever", "s1")
         assert reply is not None
         assert "Children's Paracetamol Syrup" in reply
+
+    def test_fever_and_cold_both_with_age_in_the_same_message_merges_both(self):
+        # Real bug: age was given for both categories in one message, but
+        # this used to resolve only whichever category matched first.
+        reply = agent._resolve_prequalified_clarification("my baby has a runny nose and a fever", "s1")
+        assert reply is not None
+        assert "Children's Paracetamol Syrup" in reply
+        assert "Children's Cold & Cough Syrup" in reply
