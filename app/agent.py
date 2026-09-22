@@ -341,6 +341,27 @@ FEVER_AND_COLD_COMBINED_QUESTION = (
     "makes sure the recommendation is the right fit for both."
 )
 
+# KNOWN, ACCEPTED LIMITATION: a message matching all three categories at
+# once (e.g. "I have a fever, cough, and runny nose") is NOT covered by the
+# fix above — only the exact {"fever", "cold"} double-match is. cough uses a
+# different qualifier dimension (dry/wet type) than fever/cold's shared age
+# dimension, so merging all three would mean asking two sequential
+# questions (or one compound one) and reconciling cough's own
+# age-special-casing (_resolve_child_cough) with fever/cold's separate child
+# branches — a real design change, not a one-line extension of this fix.
+# Investigated and deliberately deferred rather than rushed; current
+# (unfixed) behavior, pinned by
+# TestKnownLimitationCoughFeverColdTripleCollision in test_agent.py, is
+# inconsistent depending on which qualifiers are already present:
+#   - no qualifiers given yet: only asks about cough's dry/wet type,
+#     silently drops fever+cold from the question entirely.
+#   - age given, cough type not given: silently resolves the fever+cold
+#     merged list, drops cough entirely (never asked, never resolved).
+#   - both age and cough type given: resolves only the cough product via
+#     the cough+child special case, drops fever entirely.
+# None of these lose safety information (no wrong-age/wrong-type product is
+# ever recommended) — the loss is completeness, always in favor of whichever
+# category the current chain of special cases happens to check first.
 
 # "fever" and "cold" are checked against tools.classify_categories rather
 # than a literal substring of the trigger word — a message like "high

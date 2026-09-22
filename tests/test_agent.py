@@ -244,3 +244,37 @@ class TestResolvePrequalifiedClarification:
         assert reply is not None
         assert "Children's Paracetamol Syrup" in reply
         assert "Children's Cold & Cough Syrup" in reply
+
+
+@pytest.mark.usefixtures("isolated_db")
+class TestKnownLimitationCoughFeverColdTripleCollision:
+    """Pins the CURRENT, deliberately-unfixed behavior for a message that
+    matches all three categories at once — see the "KNOWN, ACCEPTED
+    LIMITATION" comment above FEVER_AND_COLD_COMBINED_QUESTION in agent.py
+    for the full reasoning on why this is scoped out for now rather than
+    rushed. These tests exist so a future change to this behavior is a
+    deliberate decision, not an accidental regression nobody notices —
+    none of the three sub-cases below lose safety information (no
+    wrong-age/wrong-type product is ever recommended), only completeness."""
+
+    def test_no_qualifiers_yet_asks_only_about_cough_type(self):
+        trigger, question = agent._needs_clarification("I have a fever, cough, and runny nose")
+        assert trigger == "cough"
+        assert "dry" in question.lower()
+
+    def test_no_qualifiers_yet_then_answering_resolves_only_cough(self):
+        reply = agent.resolve_clarification("cough", "dry", "s1")
+        assert "Cough Suppressant" in reply
+        assert "Paracetamol" not in reply  # fever product silently dropped
+
+    def test_age_given_without_cough_type_resolves_fever_and_cold_but_drops_cough(self):
+        reply = agent._resolve_prequalified_clarification("my child has a fever, cough, and runny nose", "s1")
+        assert reply is not None
+        assert "Children's Paracetamol Syrup" in reply
+        assert "Children's Cold & Cough Syrup" in reply
+
+    def test_age_and_cough_type_both_given_resolves_only_cough(self):
+        reply = agent._resolve_prequalified_clarification("my child has a dry cough, a fever, and runny nose", "s1")
+        assert reply is not None
+        assert "Children's Cold & Cough Syrup" in reply
+        assert "Children's Paracetamol Syrup" not in reply  # fever product silently dropped
