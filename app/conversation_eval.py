@@ -236,6 +236,28 @@ CONVERSATION_CASES = [
         ],
     },
     {
+        "name": "bare_email_is_never_saved_as_the_address",
+        # Real bug this pins: an email containing a digit
+        # (sukumar123@example.com) has a digit and is long enough to pass
+        # the address heuristic's basic check, and _extract_email then
+        # stripped it out and left nothing behind — the caller's
+        # `address_only or address_text` fallback re-saved the raw email
+        # text as the shipping address, so orders confirmed "Shipping to:
+        # sukumar123@example.com". See main.py's _is_bare_email.
+        "turns": [
+            {"text": "I have a dry cough", "checks": [("asks the clarifying question", lambda r: _contains_any(r, ["child", "adult"]))]},
+            {"text": "for myself", "checks": [("recommends the real product", lambda r: "Cough Suppressant" in r)]},
+            {"text": "yes", "checks": [("asks for a shipping address", lambda r: "shipping address" in r.lower())]},
+            {
+                "text": "sukumar123@example.com",
+                "checks": [
+                    ("never confirms an order to the bare email as the address", lambda r: "sukumar123@example.com" not in r),
+                    ("never claims the order is placed", lambda r: "Order confirmed!" not in r),
+                ],
+            },
+        ],
+    },
+    {
         "name": "out_of_scope_decline",
         # Needs the real LLM to decide to call decline_out_of_scope.
         "turns": [

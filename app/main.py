@@ -86,6 +86,20 @@ def _looks_like_an_email(text: str) -> bool:
     return EMAIL_RE.search(text) is not None
 
 
+def _is_bare_email(text: str) -> bool:
+    """True when the text is (almost) entirely just an email address, with
+    no actual address content alongside it — e.g. answering "what's your
+    shipping address?" with only an email. Real bug this guards against:
+    _extract_email would strip the email and leave nothing behind, so
+    _complete_pending_order's `address_only or address_text` fallback used
+    to re-add the raw text — email included — back in as the "address",
+    saving and later shipping to the email itself."""
+    if not _looks_like_an_email(text):
+        return False
+    _, remainder = _extract_email(text)
+    return not remainder.strip()
+
+
 ADDRESS_FILLER_RE = re.compile(
     r"^\s*(actually\s+)?(please\s+)?(ship|send|deliver)\s+(it\s+|this\s+|that\s+)?to\s+",
     re.IGNORECASE,
@@ -108,6 +122,8 @@ def _looks_like_an_address(text: str) -> bool:
     a message like "order col-001" has a digit and is long enough to pass the
     basic check, but is clearly a product reference, not an address."""
     if guardrails.PRODUCT_ID_RE.search(text):
+        return False
+    if _is_bare_email(text):
         return False
     return any(ch.isdigit() for ch in text) and len(text) >= 8
 
@@ -133,6 +149,8 @@ def _looks_like_a_first_time_address(text: str) -> bool:
     if _looks_like_an_address(text):
         return True
     if guardrails.PRODUCT_ID_RE.search(text):
+        return False
+    if _is_bare_email(text):
         return False
     stripped = text.strip()
     if not (2 <= len(stripped) <= 80):

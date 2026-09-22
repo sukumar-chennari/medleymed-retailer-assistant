@@ -69,6 +69,30 @@ class TestLooksLikeAnAddress:
     def test_rejects_text_that_is_too_short(self):
         assert not main._looks_like_an_address("no 5")
 
+    def test_rejects_a_bare_email_even_with_a_digit(self):
+        # Real bug: an email containing a digit (e.g. sukumar123@example.com)
+        # has a digit and is long enough to pass the basic check, so this
+        # used to be accepted as the address — _extract_email then stripped
+        # the email out, left nothing behind, and the caller's
+        # `address_only or address_text` fallback re-saved the raw email
+        # text as the shipping address.
+        assert not main._looks_like_an_address("sukumar123@example.com")
+
+    def test_an_address_with_an_email_alongside_it_still_counts(self):
+        assert main._looks_like_an_address("123 Main St, sukumar@example.com")
+
+
+class TestIsBareEmail:
+    def test_email_alone_is_bare(self):
+        assert main._is_bare_email("sukumar@example.com")
+        assert main._is_bare_email("sukumar123@example.com")
+
+    def test_email_with_real_address_content_is_not_bare(self):
+        assert not main._is_bare_email("123 Main St, sukumar@example.com")
+
+    def test_no_email_is_not_bare(self):
+        assert not main._is_bare_email("123 Main St")
+
 
 class TestLooksLikeAFirstTimeAddress:
     def test_a_bare_place_name_with_no_digits_counts(self):
@@ -101,6 +125,15 @@ class TestLooksLikeAFirstTimeAddress:
 
     def test_too_short_does_not_count(self):
         assert not main._looks_like_a_first_time_address("x")
+
+    def test_a_bare_email_does_not_count_even_without_digits(self):
+        # Real bug: this fell straight through to the generic fallback at
+        # the end of the function (not a question, not a decline, not a
+        # symptom mention) and was accepted as a first-time address even
+        # with no digits at all — the digit-based check in
+        # _looks_like_an_address never even got a chance to reject it.
+        assert not main._looks_like_a_first_time_address("sukumar@example.com")
+        assert not main._looks_like_a_first_time_address("sukumar123@example.com")
 
 
 class TestIsAffirmative:
