@@ -325,12 +325,24 @@ imageRemoveBtn.addEventListener("click", () => {
   imagePreview.classList.add("hidden");
 });
 
+const sendButton = formEl.querySelector('button[type="submit"]');
+let isSending = false;
+
 formEl.addEventListener("submit", async (e) => {
   e.preventDefault();
+  // Without this, a double-click on Send or pressing Enter twice quickly
+  // fires two concurrent /api/chat requests for the same session_id —
+  // both read/modify/save the same session message history, so whichever
+  // response lands last silently overwrites the other's turn.
+  if (isSending) return;
+
   const text = textInput.value.trim();
   const image = pendingImage;
 
   if (!text && !image) return;
+
+  isSending = true;
+  sendButton.disabled = true;
 
   addBubble("user", text, image ? image.dataUrl : null);
   textInput.value = "";
@@ -365,5 +377,8 @@ formEl.addEventListener("submit", async (e) => {
     pendingBubble.remove();
     addBubble("assistant", "Sorry, something went wrong reaching the assistant. Please try again.");
     console.error(err);
+  } finally {
+    isSending = false;
+    sendButton.disabled = false;
   }
 });
