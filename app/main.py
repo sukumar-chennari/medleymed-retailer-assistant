@@ -368,6 +368,14 @@ def _complete_pending_email(email: str, order_id: str) -> str:
     if order is None:
         return f"Thanks, I've saved {email} for next time — though I couldn't find that earlier order to send a confirmation for."
 
+    # Real bug: nothing clears pending_email when an order is cancelled
+    # while its confirmation email is still outstanding (see "please cancel
+    # my order" right after placing one with no email on file yet) — without
+    # this check, supplying the email afterward sent a cheerful "I've sent
+    # the confirmation" for an order that no longer exists.
+    if order["status"] == "cancelled":
+        return f"That order was cancelled, so there's nothing to confirm — I've still saved {email} for next time."
+
     summary = f"Order {order['order_id']}: {order['product_name']} (${order['price_usd']}) to {order['address']}"
     email_result = json.loads(tools.send_confirmation_email(email, summary))
     if email_result.get("sent"):

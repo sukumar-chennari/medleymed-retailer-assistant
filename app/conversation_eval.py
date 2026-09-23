@@ -136,6 +136,37 @@ CONVERSATION_CASES = [
         ],
     },
     {
+        "name": "email_after_cancel_declines_to_confirm",
+        # Real bug this pins: nothing cleared pending_email when the order
+        # was cancelled before the email arrived — supplying the email
+        # afterward used to cheerfully claim "I've sent the confirmation"
+        # for an order that no longer exists. See main.py's
+        # _complete_pending_email.
+        "turns": [
+            {"text": "I have a dry cough", "checks": [("asks the clarifying question", lambda r: _contains_any(r, ["child", "adult"]))]},
+            {"text": "for myself", "checks": [("recommends the real product", lambda r: "Cough Suppressant" in r)]},
+            {"text": "yes", "checks": [("asks for a shipping address", lambda r: "shipping address" in r.lower())]},
+            {
+                "text": "123 Email After Cancel Rd",
+                "checks": [
+                    ("order confirmed with no email on file", lambda r: "Order confirmed!" in r and "ord-0001" in r),
+                    ("asks for an email", lambda r: "email" in r.lower()),
+                ],
+            },
+            {
+                "text": "please cancel my order",
+                "checks": [("actually cancels the real order", lambda r: "cancelled" in r.lower() and "ord-0001" in r)],
+            },
+            {
+                "text": "email@example.com",
+                "checks": [
+                    ("declines to confirm the cancelled order", lambda r: "cancelled" in r.lower()),
+                    ("never claims a confirmation was sent", lambda r: "sent the confirmation" not in r.lower()),
+                ],
+            },
+        ],
+    },
+    {
         "name": "rejecting_the_address_on_file_for_a_new_one",
         # Real, previously-shipped bugs this shape pins (see main.py's
         # ADDRESS_REJECTION_WORDS comment): several rejection phrasings

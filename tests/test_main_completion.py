@@ -114,3 +114,19 @@ class TestCompletePendingEmail:
 
         assert "couldn't be sent right now" in reply
         assert store.get_email("demo_user") == "a@example.com"
+
+    def test_declines_to_confirm_a_cancelled_order(self):
+        # Real bug: nothing clears pending_email when the order is
+        # cancelled before the email arrives (e.g. "please cancel my order"
+        # right after placing one with no email on file yet) — this used to
+        # cheerfully claim "I've sent the confirmation" for an order that no
+        # longer exists.
+        store.save_address("demo_user", "123 Main St")
+        order = store.create_order(user_id="demo_user", product_id="fev-001", address="123 Main St")
+        store.cancel_order(order["order_id"], "demo_user")
+
+        reply = main._complete_pending_email("a@example.com", order["order_id"])
+
+        assert "cancelled" in reply.lower()
+        assert "sent the confirmation" not in reply
+        assert store.get_email("demo_user") == "a@example.com"
