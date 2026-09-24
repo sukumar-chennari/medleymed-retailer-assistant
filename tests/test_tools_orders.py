@@ -113,6 +113,16 @@ class TestPlaceOrder:
         assert result["quantity"] == tools.MAX_QUANTITY_PER_ORDER
         assert "quantity_clamped" in result
 
+    def test_non_positive_quantity_is_also_clamped_and_noted(self):
+        # Real bug fix: this used to silently become quantity=1 with no
+        # quantity_clamped note at all, asymmetric with the over-the-limit
+        # case above.
+        store.save_address("demo_user", "1 Test Way")
+        result = json.loads(tools.place_order("fev-001", quantity=0))
+        assert result["quantity"] == 1
+        assert "quantity_clamped" in result
+        assert "limit" not in result["quantity_clamped"]
+
 
 class TestStartOrder:
     def test_unknown_product_returns_an_error(self):

@@ -98,13 +98,23 @@ class TestLookupMedicineInfo:
 
 class TestClampQuantity:
     def test_normal_quantity_passes_through(self):
-        assert tools._clamp_quantity(1) == (1, False)
+        assert tools._clamp_quantity(1) == (1, None)
 
-    def test_zero_or_negative_clamps_to_one(self):
-        assert tools._clamp_quantity(0) == (1, False)
-        assert tools._clamp_quantity(-5) == (1, False)
+    def test_zero_or_negative_clamps_to_one_with_a_reason(self):
+        # Real bug fix: this used to clamp silently (was_clamped=False),
+        # asymmetric with the over-the-limit case below, which always
+        # surfaced a note to the user.
+        quantity, reason = tools._clamp_quantity(0)
+        assert quantity == 1
+        assert reason is not None
+        assert "limit" not in reason  # not a limit — the input was just invalid
+
+        quantity, reason = tools._clamp_quantity(-5)
+        assert quantity == 1
+        assert reason is not None
 
     def test_over_the_limit_clamps_and_flags(self):
-        quantity, clamped = tools._clamp_quantity(tools.MAX_QUANTITY_PER_ORDER + 5)
+        quantity, reason = tools._clamp_quantity(tools.MAX_QUANTITY_PER_ORDER + 5)
         assert quantity == tools.MAX_QUANTITY_PER_ORDER
-        assert clamped is True
+        assert reason is not None
+        assert "limit" in reason

@@ -197,14 +197,24 @@ class TestReplyForDeferredOrder:
         assert "123 Main St" not in reply
 
     def test_clamp_note_is_appended_when_quantity_was_capped(self):
-        order = {"needs_address_confirmation": False, "quantity_clamped": True}
+        order = {"needs_address_confirmation": False, "quantity_clamped": "capped at our per-order limit of 2"}
         reply = guardrails.reply_for_deferred_order(order)
-        assert "capped" in reply.lower()
+        assert "capped at our per-order limit of 2" in reply
 
     def test_no_clamp_note_when_quantity_was_not_capped(self):
-        order = {"needs_address_confirmation": False, "quantity_clamped": False}
+        order = {"needs_address_confirmation": False, "quantity_clamped": None}
         reply = guardrails.reply_for_deferred_order(order)
         assert "capped" not in reply.lower()
+
+    def test_clamp_note_uses_the_real_reason_for_a_non_positive_quantity(self):
+        # Real bug fix: this used to always say "I've capped this at our
+        # per-order limit of 2" whenever quantity_clamped was truthy, which
+        # was flatly wrong for a non-positive quantity being raised to 1 —
+        # that isn't the per-order limit at all.
+        order = {"needs_address_confirmation": False, "quantity_clamped": "the requested quantity wasn't valid, so I used 1 instead"}
+        reply = guardrails.reply_for_deferred_order(order)
+        assert "wasn't valid" in reply
+        assert "per-order limit" not in reply
 
 
 class TestRecoverLeakedLookup:

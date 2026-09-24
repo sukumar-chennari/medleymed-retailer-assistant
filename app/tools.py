@@ -138,12 +138,20 @@ def save_address(user_id: str, address: str) -> str:
 MAX_QUANTITY_PER_ORDER = 2
 
 
-def _clamp_quantity(quantity: int) -> tuple[int, bool]:
-    """Returns (clamped_quantity, was_clamped)."""
-    quantity = max(1, quantity)
+def _clamp_quantity(quantity: int) -> tuple[int, str | None]:
+    """Returns (clamped_quantity, reason_or_None). Real bug this fixes: a
+    non-positive quantity (0, a negative number — e.g. a mis-parsed "order
+    -1 tablets") used to be silently raised to 1 with no reason at all,
+    asymmetric with exceeding MAX_QUANTITY_PER_ORDER, which DID surface a
+    note. Returning the actual reason (rather than a bare bool) also lets
+    every caller build an accurate message instead of a single hardcoded
+    "capped at our per-order limit" wording that was wrong for the
+    too-low case."""
+    if quantity < 1:
+        return 1, "the requested quantity wasn't valid, so I used 1 instead"
     if quantity > MAX_QUANTITY_PER_ORDER:
-        return MAX_QUANTITY_PER_ORDER, True
-    return quantity, False
+        return MAX_QUANTITY_PER_ORDER, f"capped at our per-order limit of {MAX_QUANTITY_PER_ORDER}"
+    return quantity, None
 
 
 def place_order(product_id: str, quantity: int = 1) -> str:
@@ -158,13 +166,10 @@ def place_order(product_id: str, quantity: int = 1) -> str:
             "error": "No address on file. Ask the user for their shipping address, "
                      "call save_address with it, then call place_order again."
         })
-    quantity, clamped = _clamp_quantity(quantity)
+    quantity, clamp_reason = _clamp_quantity(quantity)
     order = store.create_order(user_id="demo_user", product_id=product_id, address=address, quantity=quantity)
-    if clamped:
-        order["quantity_clamped"] = (
-            f"Quantity was capped at our per-order limit of {MAX_QUANTITY_PER_ORDER} "
-            f"for this product — mention this to the user."
-        )
+    if clamp_reason:
+        order["quantity_clamped"] = f"Quantity was adjusted — {clamp_reason} — mention this to the user."
     return json.dumps(order)
 
 
@@ -185,11 +190,8 @@ def start_order(product_id: str, session_id: str, quantity: int = 1) -> str:
             "error": f"Unknown product_id '{product_id}' — not in the fever/cold catalog."
         })
 
-    quantity, clamped = _clamp_quantity(quantity)
-    clamp_note = (
-        f" (Note: capped at our per-order limit of {MAX_QUANTITY_PER_ORDER} — mention this to the user.)"
-        if clamped else ""
-    )
+    quantity, clamp_reason = _clamp_quantity(quantity)
+    clamp_note = f" (Note: {clamp_reason} — mention this to the user.)" if clamp_reason else ""
 
     address = store.get_address("demo_user")
     if not address:
@@ -197,7 +199,7 @@ def start_order(product_id: str, session_id: str, quantity: int = 1) -> str:
         return json.dumps({
             "order_placed": False,
             "quantity": quantity,
-            "quantity_clamped": clamped,
+            "quantity_clamped": clamp_reason,
             "message": (
                 "No address on file. Ask the user for their shipping address in plain "
                 "conversational text now, then stop — do not call any more tools this "
@@ -212,7 +214,7 @@ def start_order(product_id: str, session_id: str, quantity: int = 1) -> str:
         "needs_address_confirmation": True,
         "address_on_file": address,
         "quantity": quantity,
-        "quantity_clamped": clamped,
+        "quantity_clamped": clamp_reason,
         "message": (
             f'Ask the user to confirm this shipping address on file: "{address}". '
             "Do not call any more tools this turn. If they confirm (e.g. \"yes\"), "

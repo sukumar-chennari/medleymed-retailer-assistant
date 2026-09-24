@@ -84,11 +84,12 @@ def reply_for_deferred_order(order: dict) -> str:
     without tripping that guard at all, since it never claimed completion —
     it silently omitted that a requested quantity had been capped by our
     per-order limit, so the user only found out from the final order
-    confirmation instead of before agreeing to it."""
-    clamp_note = (
-        f" (Note: I've capped this at our per-order limit of {tools.MAX_QUANTITY_PER_ORDER}.)"
-        if order.get("quantity_clamped") else ""
-    )
+    confirmation instead of before agreeing to it. quantity_clamped is the
+    actual reason text from tools._clamp_quantity (or None), not a bare
+    bool — a hardcoded "capped at our per-order limit" note here used to
+    show up even when the real reason was a non-positive quantity being
+    raised to 1, which isn't a limit at all."""
+    clamp_note = f" (Note: {order['quantity_clamped']}.)" if order.get("quantity_clamped") else ""
     if order.get("needs_address_confirmation"):
         return (
             f"We have this address on file: {order['address_on_file']}. Should I "
