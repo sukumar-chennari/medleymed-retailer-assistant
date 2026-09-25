@@ -316,10 +316,20 @@ def _is_affirmative(text: str) -> bool:
 # one") all hit the same unhelpful "should I ship to X, or give a different
 # address?" re-ask verbatim, producing a real stuck loop with no progress.
 ADDRESS_REJECTION_WORDS = {"no", "not", "different", "another", "new", "change", "elsewhere", "else", "other"}
+MAX_ADDRESS_REJECTION_WORDS = 6
 
 
 def _wants_different_address(text: str) -> bool:
+    # Real bug: unlike _declines below (which has this same cap for the
+    # same reason), this had no length limit at all — several of
+    # ADDRESS_REJECTION_WORDS ("no", "new", "other"...) are common enough
+    # that an unrelated, longer message asking a real question ("do you
+    # have any other cold medicine options") got misread as rejecting the
+    # address on file, derailing the conversation into "what's the new
+    # shipping address?" instead of ever answering the actual question.
     words = re.findall(r"[a-z']+", text.lower())
+    if not words or len(words) > MAX_ADDRESS_REJECTION_WORDS:
+        return False
     return any(w in ADDRESS_REJECTION_WORDS for w in words)
 
 

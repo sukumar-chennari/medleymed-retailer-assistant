@@ -167,6 +167,14 @@ class TestWantsDifferentAddress:
     def test_a_plain_address_does_not_want_a_different_one(self):
         assert not main._wants_different_address("123 Main St, Springfield")
 
+    def test_a_long_unrelated_message_containing_a_rejection_word_does_not_count(self):
+        # Real bug: unlike _declines, this had no length cap at all, so a
+        # longer message asking an unrelated real question ("do you have
+        # any other cold medicine options") — which just happens to
+        # contain "other" — got misread as rejecting the address on file.
+        text = "actually, do you have any other cold medicine options"
+        assert not main._wants_different_address(text)
+
 
 class TestDeclines:
     def test_short_decline_phrasings(self):
