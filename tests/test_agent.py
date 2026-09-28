@@ -62,6 +62,14 @@ class TestDetectAge:
     def test_no_age_mentioned(self):
         assert agent._detect_age("i have a cough") == ""
 
+    def test_substring_of_an_unrelated_word_does_not_count_as_an_answer(self):
+        # Real bug: plain substring matching let "me" (a valid one-word
+        # adult answer) match INSIDE unrelated words like "recommend" or
+        # "medicine" that merely contain it — falsely detecting an age that
+        # was never actually mentioned.
+        assert agent._detect_age("what medicine do you recommend for a cough") == ""
+        assert agent._detect_age("i have a cough, what do you recommend") == ""
+
 
 class TestSplitTrigger:
     def test_splits_an_age_suffixed_trigger(self):
@@ -88,6 +96,13 @@ class TestNeedsClarification:
         result = agent._needs_clarification("I have a cough")
         assert result is not None
         trigger, _ = result
+        assert trigger == "cough"
+
+    def test_a_deflection_word_does_not_falsely_encode_an_age(self):
+        # Real bug: "what do you recommend" never mentions an age, but
+        # "recommend" contains "me" as a substring — this used to encode
+        # "cough:adult" as if age had genuinely been given.
+        trigger, _ = agent._needs_clarification("I have a cough, what do you recommend")
         assert trigger == "cough"
 
     def test_cough_type_known_but_age_unknown_still_asks_encoding_the_type(self):
@@ -190,6 +205,18 @@ class TestResolveClarification:
 
     def test_unmatched_answer_returns_none(self):
         assert agent.resolve_clarification("cough", "maybe, not sure", "s1") is None
+
+    def test_a_deflection_containing_me_as_a_substring_does_not_count_as_adult(self):
+        # Real bug: "what do you recommend" never answers "child or adult?"
+        # at all, but "recommend" contains "me" as a substring — plain
+        # substring matching used to silently read this as answering
+        # "adult" and immediately show adult products instead of falling
+        # through to a normal turn.
+        assert agent.resolve_clarification("fever", "what do you recommend", "s1") is None
+
+    def test_me_as_a_real_standalone_word_still_counts_as_adult(self):
+        reply = agent.resolve_clarification("fever", "me", "s1")
+        assert "Paracetamol 500mg" in reply
 
     def test_unknown_trigger_returns_none(self):
         assert agent.resolve_clarification("not-a-real-trigger", "dry", "s1") is None

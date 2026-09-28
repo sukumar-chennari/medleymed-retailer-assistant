@@ -395,9 +395,24 @@ _AGE_WORDS = {
 }
 
 
+def _matches_any_word(text_lower: str, words: tuple) -> bool:
+    """Word-boundary match, NOT substring match. Real bug this fixes: plain
+    `any(w in text_lower for w in words)` let a short, legitimate one-word
+    answer like "me" match INSIDE an unrelated word that merely contains it
+    as a substring — e.g. answering the "is this for a child or adult?"
+    question with "what do you recommend" (a deflection that never actually
+    answers it) was silently read as "adult" purely because "recommend"
+    contains "me", and immediately resolved with adult products instead of
+    correctly falling through to a normal turn. Used everywhere a
+    CLARIFYING_QUESTIONS answers/qualifiers tuple is checked against free
+    text, since every entry in those tuples is a single word."""
+    tokens = set(re.findall(r"[a-z']+", text_lower))
+    return any(w in tokens for w in words)
+
+
 def _detect_age(text_lower: str) -> str:
     for age, words in _AGE_WORDS.items():
-        if any(w in text_lower for w in words):
+        if _matches_any_word(text_lower, words):
             return age
     return ""
 
@@ -434,7 +449,7 @@ def _needs_clarification(source_text: str) -> tuple[str, str] | None:
     matched_triggers = [
         trigger
         for trigger, rule in CLARIFYING_QUESTIONS.items()
-        if _trigger_matches(trigger, s, categories) and not any(q in s for q in rule["qualifiers"])
+        if _trigger_matches(trigger, s, categories) and not _matches_any_word(s, rule["qualifiers"])
     ]
     if not matched_triggers:
         return None
@@ -513,7 +528,7 @@ def _resolve_child_cough(branch: dict, session_id: str) -> str:
 
 def _detect_cough_type(text_lower: str) -> str:
     for branch in CLARIFYING_QUESTIONS["cough"]["branches"]:
-        if any(a in text_lower for a in branch["answers"]):
+        if _matches_any_word(text_lower, branch["answers"]):
             return branch["answers"][0]  # canonical "dry" or "wet"
     return ""
 
@@ -547,7 +562,7 @@ def _resolve_fever_and_cold(answer_text: str, session_id: str) -> str | None:
     product_ids: list[str] = []
     for category in ("fever", "cold"):
         for branch in CLARIFYING_QUESTIONS[category]["branches"]:
-            if any(a in s for a in branch["answers"]):
+            if _matches_any_word(s, branch["answers"]):
                 product_ids.extend(branch["product_ids"])
                 break
     if not product_ids:
@@ -578,7 +593,7 @@ def resolve_clarification(trigger: str, answer_text: str, session_id: str) -> st
         return None
     s = answer_text.lower()
     for branch in rule["branches"]:
-        if any(a in s for a in branch["answers"]):
+        if _matches_any_word(s, branch["answers"]):
             if base_trigger == "cough" and suffix == "child":
                 return _resolve_child_cough(branch, session_id)
             if base_trigger == "cold" and suffix.startswith("cough_"):
@@ -612,14 +627,14 @@ def _resolve_prequalified_clarification(source_text: str, session_id: str) -> st
         age = _detect_age(s)
         if age == "child":
             for branch in CLARIFYING_QUESTIONS["cough"]["branches"]:
-                if any(a in s for a in branch["answers"]):
+                if _matches_any_word(s, branch["answers"]):
                     return _resolve_child_cough(branch, session_id)
 
     categories = set(tools.classify_categories(source_text))
     matched_triggers = [
         trigger
         for trigger, rule in CLARIFYING_QUESTIONS.items()
-        if _trigger_matches(trigger, s, categories) and any(q in s for q in rule["qualifiers"])
+        if _trigger_matches(trigger, s, categories) and _matches_any_word(s, rule["qualifiers"])
     ]
     if not matched_triggers:
         return None
