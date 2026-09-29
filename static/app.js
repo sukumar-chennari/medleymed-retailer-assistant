@@ -37,6 +37,7 @@ ctaOpenChat.addEventListener("click", () => openChat());
 async function loadDashboard() {
   try {
     const res = await fetch("/api/dashboard");
+    if (!res.ok) throw new Error(`Request failed (${res.status})`);
     const data = await res.json();
 
     document.getElementById("topbar-user").textContent = `Hi, ${data.name}`;
@@ -62,6 +63,13 @@ async function loadDashboard() {
       });
     }
   } catch (err) {
+    // Real bug: without this, a genuine server error (not just a network
+    // failure) left "card-address"/"card-orders" stuck on their initial
+    // "Loading…" text forever, with zero visible indication anything
+    // failed — a plain-text 500 response makes res.json() throw, which
+    // this catch already caught, just without ever telling the user.
+    document.getElementById("card-address").textContent = "Couldn't load dashboard data — check the server is running.";
+    document.getElementById("card-orders").textContent = "Couldn't load dashboard data.";
     console.error("Failed to load dashboard", err);
   }
 }
@@ -115,6 +123,7 @@ function renderGuardrailLog(events) {
 async function loadMetrics() {
   try {
     const res = await fetch("/api/metrics");
+    if (!res.ok) throw new Error(`Request failed (${res.status})`);
     const data = await res.json();
 
     const confidenceEl = document.getElementById("stat-retrieval-confidence");
@@ -129,6 +138,11 @@ async function loadMetrics() {
 
     renderGuardrailLog(data.recent_guardrail_events || []);
   } catch (err) {
+    // Same bug as loadDashboard's catch block: "guardrail-log" starts as
+    // "Loading…" and, without this, stayed stuck there forever on a real
+    // server error with no visible indication anything failed.
+    document.getElementById("guardrail-log").innerHTML =
+      '<div class="guardrail-log-empty">Couldn\'t load metrics — check the server is running.</div>';
     console.error("Failed to load metrics", err);
   }
 }
@@ -241,6 +255,7 @@ async function loadCatalog() {
   const catalogEl = document.getElementById("catalog-grid");
   try {
     const res = await fetch("/api/catalog");
+    if (!res.ok) throw new Error(`Request failed (${res.status})`);
     allProducts = await res.json();
     renderCatalog(allProducts);
   } catch (err) {
