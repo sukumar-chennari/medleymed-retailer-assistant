@@ -30,7 +30,7 @@ class TestClassifyCategories:
     def test_both_categories_in_one_message(self):
         # Both must come back, not just whichever matched first — see
         # _category_hit's own docstring for the bug this covers.
-        categories = tools.classify_categories("nose block and feverih")
+        categories = tools.classify_categories("nose block and fever")
         assert "fever" in categories
         assert "cold" in categories
 
@@ -52,6 +52,20 @@ class TestClassifyCategories:
         # "congestion" at the old 0.8 cutoff — a real false positive found
         # via a photographed unrelated document, not a hypothetical.
         assert tools.classify_categories("your line reconnection is confirmed") == []
+
+    def test_short_keyword_inside_an_unrelated_word_does_not_count(self):
+        # Real bug: short single-word keywords ("flu", "nasal") used to
+        # match as raw substrings of ANY word containing them — "the
+        # fluent speaker" wrongly classified as a cold symptom mention via
+        # "flu" inside "fluent", with zero real symptom content.
+        assert tools.classify_categories("the fluent speaker") == []
+        assert tools.classify_categories("I feel confluent today") == []
+        assert tools.classify_categories("the flute solo was great") == []
+        assert tools.classify_categories("nasally speaking, that was odd") == []
+
+    def test_short_keyword_as_a_real_standalone_word_still_counts(self):
+        assert tools.classify_categories("I have the flu") == ["cold"]
+        assert tools.classify_categories("my nose feels stuffy and nasal") == ["cold"]
 
 
 class TestClassify:

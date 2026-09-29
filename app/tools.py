@@ -51,16 +51,38 @@ FUZZY_CUTOFF = 0.85
 FUZZY_MIN_WORD_LEN = 7
 
 
+def _keyword_hit(s: str, keywords: list[str]) -> bool:
+    """Word-boundary match for a single-word keyword, plain substring match
+    for a multi-word phrase (a phrase can't accidentally appear inside an
+    unrelated single word, so substring matching stays safe for those).
+    Real bug this fixes: short single-word keywords like "flu"/"nasal"
+    matched as raw substrings of ANY word containing them — "the fluent
+    speaker" or "nasally speaking" both wrongly classified as a cold
+    symptom mention (via "flu" inside "fluent", "nasal" inside "nasally"),
+    even with zero real symptom content in the message. (A lone word like
+    "sore" with no other context is a separate, pre-existing design point —
+    COLD_WORDS' own word-set fallback already treats single symptom words
+    as signal for typo tolerance — unrelated to this substring fix.)"""
+    for keyword in keywords:
+        if " " in keyword:
+            if keyword in s:
+                return True
+        elif re.search(rf"\b{re.escape(keyword)}\b", s):
+            return True
+    return False
+
+
 def _category_hit(s: str, words: list[str], keywords: list[str], word_set: set[str], long_word_set: set[str]) -> bool:
-    """Substring keyword match, or exact word membership, or (for long,
-    distinctive words only — see FUZZY_MIN_WORD_LEN) a fuzzy match. All
-    three checks always run for a category — this used to be structured as
-    "try substrings for both categories, and only fall back to word/fuzzy
-    matching if NEITHER substring matched at all", which meant a message
-    like "nose block and feverih" (fever hits the "fever" substring inside
-    "feverih", so fuzzy fallback never runs at all) never got to check "nose"
-    as a cold word, silently dropping cold from the result entirely."""
-    if any(k in s for k in keywords):
+    """Substring/word-boundary keyword match (see _keyword_hit), or exact
+    word membership, or (for long, distinctive words only — see
+    FUZZY_MIN_WORD_LEN) a fuzzy match. All three checks always run for a
+    category — this used to be structured as "try substrings for both
+    categories, and only fall back to word/fuzzy matching if NEITHER
+    substring matched at all", which meant a message like "nose block and
+    fever" (fever hits the substring check, so fuzzy fallback never runs at
+    all) never got to check "nose" as a cold word, silently dropping cold
+    from the result entirely."""
+    if _keyword_hit(s, keywords):
         return True
     if any(w in word_set for w in words):
         return True
@@ -72,7 +94,7 @@ def _category_hit(s: str, words: list[str], keywords: list[str], word_set: set[s
 
 def classify_categories(symptom: str) -> list[str]:
     """Returns every category the text matches, not just the first — a
-    message like "nose block and feverih" describes both a cold symptom and
+    message like "nose block and fever" describes both a cold symptom and
     a fever, and both need to come back so the model can offer both, not
     just whichever one this function happened to check/match first."""
     s = symptom.strip().lower()
