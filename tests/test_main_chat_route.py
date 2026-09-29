@@ -95,12 +95,28 @@ class TestPendingAddressConfirmation:
         assert store.get_pending_address_confirmation("s1") is not None
         assert store.list_orders("demo_user") == []
 
-    def test_ambiguous_reply_re_asks_the_compound_question(self):
+    def test_declining_cancels_the_pending_order_without_placing_it(self):
         self._seed("s1")
-        reply = _chat("s1", "hmm")
-        assert "123 Main St" in reply
-        assert "different address" in reply.lower()
+        reply = _chat("s1", "cancel that")
+        assert "won't place that order" in reply.lower()
+        assert store.get_pending_address_confirmation("s1") is None
         assert store.list_orders("demo_user") == []
+
+    def test_an_unrelated_message_reaches_a_real_turn_instead_of_repeating_the_question(self, monkeypatch):
+        # Real bug: this used to unconditionally repeat "Just to confirm —
+        # should I ship to X..." for ANY reply that wasn't yes/an address/
+        # "different address" — even a completely unrelated message ("who
+        # is narendra modi") — trapping the conversation instead of just
+        # answering it. Same trapping bug already fixed for
+        # pending_product_id/pending_email_order_id, just missing here.
+        # Mirrors those siblings' own tests: stub run_turn instead of
+        # needing a real LLM call, since this file stays fast/deterministic.
+        self._seed("s1")
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("stubbed reply", messages))
+        reply = _chat("s1", "who is narendra modi")
+        assert reply == "stubbed reply"
+        # Stays set, so a genuine answer given afterward still completes it.
+        assert store.get_pending_address_confirmation("s1") is not None
 
 
 class TestPendingEmail:

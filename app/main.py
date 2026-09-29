@@ -450,14 +450,28 @@ def chat(req: ChatRequest):
             reply = "No problem — what's the new shipping address?"
             messages.append({"role": "user", "content": text})
             messages.append({"role": "assistant", "content": reply})
-        elif pending_address_confirmation and text:
-            # Neither a clear yes, a new address, nor a rejection — ask again
-            # rather than guessing which one they meant; keep the LLM out of
-            # this state for the same reasons as the other pending branches.
-            address = store.get_address("demo_user")
-            reply = f"Just to confirm — should I ship to {address}, or would you like to give a different address?"
+        elif pending_address_confirmation and text and _declines(text):
+            store.clear_pending_address_confirmation(req.session_id)
+            reply = "No problem — I won't place that order. Let me know if you change your mind."
             messages.append({"role": "user", "content": text})
             messages.append({"role": "assistant", "content": reply})
+        elif pending_address_confirmation and text:
+            # Real bug, same trapping pattern already fixed for
+            # pending_email_order_id/pending_product_id below but missing
+            # here: this used to unconditionally repeat "Just to confirm —
+            # should I ship to X..." even for a completely unrelated message
+            # ("who is narendra modi"), trapping the conversation instead of
+            # just answering it. Route it through the real turn instead —
+            # while leaving pending_address_confirmation set, so a genuine
+            # yes/address/rejection typed later is still handled by the
+            # branches above.
+            reply, messages = run_turn(
+                messages,
+                user_text=req.text,
+                session_id=req.session_id,
+                image_b64=req.image_b64,
+                image_media_type=req.image_media_type,
+            )
         elif pending_email_order_id and text and _looks_like_an_email(text):
             store.clear_pending_email(req.session_id)
             email_in_text, _ = _extract_email(text)

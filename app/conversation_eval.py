@@ -203,6 +203,40 @@ CONVERSATION_CASES = [
         ],
     },
     {
+        "name": "unrelated_question_during_address_confirmation_does_not_trap",
+        # Real bug this pins: pending_address_confirmation's catch-all used
+        # to unconditionally repeat "Just to confirm — should I ship to
+        # X..." for ANY reply that wasn't yes/an address/"different
+        # address" — even a completely unrelated message — trapping the
+        # conversation. Same trapping bug already fixed for
+        # pending_product_id/pending_email_order_id (see cancel_then_
+        # reorder/out_of_scope_decline), just missing from this third
+        # pending-state branch. See main.py's chat() dispatch chain.
+        "turns": [
+            {"text": "I have a dry cough", "checks": [("asks the clarifying question", lambda r: _contains_any(r, ["child", "adult"]))]},
+            {"text": "for myself", "checks": [("recommends the real product", lambda r: "Cough Suppressant" in r)]},
+            {"text": "yes", "checks": [("asks for a shipping address", lambda r: "shipping address" in r.lower())]},
+            {
+                "text": "123 Unrelated Question Rd",
+                "checks": [("first order confirmed", lambda r: "Order confirmed!" in r and "ord-0001" in r)],
+            },
+            {"text": "reorder that", "checks": [("confirms the address already on file", lambda r: "123 Unrelated Question Rd" in r)]},
+            {
+                "text": "can you help me fix a bug in my python script",
+                "checks": [
+                    ("answers instead of repeating the confirm-address question", lambda r: "can't help with that here" in r.lower()),
+                    ("never claims an order was placed", lambda r: "Order confirmed!" not in r),
+                ],
+            },
+            {
+                "text": "yes",
+                "checks": [
+                    ("the pending order still completes afterward", lambda r: "Order confirmed!" in r and "ord-0002" in r),
+                ],
+            },
+        ],
+    },
+    {
         "name": "bare_numeric_selection_from_a_product_list",
         # Fully deterministic — proves main.py's _resolve_bare_selection
         # dispatch is actually wired correctly end-to-end through the real
