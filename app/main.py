@@ -316,7 +316,15 @@ def _is_affirmative(text: str) -> bool:
 # one") all hit the same unhelpful "should I ship to X, or give a different
 # address?" re-ask verbatim, producing a real stuck loop with no progress.
 ADDRESS_REJECTION_WORDS = {"no", "not", "different", "another", "new", "change", "elsewhere", "else", "other"}
-MAX_ADDRESS_REJECTION_WORDS = 6
+# Real bug: 6 was picked by only checking the shortest known-good
+# phrasings in tests/test_main_heuristics.py, without also checking
+# conversation_eval.py's own established "no, i will give a different
+# one" (7 words) — which this cap then silently broke, regressing a
+# previously-passing scripted conversation. 8 covers that phrase with a
+# little headroom while still well under the 9-word false-positive case
+# ("actually, do you have any other cold medicine options") this cap
+# exists to reject.
+MAX_ADDRESS_REJECTION_WORDS = 8
 
 
 def _wants_different_address(text: str) -> bool:

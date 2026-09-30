@@ -164,6 +164,15 @@ class TestWantsDifferentAddress:
         for text in ["no new one", "i will give another address", "i will give different one", "somewhere else"]:
             assert main._wants_different_address(text), text
 
+    def test_the_conversation_eval_phrasing_still_counts(self):
+        # Real regression: MAX_ADDRESS_REJECTION_WORDS=6 was picked by only
+        # checking the phrasings in this test file — conversation_eval.py's
+        # own established "no, i will give a different one" is 7 words and
+        # got silently broken by that cap, regressing a previously-passing
+        # scripted conversation (falling through to a real, nondeterministic
+        # LLM turn instead of the deterministic re-ask).
+        assert main._wants_different_address("no, i will give a different one")
+
     def test_a_plain_address_does_not_want_a_different_one(self):
         assert not main._wants_different_address("123 Main St, Springfield")
 
