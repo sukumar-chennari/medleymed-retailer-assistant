@@ -316,7 +316,26 @@ def get_session_messages(session_id: str) -> list:
     return json.loads(raw) if raw else []
 
 
+# Real bug this fixes: with no cap at all, a long demo/course session's
+# history grew unbounded and got re-sent to the LLM in full on EVERY turn
+# (see agent.py's run_turn, which passes the whole list to
+# create_agent(...).invoke()) — silently risking blowing past the local
+# model's context window the longer a conversation ran, on top of
+# ever-growing per-turn latency and DB size. 40 (20 user/assistant pairs)
+# is generous for this demo's actual flows (even a multi-step order —
+# clarify, recommend, confirm, address, email — is well under that) while
+# still bounding growth for a long free-form conversation.
+MAX_SESSION_MESSAGES = 40
+
+
 def save_session_messages(session_id: str, messages: list) -> None:
+    # Trims from the FRONT, in whole pairs (MAX_SESSION_MESSAGES is even) —
+    # every entry here is always appended as a matched user/assistant pair
+    # (see agent.py's run_turn and main.py's deterministic branches), so
+    # slicing a multiple of 2 off the front never leaves a dangling,
+    # mismatched message behind.
+    if len(messages) > MAX_SESSION_MESSAGES:
+        messages = messages[-MAX_SESSION_MESSAGES:]
     _set_session_column(session_id, "messages_json", json.dumps(messages))
 
 

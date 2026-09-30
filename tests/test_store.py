@@ -193,6 +193,27 @@ class TestSessionStateExtended:
         store.save_session_messages("s1", messages)
         assert store.get_session_messages("s1") == messages
 
+    def test_session_messages_under_the_cap_are_unaffected(self):
+        messages = [{"role": "user", "content": f"turn {i}"} for i in range(10)]
+        store.save_session_messages("s1", messages)
+        assert store.get_session_messages("s1") == messages
+
+    def test_session_messages_are_capped_to_the_most_recent_pairs(self):
+        # Real bug: with no cap at all, a long conversation's history grew
+        # unbounded and got re-sent to the LLM in full on every turn,
+        # silently risking blowing past the local model's context window.
+        messages = []
+        for i in range(200):
+            messages.append({"role": "user", "content": f"turn {i}"})
+            messages.append({"role": "assistant", "content": f"reply {i}"})
+        store.save_session_messages("s1", messages)
+        saved = store.get_session_messages("s1")
+        assert len(saved) == store.MAX_SESSION_MESSAGES
+        # Keeps the MOST RECENT turns, still starting on a user message —
+        # trimming from the front must always remove whole pairs.
+        assert saved[0] == {"role": "user", "content": "turn 180"}
+        assert saved[-1] == {"role": "assistant", "content": "reply 199"}
+
 
 class TestSchemaMigration:
     def test_status_column_is_added_to_a_pre_existing_orders_table(self, tmp_path, monkeypatch):
