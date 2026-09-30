@@ -141,13 +141,21 @@ def lookup_symptom(symptom: str) -> str:
     })
 
 
-def get_saved_address(user_id: str) -> str:
-    address = store.get_address(user_id)
+def get_saved_address() -> str:
+    """Hardcoded to "demo_user", same as place_order/start_order/
+    check_order_status/cancel_order and for the same documented reason
+    (see check_order_status's docstring) — a model-supplied user_id here
+    proved unreliable: with no guidance anywhere on what value to use, the
+    model could call save_address with an arbitrary id that round-trips
+    fine through get_saved_address for THAT id, but is invisible to
+    start_order/place_order (already hardcoded to "demo_user"), silently
+    asking the user to repeat their address on every order attempt."""
+    address = store.get_address("demo_user")
     return json.dumps({"address": address})
 
 
-def save_address(user_id: str, address: str) -> str:
-    store.save_address(user_id, address)
+def save_address(address: str) -> str:
+    store.save_address("demo_user", address)
     return json.dumps({"saved": True, "address": address})
 
 

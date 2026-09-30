@@ -80,14 +80,30 @@ class TestSendConfirmationEmailRealSmtpPath:
 
 class TestSavedAddress:
     def test_no_address_saved_yet(self):
-        result = json.loads(tools.get_saved_address("demo_user"))
+        result = json.loads(tools.get_saved_address())
         assert result["address"] is None
 
     def test_save_then_get_round_trip(self):
-        save_result = json.loads(tools.save_address("demo_user", "1 Test Way"))
+        # Real bug fix: user_id used to be a model-supplied argument here,
+        # the only two tools still exposing it — a model-supplied id
+        # (anything other than the literal "demo_user", which nothing told
+        # it to use) saved successfully but was invisible to start_order/
+        # place_order, hardcoded to "demo_user" like every other order
+        # tool. Now hardcoded here too.
+        save_result = json.loads(tools.save_address("1 Test Way"))
         assert save_result == {"saved": True, "address": "1 Test Way"}
-        get_result = json.loads(tools.get_saved_address("demo_user"))
+        get_result = json.loads(tools.get_saved_address())
         assert get_result["address"] == "1 Test Way"
+
+    def test_no_longer_accepts_a_user_id_argument(self):
+        # Structurally prevents the bug from coming back: a model-supplied
+        # user_id isn't just unused now, it's not an accepted argument at
+        # all, so there's no way to accidentally save an address under any
+        # id other than "demo_user".
+        with pytest.raises(TypeError):
+            tools.save_address("demo_user", "1 Test Way")
+        with pytest.raises(TypeError):
+            tools.get_saved_address("demo_user")
 
 
 class TestPlaceOrder:

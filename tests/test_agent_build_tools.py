@@ -36,12 +36,17 @@ class TestBuildToolsWiring:
     def test_get_saved_address(self):
         store.save_address("demo_user", "1 Test Way")
         tools_map = _tools_by_name("s1")
-        result = json.loads(tools_map["get_saved_address"].invoke({"user_id": "demo_user"}))
+        result = json.loads(tools_map["get_saved_address"].invoke({}))
         assert result["address"] == "1 Test Way"
 
     def test_save_address(self):
+        # Real bug fix: user_id used to be a model-supplied argument here —
+        # the only two tools still exposing it, unlike start_order/
+        # check_order_status/cancel_order, which are all hardcoded to
+        # "demo_user" for the same documented reason (an LLM-supplied id
+        # proved unreliable). Now hardcoded the same way.
         tools_map = _tools_by_name("s1")
-        tools_map["save_address"].invoke({"user_id": "demo_user", "address": "2 Test Ave"})
+        tools_map["save_address"].invoke({"address": "2 Test Ave"})
         assert store.get_address("demo_user") == "2 Test Ave"
 
     def test_start_order_closes_over_the_right_session_id(self):

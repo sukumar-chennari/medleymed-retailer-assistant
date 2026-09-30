@@ -732,17 +732,17 @@ def _build_tools(session_id: str) -> list:
         return tools.lookup_symptom(symptom)
 
     @tool
-    def get_saved_address(user_id: str) -> str:
+    def get_saved_address() -> str:
         """Retrieve the saved shipping address for the current user, if one exists.
         Always call this before asking the user for an address and before placing an order."""
-        return tools.get_saved_address(user_id)
+        return tools.get_saved_address()
 
     @tool
-    def save_address(user_id: str, address: str) -> str:
+    def save_address(address: str) -> str:
         """Save a shipping address for the current user so future orders don't need
         to ask again. Call this only after the user has explicitly provided their
         address in chat."""
-        return tools.save_address(user_id, address)
+        return tools.save_address(address)
 
     @tool
     def start_order(product_id: str, quantity: int = 1) -> str:
