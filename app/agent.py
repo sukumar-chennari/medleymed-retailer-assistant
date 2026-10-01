@@ -208,23 +208,42 @@ ORDER_INTENT_RE = re.compile(
 )
 
 CANCEL_INTENT_RE = re.compile(r"\bcancel\b", re.IGNORECASE)
-# Real bug: CANCEL_INTENT_RE alone can't tell "cancel my order" from "don't
-# cancel my order" — both contain the word "cancel". A user retracting a
-# cancellation ("wait, don't cancel it") would otherwise read as confirmed
-# cancel intent, letting a real cancel_order call straight through the one
-# guardrail that exists specifically to never trust the model's own
-# judgment for this state-changing action (see _GuardrailMiddleware's
-# cancel_order branch below).
-CANCEL_NEGATION_RE = re.compile(r"\b(don'?t|do not|never|not)\s+(\w+\s+){0,4}cancel\b", re.IGNORECASE)
-
-
-def _has_cancel_intent(user_text: str) -> bool:
-    return bool(CANCEL_INTENT_RE.search(user_text)) and not CANCEL_NEGATION_RE.search(user_text)
 
 REORDER_INTENT_RE = re.compile(
     r"\b(reorder|re-order|order (it|that|this|the same) again|same (thing|order) again|order again)\b",
     re.IGNORECASE,
 )
+
+# Real bug: a plain intent-phrase regex match can't tell "cancel/reorder my
+# order" from "don't cancel/reorder my order" — both contain the same
+# trigger phrase. A user retracting a request ("wait, don't cancel it")
+# would otherwise read as confirmed intent, letting a real cancel_order/
+# reorder_last call straight through the one guardrail that exists
+# specifically to never trust the model's own judgment for these
+# state-changing actions (see _GuardrailMiddleware's cancel_order/
+# reorder_last branches below). Checked by looking for a negation word
+# (don't/do not/never/not) shortly before wherever intent_re actually
+# matched, rather than a fixed-distance regex tied to one specific trigger
+# word — works the same way for both CANCEL_INTENT_RE's single word and
+# REORDER_INTENT_RE's several different phrasings.
+_NEGATION_WORDS_RE = re.compile(r"\b(don'?t|do not|never|not)\b", re.IGNORECASE)
+_NEGATION_LOOKBACK_CHARS = 25
+
+
+def _has_unnegated_intent(user_text: str, intent_re: re.Pattern) -> bool:
+    match = intent_re.search(user_text)
+    if not match:
+        return False
+    preceding = user_text[max(0, match.start() - _NEGATION_LOOKBACK_CHARS) : match.start()]
+    return not _NEGATION_WORDS_RE.search(preceding)
+
+
+def _has_cancel_intent(user_text: str) -> bool:
+    return _has_unnegated_intent(user_text, CANCEL_INTENT_RE)
+
+
+def _has_reorder_intent(user_text: str) -> bool:
+    return _has_unnegated_intent(user_text, REORDER_INTENT_RE)
 
 # Gates the decline_out_of_scope reversal's established-category fallback
 # (see wrap_tool_call) — a message has to actually read as a follow-up to
@@ -990,7 +1009,7 @@ class _GuardrailMiddleware(AgentMiddleware):
                 # message itself asks to. Result shape matches start_order's
                 # exactly (reorder_last delegates straight to it), so the
                 # rest of this branch mirrors start_order's parsing.
-                if not (user_text and REORDER_INTENT_RE.search(user_text)):
+                if not (user_text and _has_reorder_intent(user_text)):
                     _log_guard(session_id, "blocked_unconfirmed_reorder", f"{args}")
                     result = json.dumps({
                         "order_placed": False,

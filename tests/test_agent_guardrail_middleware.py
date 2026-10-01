@@ -208,6 +208,17 @@ class TestReorderLast:
         assert turn_state["real_order_placed"] is True
         assert turn_state["completed_order"]["order_id"] == "ord-0002"
 
+    def test_blocked_when_reorder_is_negated(self):
+        # Real bug: same negation-blindness class already fixed for
+        # cancel_order — "don't reorder that" literally contains "reorder",
+        # which used to read as confirmed reorder intent.
+        for text in ["don't reorder that", "no, do not order that again"]:
+            handler = _handler_returning("unused")
+            mw = _middleware(user_text=text)
+            result = mw.wrap_tool_call(_FakeRequest("reorder_last", {}), handler)
+            assert not handler.calls, text
+            assert json.loads(result.content)["order_placed"] is False, text
+
     def test_email_sent_is_grounded_too(self):
         turn_state = {}
         mw = _middleware(user_text="reorder that", turn_state=turn_state)

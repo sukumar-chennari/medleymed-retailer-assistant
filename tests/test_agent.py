@@ -58,6 +58,15 @@ class TestIntentRegexes:
             assert agent.REORDER_INTENT_RE.search(text), text
         assert not agent.REORDER_INTENT_RE.search("order fev-001")
 
+    def test_has_reorder_intent_rejects_a_negated_reorder(self):
+        # Real bug: same negation-blindness class already fixed for
+        # cancel intent — REORDER_INTENT_RE alone can't tell "reorder
+        # that" from "don't reorder that".
+        assert agent._has_reorder_intent("reorder that")
+        assert agent._has_reorder_intent("please reorder the same thing again")
+        for text in ["don't reorder that", "no, do not order that again"]:
+            assert not agent._has_reorder_intent(text), text
+
 
 class TestDetectAge:
     def test_detects_child(self):
