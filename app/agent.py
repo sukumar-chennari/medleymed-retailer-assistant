@@ -208,6 +208,18 @@ ORDER_INTENT_RE = re.compile(
 )
 
 CANCEL_INTENT_RE = re.compile(r"\bcancel\b", re.IGNORECASE)
+# Real bug: CANCEL_INTENT_RE alone can't tell "cancel my order" from "don't
+# cancel my order" — both contain the word "cancel". A user retracting a
+# cancellation ("wait, don't cancel it") would otherwise read as confirmed
+# cancel intent, letting a real cancel_order call straight through the one
+# guardrail that exists specifically to never trust the model's own
+# judgment for this state-changing action (see _GuardrailMiddleware's
+# cancel_order branch below).
+CANCEL_NEGATION_RE = re.compile(r"\b(don'?t|do not|never|not)\s+(\w+\s+){0,4}cancel\b", re.IGNORECASE)
+
+
+def _has_cancel_intent(user_text: str) -> bool:
+    return bool(CANCEL_INTENT_RE.search(user_text)) and not CANCEL_NEGATION_RE.search(user_text)
 
 REORDER_INTENT_RE = re.compile(
     r"\b(reorder|re-order|order (it|that|this|the same) again|same (thing|order) again|order again)\b",
@@ -1011,7 +1023,7 @@ class _GuardrailMiddleware(AgentMiddleware):
                 # Same "never trust the model's own judgment for a
                 # state-changing action" pattern as blocked_premature_order —
                 # only actually cancel when this message itself says so.
-                if not (user_text and CANCEL_INTENT_RE.search(user_text)):
+                if not (user_text and _has_cancel_intent(user_text)):
                     _log_guard(session_id, "blocked_unconfirmed_cancel", f"{args}")
                     result = json.dumps({
                         "cancelled": False,

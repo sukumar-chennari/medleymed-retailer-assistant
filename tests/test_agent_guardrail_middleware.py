@@ -239,6 +239,20 @@ class TestCancelOrder:
         mw.wrap_tool_call(_FakeRequest("cancel_order", {}), handler)
         assert turn_state["cancelled_order"]["order_id"] == "ord-0001"
 
+    def test_blocked_when_cancel_is_negated(self):
+        # Real bug: CANCEL_INTENT_RE alone can't tell "cancel my order"
+        # from "don't cancel my order" — both contain the word "cancel".
+        # A user retracting a cancellation used to read as confirmed
+        # intent, letting a real cancel_order call straight through the
+        # one guardrail that exists specifically to never trust the
+        # model's own judgment for this state-changing action.
+        for text in ["wait, don't cancel it", "no, do not cancel", "actually please dont cancel this"]:
+            handler = _handler_returning("unused")
+            mw = _middleware(user_text=text)
+            result = mw.wrap_tool_call(_FakeRequest("cancel_order", {}), handler)
+            assert not handler.calls, text
+            assert json.loads(result.content)["cancelled"] is False, text
+
     def test_non_json_handler_response_does_not_raise(self):
         turn_state = {}
         mw = _middleware(user_text="cancel my order", turn_state=turn_state)

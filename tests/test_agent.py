@@ -45,6 +45,14 @@ class TestIntentRegexes:
         assert agent.CANCEL_INTENT_RE.search("please cancel my order")
         assert not agent.CANCEL_INTENT_RE.search("I don't want this order anymore")
 
+    def test_has_cancel_intent_rejects_a_negated_cancel(self):
+        # Real bug: CANCEL_INTENT_RE alone can't tell "cancel my order"
+        # from "don't cancel my order" — both literally contain "cancel".
+        assert agent._has_cancel_intent("please cancel my order")
+        assert agent._has_cancel_intent("cancel my order please")
+        for text in ["wait, don't cancel it", "no, do not cancel", "actually please dont cancel this"]:
+            assert not agent._has_cancel_intent(text), text
+
     def test_reorder_intent_re(self):
         for text in ["reorder that", "can you order that again", "order the same thing again"]:
             assert agent.REORDER_INTENT_RE.search(text), text
