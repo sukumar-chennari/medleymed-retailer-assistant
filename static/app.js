@@ -55,7 +55,15 @@ async function loadDashboard() {
         const item = document.createElement("div");
         item.className = "order-item";
         const cancelledTag = order.status === "cancelled" ? " — Cancelled" : "";
-        item.textContent = `${order.product_name} — $${order.price_usd} (${order.order_id})${cancelledTag}`;
+        // Real bug: this used order.price_usd (the PER-UNIT price) instead
+        // of order.total_price_usd (what was actually charged), and never
+        // showed quantity at all — a 3x order looked identical to a 1x
+        // order and showed a dollar amount the customer wasn't actually
+        // charged, contradicting the in-chat order confirmation (see
+        // guardrails.build_order_confirmation), which already gets this
+        // right.
+        const qtyPrefix = order.quantity > 1 ? `${order.quantity}x ` : "";
+        item.textContent = `${qtyPrefix}${order.product_name} — $${order.total_price_usd} (${order.order_id})${cancelledTag}`;
         if (order.status === "cancelled") {
           item.classList.add("order-cancelled");
         }
