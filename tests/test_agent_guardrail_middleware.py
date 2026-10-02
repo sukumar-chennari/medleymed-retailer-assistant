@@ -164,6 +164,18 @@ class TestStartOrder:
         assert handler.calls
         assert result.content
 
+    def test_blocked_when_order_intent_is_negated(self):
+        # Real bug: same negation-blindness class already fixed for
+        # cancel_order/reorder_last — "no, don't order that for me, I just
+        # want info" literally contains "order", which used to read as
+        # confirmed order intent and let start_order through unblocked
+        # even with no recommendation shown yet.
+        mw = _middleware(user_text="no, don't order that for me, I just want info", had_shown_recommendation=False)
+        handler = _handler_returning(json.dumps({"order_placed": True, "order_id": "ord-0001"}))
+        result = mw.wrap_tool_call(_FakeRequest("start_order", {"product_id": "fev-001"}), handler)
+        assert not handler.calls
+        assert json.loads(result.content)["order_placed"] is False
+
     def test_deferred_order_is_recorded_in_turn_state(self):
         turn_state = {}
         mw = _middleware(user_text="yes", had_shown_recommendation=True, turn_state=turn_state)

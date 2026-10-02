@@ -972,7 +972,13 @@ class _GuardrailMiddleware(AgentMiddleware):
                 return response
 
             if name == "start_order":
-                order_intent_this_message = bool(user_text) and ORDER_INTENT_RE.search(user_text)
+                # Real bug: same negation-blindness class already fixed for
+                # cancel_order/reorder_last — a plain ORDER_INTENT_RE match
+                # can't tell "order this" from "don't order this", so a
+                # user explicitly declining ("no, don't order that for me,
+                # I just want info") used to read as confirmed order intent
+                # and let start_order through this guard unblocked.
+                order_intent_this_message = bool(user_text) and _has_unnegated_intent(user_text, ORDER_INTENT_RE)
                 if not self.had_shown_recommendation and not order_intent_this_message:
                     _log_guard(session_id, "blocked_premature_order", f"{args}")
                     result = json.dumps({
