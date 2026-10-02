@@ -907,9 +907,16 @@ class _GuardrailMiddleware(AgentMiddleware):
                 # topic, and a bare "a category exists somewhere in this
                 # session" was wrongly overriding a CORRECT decline for it,
                 # forcing an unrelated product list into the reply instead.
+                # Real bug: same negation-blindness class already fixed
+                # for cancel_order/reorder_last/start_order — a plain
+                # CONTINUATION_RE match can't tell "anything else?" from
+                # "don't show me anything else" — a legitimate decline/
+                # closing message used to get its correct
+                # decline_out_of_scope call overridden, forcing an
+                # unrelated product list back into the reply.
                 category = (tools.classify(user_text) if user_text else None) or (
                     _established_category(session_id)
-                    if user_text and CONTINUATION_RE.search(user_text)
+                    if user_text and _has_unnegated_intent(user_text, CONTINUATION_RE)
                     else None
                 )
                 if category:

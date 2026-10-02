@@ -101,6 +101,18 @@ class TestDeclineOutOfScope:
         assert turn_state["declined_forced"] is True
         assert "out of scope" in result.content
 
+    def test_a_negated_continuation_word_stays_declined(self):
+        # Real bug: same negation-blindness class already fixed for
+        # cancel_order/reorder_last/start_order — "don't show me anything
+        # else" literally contains "else", which used to override a
+        # legitimate decline and force an unrelated product list back in.
+        agent._remember_products("s1", '{"matched": true, "products": [{"id": "fev-001"}]}')
+        turn_state = {}
+        mw = _middleware(session_id="s1", user_text="don't show me anything else, I'm done", turn_state=turn_state)
+        result = mw.wrap_tool_call(_FakeRequest("decline_out_of_scope", {}), _handler_returning("unused"))
+        assert turn_state["declined_forced"] is True
+        assert "out of scope" in result.content
+
 
 class TestLookupSymptom:
     def test_info_question_redirects_to_medicine_info_instead(self):
