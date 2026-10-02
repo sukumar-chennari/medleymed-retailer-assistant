@@ -114,6 +114,25 @@ def _strip_address_filler(text: str) -> str:
     return ADDRESS_FILLER_RE.sub("", text).strip()
 
 
+_ADDRESS_FILLER_ONLY_RE = re.compile(
+    r"^\s*(actually\s+)?(please\s+)?(ship|send|deliver)\s+(it\s+|this\s+|that\s+)?to\s*$",
+    re.IGNORECASE,
+)
+
+
+def _is_filler_only(text: str) -> bool:
+    """True when the text is ONLY the filler phrase ADDRESS_FILLER_RE
+    exists to strip, with nothing substantive after it — e.g. a message
+    cut short mid-composition. Real bug this guards against:
+    _looks_like_a_first_time_address's generic fallback (no digit
+    required) accepted bare filler phrases like "ship to" or "please ship
+    it to" as a real address, since ADDRESS_FILLER_RE's own \\s+ after
+    "to" never matches with nothing following — _strip_address_filler
+    left the literal filler phrase intact, and it got saved and shown
+    back as the shipping address verbatim."""
+    return bool(_ADDRESS_FILLER_ONLY_RE.match(text))
+
+
 def _looks_like_an_address(text: str) -> bool:
     """A pending order treats the user's next message as their shipping address —
     but only if it plausibly is one. Without this, a reply like "thank you" or
@@ -151,6 +170,8 @@ def _looks_like_a_first_time_address(text: str) -> bool:
     if guardrails.PRODUCT_ID_RE.search(text):
         return False
     if _is_bare_email(text):
+        return False
+    if _is_filler_only(text):
         return False
     stripped = text.strip()
     if not (2 <= len(stripped) <= 80):

@@ -135,6 +135,29 @@ class TestLooksLikeAFirstTimeAddress:
         assert not main._looks_like_a_first_time_address("sukumar@example.com")
         assert not main._looks_like_a_first_time_address("sukumar123@example.com")
 
+    def test_a_bare_filler_phrase_does_not_count(self):
+        # Real bug: ADDRESS_FILLER_RE's own \s+ after "to" never matches
+        # with nothing following it, so _strip_address_filler left a bare
+        # "ship to"/"please ship it to" intact — this generic fallback (no
+        # digit required) then accepted it as a real first-time address,
+        # saving and showing back the literal filler phrase as the
+        # shipping address.
+        for text in ["ship to", "ship it to", "please ship it to", "send it to", "deliver this to"]:
+            assert not main._looks_like_a_first_time_address(text), text
+
+
+class TestIsFillerOnly:
+    def test_bare_filler_phrases_are_filler_only(self):
+        for text in ["ship to", "ship it to", "please ship it to", "send it to", "deliver this to", "actually ship to"]:
+            assert main._is_filler_only(text), text
+
+    def test_filler_with_a_real_address_after_it_is_not_filler_only(self):
+        assert not main._is_filler_only("ship to 456 New Ave")
+        assert not main._is_filler_only("please ship it to 10 Downing Street")
+
+    def test_a_real_address_alone_is_not_filler_only(self):
+        assert not main._is_filler_only("123 Main St")
+
 
 class TestIsAffirmative:
     def test_simple_affirmatives(self):

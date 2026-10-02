@@ -323,6 +323,27 @@ CONVERSATION_CASES = [
         ],
     },
     {
+        "name": "bare_filler_phrase_is_never_saved_as_the_address",
+        # Real bug this pins: "ship to" has no digit and is long enough to
+        # pass the generic first-time-address fallback, and
+        # ADDRESS_FILLER_RE's own \s+ after "to" never matches with
+        # nothing following it — _strip_address_filler left the literal
+        # filler phrase intact, so it got saved and shown back as the
+        # shipping address verbatim. See main.py's _is_filler_only.
+        "turns": [
+            {"text": "I have a dry cough", "checks": [("asks the clarifying question", lambda r: _contains_any(r, ["child", "adult"]))]},
+            {"text": "for myself", "checks": [("recommends the real product", lambda r: "Cough Suppressant" in r)]},
+            {"text": "yes", "checks": [("asks for a shipping address", lambda r: "shipping address" in r.lower())]},
+            {
+                "text": "ship to",
+                "checks": [
+                    ("never confirms an order to the bare filler phrase as the address", lambda r: "Shipping to: ship to" not in r),
+                    ("never claims the order is placed", lambda r: "Order confirmed!" not in r),
+                ],
+            },
+        ],
+    },
+    {
         "name": "out_of_scope_decline",
         # Needs the real LLM to decide to call decline_out_of_scope.
         "turns": [
