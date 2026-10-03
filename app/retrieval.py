@@ -150,8 +150,17 @@ def search(query: str, top_k: int = 3) -> list[dict]:
     intent (see its own docstring above)."""
     if _collection.count() == 0:
         return []
+    # Real bug: Ollama returns no embedding at all for an empty string, so
+    # response.embeddings[0] raised IndexError — and this model is known to
+    # pass empty-string tool args (see check_order_status's docstring), which
+    # surfaced to it as "Error calling lookup_medicine_info: list index out
+    # of range" instead of the clean "no information found" result.
+    if not query.strip():
+        return []
 
     response = _client.embed(model=config.EMBED_MODEL, input=query)
+    if not response.embeddings:
+        return []
     query_vector = response.embeddings[0]
     query_strengths = _mg_strengths(query)
     query_lower = query.lower()

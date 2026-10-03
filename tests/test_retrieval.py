@@ -171,3 +171,32 @@ class TestLoadCollection:
             result = retrieval._load_collection()
         mock_build.assert_not_called()
         assert result is fake_collection
+
+
+class TestSearchEmptyInput:
+    """Real bug: Ollama returns no embedding at all for an empty string, so
+    search("") raised IndexError at response.embeddings[0] — surfaced to the
+    model as "Error calling lookup_medicine_info: list index out of range"
+    (this model is known to pass empty-string tool args). The mocked
+    collection/client keep this fast and away from the real index."""
+
+    def _patch(self, monkeypatch, embeddings):
+        fake_collection = mock.Mock()
+        fake_collection.count.return_value = 5
+        fake_client = mock.Mock()
+        fake_client.embed.return_value = mock.Mock(embeddings=embeddings)
+        monkeypatch.setattr(retrieval, "_collection", fake_collection)
+        monkeypatch.setattr(retrieval, "_client", fake_client)
+        return fake_collection, fake_client
+
+    def test_empty_and_whitespace_queries_return_nothing_without_embedding(self, monkeypatch):
+        _, fake_client = self._patch(monkeypatch, embeddings=[])
+        assert retrieval.search("") == []
+        assert retrieval.search("   ") == []
+        fake_client.embed.assert_not_called()
+
+    def test_an_empty_embedding_response_returns_nothing_instead_of_raising(self, monkeypatch):
+        fake_collection, fake_client = self._patch(monkeypatch, embeddings=[])
+        assert retrieval.search("dosage for paracetamol") == []
+        fake_client.embed.assert_called_once()
+        fake_collection.query.assert_not_called()
