@@ -98,31 +98,82 @@ def reply_for_deferred_order(order: dict) -> str:
     return f"Sure! What's your shipping address so I can send that out?{clamp_note}"
 
 
+_SENTENCE_BREAK_RE = re.compile(r"[.!?\n;]")
+_NEGATION_RE = re.compile(r"\b(?:no|not|never|cannot|unable)\b|n['\u2019]t\b")
+_NEXT_WORD_NEGATION_RE = re.compile(r"^\s*(?:(?:not|never)\b|\w+n['\u2019]t\b)")
+_QUESTION_OPENER_RE = re.compile(
+    r"^\s*(?:do|does|did|can|could|would|will|should|is|are|may|what|how|when|where|why|who)\b"
+)
+# Kept short on purpose: a wider window would let an unrelated "no"/"not"
+# earlier in a long sentence exempt a genuine claim ("...no worries" AFTER a
+# real claim never counts, only negation BEFORE the keyword does).
+_NEGATION_WINDOW_CHARS = 25
+
+
+def _has_unnegated_claim(t: str, keywords: tuple[str, ...]) -> bool:
+    """True when any keyword appears as a genuine claim. Real bug this fixes:
+    plain `k in t` substring matching made the three claims_* checks fire on
+    honest, truthful replies — "You haven't placed any orders yet", "I can't
+    place the order until you give me an address", "I haven't saved your
+    address yet", "Do you send a confirmation email?" — replacing each with
+    the canned "what symptom is this for?" reply. That matters most for the
+    empty-order-history report: check_order_status with no orders grounds
+    nothing, so the model's correct "no orders yet" answer was thrown away.
+
+    A keyword occurrence is NOT a claim when, within its own sentence, it is
+    preceded (within a few characters) by a negation, is immediately
+    followed by one ("your order is not yet placed"), or sits in a question
+    ("Do you send a confirmation email?"). Anything else still counts, so
+    mixed replies ("No problem! Your order has been placed.") and the
+    originally-observed fabrications remain blocked."""
+    for keyword in keywords:
+        start = t.find(keyword)
+        while start != -1:
+            end = start + len(keyword)
+            sentence_start = 0
+            for match in _SENTENCE_BREAK_RE.finditer(t, 0, start):
+                sentence_start = match.end()
+            next_break = _SENTENCE_BREAK_RE.search(t, end)
+            sentence_end = next_break.start() if next_break else len(t)
+            before = t[max(sentence_start, start - _NEGATION_WINDOW_CHARS) : start]
+            sentence = t[sentence_start:sentence_end]
+            is_question = bool(_QUESTION_OPENER_RE.match(sentence)) and (
+                next_break is not None and t[next_break.start()] == "?"
+            )
+            negated = bool(_NEGATION_RE.search(before)) or bool(_NEXT_WORD_NEGATION_RE.match(t[end:sentence_end]))
+            if not negated and not is_question:
+                return True
+            start = t.find(keyword, end)
+    return False
+
+
 def claims_order_placed(reply_text: str) -> bool:
     """Broad on purpose — a phrasing like "I'll go ahead and place the
     order... here's your order summary... once it's processed" describes a
     completed order without ever using the literal words "placed" or
     "confirmed" the original (narrower) version of this check looked for,
     and slipped through undetected along with a fabricated shipping address."""
-    t = reply_text.lower()
-    return "order" in t and any(
-        k in t
-        for k in (
+    # "in order to" is just English, not an order mention — it used to satisfy
+    # the bare "order" check and, with any "placed"/"confirmed" later in the
+    # reply, block an ordinary health tip.
+    t = reply_text.lower().replace("in order to", " ")
+    return "order" in t and _has_unnegated_claim(
+        t,
+        (
             "placed", "confirmed", "shipped", "is on its way", "order summary",
             "place the order", "processing your order", "once it's processed",
             "order has been", "your order is",
-        )
+        ),
     )
 
 
 def claims_email_sent(reply_text: str) -> bool:
-    t = reply_text.lower()
-    return any(
-        k in t
-        for k in (
+    return _has_unnegated_claim(
+        reply_text.lower(),
+        (
             "confirmation email", "email has been sent", "email has also been sent",
             "will send you an email", "sent you an email", "email sent",
-        )
+        ),
     )
 
 
@@ -134,13 +185,12 @@ def claims_address_saved(reply_text: str) -> bool:
     "I've saved your shipping address" for a bare place name with no digits
     (e.g. "hyderabad"), and nothing verified that claim, because only
     order-placed and email-sent claims were ever checked."""
-    t = reply_text.lower()
-    return any(
-        k in t
-        for k in (
+    return _has_unnegated_claim(
+        reply_text.lower(),
+        (
             "saved your address", "saved your shipping address", "address has been saved",
             "address is now on file", "saved that address", "saved the address",
-        )
+        ),
     )
 
 

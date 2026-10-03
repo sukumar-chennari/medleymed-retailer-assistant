@@ -131,6 +131,62 @@ class TestCheckUnverifiedCompletion:
         assert result is None
 
 
+class TestHonestRepliesAreNotBlocked:
+    """Real bug: the three claims_* checks used plain substring matching, so
+    honest, truthful replies — "You haven't placed any orders yet", "I can't
+    place the order until you give me an address", "Do you send a
+    confirmation email?", even a health tip containing "in order to" — were
+    replaced with the canned "what symptom is this for?" reply. The empty
+    order history report is the one that matters most: check_order_status
+    with no orders grounds nothing, so the model's correct answer was thrown
+    away. All run with every real_* flag False (a no-tool turn)."""
+
+    @staticmethod
+    def _blocked(reply: str) -> bool:
+        return guardrails.check_unverified_completion(reply, False, False, False) is not None
+
+    def test_in_order_to_is_not_an_order_mention(self):
+        assert not self._blocked("In order to reduce fever, take paracetamol. Doses should be placed at least 4 hours apart.")
+        assert not self._blocked("Wait in order to get an accurate reading; once the beep is confirmed, read it.")
+
+    def test_a_negated_order_report_is_not_a_claim(self):
+        for reply in [
+            "You haven't placed any orders yet.",
+            "No orders have been placed yet. Would you like to order something?",
+            "I can't place the order until you give me an address.",
+            "Your order is not yet placed; what is your address?",
+        ]:
+            assert not self._blocked(reply), reply
+
+    def test_a_negated_address_or_email_report_is_not_a_claim(self):
+        assert not self._blocked("I haven't saved your address yet.")
+        assert not self._blocked("No email sent yet - I don't have your email address.")
+
+    def test_a_question_about_email_is_not_a_claim(self):
+        assert not self._blocked("Do you send a confirmation email when I order?")
+
+    def test_genuine_fabrications_are_still_blocked(self):
+        # The safety net itself must not weaken: every one of these is a real
+        # (or realistic) unbacked completion claim, including ones where a
+        # negation-looking word sits AFTER the claim or in another sentence.
+        for reply in [
+            "Order confirmed! Order ID: ord-0002. Shipping to 123 First Rd",
+            "I'll go ahead and place the order. Here's your order summary, once it's processed.",
+            "Your order has been placed, no worries!",
+            "Your order is confirmed — would you like another?",
+            "I haven't had any trouble. Your order has been placed.",
+            "No problem! Your order has been placed.",
+            "I've saved your address. A confirmation email has been sent.",
+            "Order placed for Cough Suppressant Syrup. Would you like to reorder this product in the future?",
+        ]:
+            assert self._blocked(reply), reply
+
+    def test_a_negated_mention_followed_by_a_genuine_claim_is_still_blocked(self):
+        # The first "placed" is negated, the second is a real claim — the
+        # scan must keep going past a negated occurrence, not stop at it.
+        assert self._blocked("I haven't placed any orders before. Your order has been placed.")
+
+
 class TestOrderConfirmationTemplates:
     def test_build_order_confirmation_includes_key_fields(self):
         order = {
