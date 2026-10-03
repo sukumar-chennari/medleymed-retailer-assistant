@@ -424,7 +424,10 @@ def _complete_pending_email(email: str, order_id: str) -> str:
 
 @app.post("/api/chat", response_model=ChatResponse)
 def chat(req: ChatRequest):
-    if not req.text and not req.image_b64:
+    # Real bug: this checked the raw req.text, so a whitespace-only message
+    # ("   ") passed the check and went to the LLM as a blank user turn (which
+    # then hallucinated a symptom lookup out of nothing). Strip first.
+    if not (req.text and req.text.strip()) and not req.image_b64:
         raise HTTPException(status_code=400, detail="Provide text or an image.")
 
     messages = store.get_session_messages(req.session_id)

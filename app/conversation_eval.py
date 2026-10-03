@@ -377,7 +377,7 @@ def run_eval() -> tuple[int, int]:
 
     passed = 0
     total = 0
-    for case in CONVERSATION_CASES:
+    for case_number, case in enumerate(CONVERSATION_CASES, start=1):
         # A fresh isolated DB per case, not just once for the whole run —
         # this is a single-demo-user app by design, so without this a
         # later case would inherit the previous case's saved address/
@@ -385,7 +385,10 @@ def run_eval() -> tuple[int, int]:
         # sessions — just not what each case's scripted turns assume
         # starting from a blank slate).
         _use_isolated_db()
-        session_id = f"conversation-eval-{case['name']}"
+        # Short on purpose: ChatRequest caps session_id at 64 chars (see
+        # schemas.py), and some case names alone are longer than that. The
+        # case name is already printed on the next line for readability.
+        session_id = f"conversation-eval-{case_number}"
         print(f"\n=== {case['name']} ===")
         for i, turn in enumerate(case["turns"], start=1):
             res = client.post("/api/chat", json={"session_id": session_id, "text": turn["text"]})

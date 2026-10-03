@@ -98,3 +98,40 @@ class TestResetDemo:
         assert store.list_orders("demo_user") == []
         assert store.get_address("demo_user") is None
         assert store.get_metrics_summary()["guardrail_total"] == 0
+
+
+class TestChatInputValidation:
+    """Real bug: ChatRequest/FeedbackRequest had no bounds at all, so a direct
+    API call could store a multi-megabyte message or a megabyte-long
+    session_id (a DB row key) with a 200, and a whitespace-only message
+    passed the empty check and reached the LLM as a blank user turn. Every
+    rejected case here is rejected BEFORE any agent/LLM work, so these stay
+    fast and deterministic."""
+
+    def _post(self, **body):
+        return client.post("/api/chat", json=body)
+
+    def test_whitespace_only_text_is_rejected(self):
+        assert self._post(session_id="s1", text="   ").status_code == 400
+        assert self._post(session_id="s1", text="\n\t").status_code == 400
+
+    def test_empty_session_id_is_rejected(self):
+        assert self._post(session_id="", text="hi").status_code == 422
+
+    def test_oversized_session_id_is_rejected(self):
+        assert self._post(session_id="x" * 1000, text="hi").status_code == 422
+
+    def test_oversized_text_is_rejected(self):
+        assert self._post(session_id="s1", text="y" * 4001).status_code == 422
+
+    def test_non_image_media_type_is_rejected(self):
+        assert self._post(session_id="s1", text="hi", image_media_type="text/html").status_code == 422
+
+    def test_feedback_session_id_and_snippet_are_bounded(self):
+        assert client.post("/api/feedback", json={"session_id": "", "rating": "up"}).status_code == 422
+        too_long = {"session_id": "s1", "rating": "up", "reply_snippet": "z" * 501}
+        assert client.post("/api/feedback", json=too_long).status_code == 422
+
+    def test_a_normal_uuid_session_and_snippet_still_pass(self):
+        ok = {"session_id": "12345678-1234-1234-1234-123456789012", "rating": "up", "reply_snippet": "z" * 200}
+        assert client.post("/api/feedback", json=ok).status_code == 200
