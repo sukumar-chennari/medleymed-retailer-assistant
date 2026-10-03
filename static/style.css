@@ -575,4 +575,8 @@ body {
   font-size: 1.2rem;
   cursor: pointer;
   padding: 4px;
+  /* A real <button> now (keyboard-focusable), so reset the native look. */
+  background: none;
+  border: none;
+  line-height: 1;
 }

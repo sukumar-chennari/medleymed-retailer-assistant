@@ -28,10 +28,16 @@ function openChat(prefillText) {
 function closeChat() {
   chatPanel.classList.add("hidden");
   chatFab.classList.remove("hidden");
+  // The button that opened the chat was hidden while it was open, so without
+  // this keyboard focus is dropped to <body> and the user loses their place.
+  chatFab.focus();
 }
 
 chatFab.addEventListener("click", () => openChat());
 chatClose.addEventListener("click", closeChat);
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !chatPanel.classList.contains("hidden")) closeChat();
+});
 ctaOpenChat.addEventListener("click", () => openChat());
 
 async function loadDashboard() {
@@ -327,6 +333,10 @@ function addBubble(role, text, imageDataUrl) {
   chatEl.scrollTop = chatEl.scrollHeight;
   return bubble;
 }
+
+// The camera control is a real <button> (a <label> around a hidden file input
+// can't be reached or activated from the keyboard), so forward it to the input.
+document.getElementById("image-button").addEventListener("click", () => imageInput.click());
 
 imageInput.addEventListener("change", () => {
   const file = imageInput.files[0];

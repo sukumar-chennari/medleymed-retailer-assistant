@@ -98,7 +98,7 @@
 
   <button id="chat-fab" type="button" class="chat-fab" aria-label="Open chat assistant">💬</button>
 
-  <div id="chat-panel" class="chat-panel hidden">
+  <div id="chat-panel" class="chat-panel hidden" role="dialog" aria-label="MedleyMed Assistant chat">
     <header class="chat-panel-header">
       <div>
         <strong>MedleyMed Assistant</strong>
@@ -110,7 +110,7 @@
       <button id="chat-close" type="button" aria-label="Close chat">&times;</button>
     </header>
 
-    <main id="chat" class="chat"></main>
+    <div id="chat" class="chat" role="log" aria-live="polite" aria-label="Conversation"></div>
 
     <div id="image-preview" class="image-preview hidden">
       <img id="image-preview-img" alt="Selected image preview" />
@@ -118,9 +118,9 @@
     </div>
 
     <form id="chat-form" class="composer">
-      <label for="image-input" class="icon-button" title="Attach a photo">📷</label>
+      <button id="image-button" type="button" class="icon-button" title="Attach a photo" aria-label="Attach a photo">📷</button>
       <input id="image-input" type="file" accept="image/*" hidden />
-      <input id="text-input" type="text" placeholder="Describe your symptoms…" autocomplete="off" />
+      <input id="text-input" type="text" placeholder="Describe your symptoms…" aria-label="Describe your symptoms" autocomplete="off" />
       <button type="submit">Send</button>
     </form>
   </div>
