@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
@@ -602,4 +603,10 @@ def chat(req: ChatRequest):
     return ChatResponse(reply=reply)
 
 
-app.mount("/", StaticFiles(directory="static", html=True), name="static")
+# Anchored on this file, like every other path in the repo (store.DATA_DIR,
+# data_ingest.KB_DIR, ...). A bare "static" is resolved against the current
+# working directory, so `uvicorn app.main:app` — or even just importing
+# app.main — failed with "Directory 'static' does not exist" unless it was
+# launched from the repo root.
+STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")

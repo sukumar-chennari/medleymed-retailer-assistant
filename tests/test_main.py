@@ -135,3 +135,23 @@ class TestChatInputValidation:
     def test_a_normal_uuid_session_and_snippet_still_pass(self):
         ok = {"session_id": "12345678-1234-1234-1234-123456789012", "rating": "up", "reply_snippet": "z" * 200}
         assert client.post("/api/feedback", json=ok).status_code == 200
+
+
+class TestStaticDirIsCwdIndependent:
+    def test_app_module_imports_from_any_working_directory(self, tmp_path, monkeypatch):
+        # Real bug: StaticFiles(directory="static") was resolved against the
+        # current working directory, so importing app.main (and so
+        # `uvicorn app.main:app`) raised "Directory 'static' does not exist"
+        # unless launched from the repo root — unlike every other path in the
+        # repo, which is anchored on __file__. Reloading with a different cwd
+        # reproduces the failure in-process.
+        import importlib
+
+        monkeypatch.chdir(tmp_path)
+        try:
+            reloaded = importlib.reload(main)
+            assert reloaded.STATIC_DIR.is_absolute()
+            assert (reloaded.STATIC_DIR / "index.html").is_file()
+        finally:
+            monkeypatch.undo()
+            importlib.reload(main)
