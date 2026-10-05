@@ -180,3 +180,41 @@ class TestDescribeImage:
 
         assert "could not be read" in result.lower()
         assert "ask the user to type the medicine name" in result.lower()
+
+    def test_exception_text_never_reaches_the_model(self, monkeypatch, capsys):
+        # Real bug: the raw exception was interpolated into the returned
+        # string, which goes into the LLM prompt as "[Image analysis: ...]"
+        # and can be echoed back to the user — API error bodies, SDK
+        # internals, base64 decode errors. It belongs in the server log only.
+        from unittest import mock
+
+        fake_client = mock.Mock()
+        fake_client.models.generate_content.side_effect = RuntimeError(
+            "403 PERMISSION_DENIED key=SECRET-ABC quota exceeded https://example.invalid/v1"
+        )
+        monkeypatch.setattr(agent, "_gemini_client", fake_client)
+
+        result = agent.describe_image("ZmFrZSBpbWFnZSBieXRlcw==", "image/jpeg")
+
+        assert result == agent._IMAGE_UNREADABLE
+        assert "SECRET-ABC" not in result and "PERMISSION_DENIED" not in result
+        assert "SECRET-ABC" in capsys.readouterr().out  # still diagnosable from the server log
+
+    def test_invalid_base64_does_not_leak_the_decode_error(self, monkeypatch):
+        from unittest import mock
+
+        monkeypatch.setattr(agent, "_gemini_client", mock.Mock())
+        result = agent.describe_image("!!not-base64!!", "image/jpeg")
+        assert result == agent._IMAGE_UNREADABLE
+
+    def test_empty_response_is_reported_as_unreadable_not_as_an_attribute_error(self, monkeypatch):
+        from unittest import mock
+
+        fake_client = mock.Mock()
+        fake_client.models.generate_content.return_value = mock.Mock(text=None)
+        monkeypatch.setattr(agent, "_gemini_client", fake_client)
+
+        result = agent.describe_image("ZmFrZSBpbWFnZSBieXRlcw==", "image/jpeg")
+
+        assert result == agent._IMAGE_UNREADABLE
+        assert "NoneType" not in result

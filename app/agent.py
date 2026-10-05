@@ -255,6 +255,13 @@ CONTINUATION_RE = re.compile(
 )
 
 
+# What the model (and so, potentially, the user) is told when the photo can't
+# be read. Deliberately generic: this string is interpolated into the LLM
+# prompt as "[Image analysis: ...]" and the model can repeat it back, so it
+# must never carry exception text.
+_IMAGE_UNREADABLE = "Image could not be read — ask the user to type the medicine name."
+
+
 def describe_image(image_b64: str, media_type: str) -> str:
     if _gemini_client is None:
         return "Image could not be read (no vision API configured) — ask the user to type the medicine name."
@@ -268,9 +275,24 @@ def describe_image(image_b64: str, media_type: str) -> str:
                 "medicine label or prescription photo. Be concise. If nothing is legible, say so.",
             ],
         )
-        return response.text.strip()
     except Exception as exc:
-        return f"Image could not be read ({exc}) — ask the user to type the medicine name."
+        # Real bug: this used to return f"Image could not be read ({exc}) — ...",
+        # putting raw API error bodies, SDK internals ("'NoneType' object has
+        # no attribute 'strip'") and base64 decode errors straight into the
+        # model's context, from where they could be echoed to the user. The
+        # detail belongs in the server log, same as the other [... ERROR]
+        # lines in this file.
+        print(f"[VISION ERROR] {type(exc).__name__}: {exc}")
+        return _IMAGE_UNREADABLE
+
+    # response.text is None when Gemini returns no text part (e.g. a blocked
+    # or empty response) — that used to crash into the except above as an
+    # AttributeError and get reported as if the photo itself were bad.
+    text = (response.text or "").strip()
+    if not text:
+        print("[VISION ERROR] empty response from the vision model")
+        return _IMAGE_UNREADABLE
+    return text
 
 
 def _established_category(session_id: str) -> str | None:
