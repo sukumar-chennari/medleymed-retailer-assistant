@@ -338,9 +338,36 @@ function addBubble(role, text, imageDataUrl) {
 // can't be reached or activated from the keyboard), so forward it to the input.
 document.getElementById("image-button").addEventListener("click", () => imageInput.click());
 
+// Must match schemas.py (IMAGE_MEDIA_TYPE_PATTERN / MAX_IMAGE_B64_LEN). The
+// backend rejects anything else with a 422, which the chat shows as a generic
+// "something went wrong" that fails identically every retry — after the
+// user's text and photo have already been cleared. An empty type is allowed
+// (some browsers don't report one for HEIC); the backend treats it as JPEG.
+const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif", "image/heic", "image/heif"];
+// 15,000,000 base64 chars is ~11.25MB of raw bytes; stay a little under.
+const MAX_IMAGE_BYTES = 11_000_000;
+
+function imageProblem(file) {
+  if (file.type && !ALLOWED_IMAGE_TYPES.includes(file.type)) {
+    return "That file type isn't supported. Please attach a JPEG, PNG, WebP, GIF or HEIC photo.";
+  }
+  if (file.size > MAX_IMAGE_BYTES) {
+    return `That photo is too large (${(file.size / 1e6).toFixed(1)}MB). Please attach one under 11MB.`;
+  }
+  return null;
+}
+
 imageInput.addEventListener("change", () => {
   const file = imageInput.files[0];
   if (!file) return;
+  const problem = imageProblem(file);
+  if (problem) {
+    // Reset so picking the same file again still fires "change".
+    imageInput.value = "";
+    openChat();
+    addBubble("assistant", problem);
+    return;
+  }
   const reader = new FileReader();
   reader.onload = () => {
     const dataUrl = reader.result;
