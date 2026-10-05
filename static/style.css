@@ -456,6 +456,10 @@ body {
   border-radius: 14px;
   line-height: 1.4;
   white-space: pre-wrap;
+  /* pre-wrap keeps newlines but still won't break a single long token (a
+     URL, a pasted string), so it overflowed the bubble and made the whole
+     chat log scroll sideways at phone width. */
+  overflow-wrap: anywhere;
   font-size: 0.9rem;
 }
 
