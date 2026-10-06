@@ -10,10 +10,42 @@ const chatPanel = document.getElementById("chat-panel");
 const chatClose = document.getElementById("chat-close");
 const ctaOpenChat = document.getElementById("cta-open-chat");
 
-let sessionId = localStorage.getItem("session_id");
+// Real bug: this ran at the top level with no guard, so if localStorage threw
+// (SecurityError when storage is blocked, e.g. all cookies blocked or a
+// sandboxed iframe) or crypto.randomUUID was missing (it only exists on
+// secure origins — not http://<lan-ip>:8000), the WHOLE script died before
+// attaching a single listener: the dashboard stayed on "Loading…" and the
+// chat button did nothing. Storage is a convenience (keeps the conversation
+// across reloads), so a failure there falls back to an in-memory session.
+function newSessionId() {
+  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  const b = crypto.getRandomValues(new Uint8Array(16));
+  b[6] = (b[6] & 0x0f) | 0x40; // RFC 4122 version 4
+  b[8] = (b[8] & 0x3f) | 0x80;
+  const h = [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}
+
+function loadStoredSessionId() {
+  try {
+    return localStorage.getItem("session_id");
+  } catch (err) {
+    return null;
+  }
+}
+
+function storeSessionId(id) {
+  try {
+    localStorage.setItem("session_id", id);
+  } catch (err) {
+    // Storage blocked: keep the id in memory for this page load only.
+  }
+}
+
+let sessionId = loadStoredSessionId();
 if (!sessionId) {
-  sessionId = crypto.randomUUID();
-  localStorage.setItem("session_id", sessionId);
+  sessionId = newSessionId();
+  storeSessionId(sessionId);
 }
 
 function openChat(prefillText) {
@@ -299,8 +331,8 @@ resetDemoButton.addEventListener("click", async () => {
     await fetch("/api/reset-demo", { method: "POST" });
     // Start a genuinely fresh conversation too — the server no longer
     // remembers the old session, so continuing it would be confusing.
-    sessionId = crypto.randomUUID();
-    localStorage.setItem("session_id", sessionId);
+    sessionId = newSessionId();
+    storeSessionId(sessionId);
     chatEl.innerHTML = "";
     closeChat();
     loadDashboard();

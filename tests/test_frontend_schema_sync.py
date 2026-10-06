@@ -43,3 +43,27 @@ def test_js_size_limit_stays_under_the_backend_base64_cap():
     raw_limit = int(re.search(r"const MAX_IMAGE_BYTES = ([\d_]+);", APP_JS).group(1).replace("_", ""))
     base64_chars = (raw_limit + 2) // 3 * 4  # base64 length for that many raw bytes
     assert base64_chars <= schemas.MAX_IMAGE_B64_LEN
+
+
+def _app_js_without_comments_and_helpers(*helper_names: str) -> str:
+    source = re.sub(r"//[^\n]*", "", APP_JS)
+    for name in helper_names:
+        source = re.sub(rf"function {name}\([^)]*\) \{{.*?\n\}}\n", "", source, flags=re.S)
+    return source
+
+
+def test_localstorage_is_only_touched_inside_the_guarded_helpers():
+    # Real bug: localStorage.getItem/setItem ran at the top level of app.js
+    # with no try/catch, so blocked storage (SecurityError) killed the whole
+    # script before any listener attached — dashboard stuck on "Loading…",
+    # chat button dead. Reproduced in a real browser; there's no JS runner
+    # here, so this keeps unguarded access from being reintroduced.
+    remainder = _app_js_without_comments_and_helpers("loadStoredSessionId", "storeSessionId")
+    assert "localStorage" not in remainder
+
+
+def test_randomuuid_is_only_called_inside_the_fallback_helper():
+    # crypto.randomUUID doesn't exist on non-secure origins (http://<lan-ip>),
+    # so a bare call at top level or in the reset handler threw there too.
+    remainder = _app_js_without_comments_and_helpers("newSessionId")
+    assert "randomUUID" not in remainder
