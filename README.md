@@ -13,9 +13,7 @@ Built entirely on free resources: **Ollama** (`llama3.2`, running locally)
 drives the conversation and tool-calling, `nomic-embed-text` (also local
 Ollama) powers a small retrieval-augmented-generation (RAG) knowledge base
 for medicine dosage/side-effect questions, and the free **Gemini API** reads
-uploaded photos. See
-`/Users/macbookpro/.claude/plans/twinkly-humming-wolf.md` for the full design
-plan and roadmap.
+uploaded photos. See `DEMO_QA_PREP.md` for the design rationale and demo Q&A.
 
 App data (orders, addresses, in-progress conversation state) persists in a
 local SQLite file and survives restarts; the RAG knowledge base is embedded
@@ -33,7 +31,14 @@ run entirely on-disk with no server or paid service involved.
 - `app/data/knowledge_base/*.md` — the RAG corpus (one file per catalog item)
 - `app/store.py` — SQLite-backed app state (orders, sessions, addresses) —
   `app/data/app.db`, created automatically on first run
-- `app/main.py` — FastAPI routes
+- `app/main.py` — FastAPI routes and the deterministic order/address/email
+  conversation flow
+- `app/schemas.py` — request/response models, including the input limits
+- `app/config.py` — environment-variable settings (see `.env.example`)
+- `app/rag_eval.py`, `app/conversation_eval.py` — standalone eval scripts
+  (see Tests below), not part of the running app
+- `static/` — the dashboard and chat widget (plain HTML/CSS/JS, no build step)
+- `tests/` — the pytest suite; `.github/workflows/tests.yml` runs it in CI
 
 ## Setup
 
@@ -45,7 +50,8 @@ run entirely on-disk with no server or paid service involved.
    (Ollama must be running — `ollama serve`, or just have the app open.)
 2. Get a free Gemini API key at https://aistudio.google.com/apikey (no credit
    card required) — this is only used to read uploaded photos.
-3. `python -m venv .venv && source .venv/bin/activate`
+3. `python -m venv .venv && source .venv/bin/activate` — needs Python 3.10 or
+   newer (the code uses `str | None` type syntax); CI runs 3.11
 4. `pip install -r requirements.txt`
 5. `cp .env.example .env` and fill in `GEMINI_API_KEY`. The `SMTP_*` vars are
    optional — without them, order confirmation emails are logged instead of sent.
@@ -57,8 +63,12 @@ at `app/data/chroma_db/`) if it doesn't exist yet. To rebuild it explicitly
 (e.g. after editing the knowledge base), run `python -m app.data_ingest`.
 
 App data lives in `app/data/app.db` (SQLite), created automatically on first
-run. To reset the demo to a clean slate (no orders, no saved address/email),
-just delete that file — it's regenerated empty on the next start.
+run. To reset the demo to a clean slate (no orders, no saved address/email, no
+chat sessions or metrics), click **Reset Demo Data** in the dashboard's top bar
+(or `POST /api/reset-demo`) — it works while the server is running. You can
+also delete the file instead, but stop the server first: the tables are only
+created at startup, so deleting `app.db` under a running server makes every
+request fail with `no such table` until you restart it.
 
 ## Running the demo
 
@@ -93,11 +103,12 @@ To stop the server, press `Ctrl+C` in that terminal (or `pkill -f "uvicorn app.m
 
 ## Tests
 
-`tests/` covers every deterministic part of the app — one file per module
-(`test_guardrails.py`, `test_tools.py`, `test_data_ingest.py`,
-`test_agent.py`/`test_agent_hints.py`, `test_catalog_integrity.py`,
-`test_main.py`) — plus `test_store.py` for `app/store.py`'s own persistence
-layer. Anything touching the database runs against an isolated temp DB (see
+`tests/` covers every deterministic part of the app — one or more files per
+module (`test_guardrails.py`, `test_tools*.py`, `test_data_ingest.py`,
+`test_agent*.py`, `test_main*.py`, `test_retrieval*.py`, `test_store.py`),
+plus `test_catalog_integrity.py` and `test_frontend_schema_sync.py` (which
+keeps the hand-copied limits in `static/` in step with `app/schemas.py`).
+Anything touching the database runs against an isolated temp DB (see
 `tests/conftest.py`'s `isolated_db` fixture), never the real
 `app/data/app.db` the live demo uses. Needs no *chat* model — but
 `test_retrieval.py`/`test_retrieval_search.py` do call the real, local
@@ -117,14 +128,17 @@ To see coverage (which lines are actually exercised, module by module):
 python -m pytest --cov=app --cov-report=term-missing tests/
 ```
 
-`.coveragerc` excludes `app/rag_eval.py` from that report — it's a
-standalone script run directly (`python -m app.rag_eval`), not application
-code these tests exercise; its own methodology is the golden-query eval
-below, not something meant to have unit tests. Everything else genuinely
-needing a live LLM call (`run_turn`, the LangChain tool wrappers,
-`_GuardrailMiddleware`) is intentionally left uncovered here and stays in
-the manual/live-testing category described below — an LLM reply is
-nondeterministic enough that asserting on exact text would be flaky.
+`.coveragerc` excludes `app/rag_eval.py` and `app/conversation_eval.py` from
+that report — they're standalone scripts run directly (`python -m
+app.rag_eval`, `python -m app.conversation_eval`), not application code these
+tests exercise; their own methodology is the golden-query and scripted-
+conversation evals below, not something meant to have unit tests. The one
+thing genuinely needing a live LLM call and left uncovered here is
+`run_turn`'s LLM-invoking body; the LangChain tool wrappers and
+`_GuardrailMiddleware` don't need a model at all and are covered
+(`test_agent_build_tools.py`, `test_agent_guardrail_middleware.py`). The live
+part stays in the manual/live-testing category described below — an LLM reply
+is nondeterministic enough that asserting on exact text would be flaky.
 
 This doesn't replace `python -m app.rag_eval`, which needs the real agent
 and knowledge base and checks a different thing (retrieval/answer quality

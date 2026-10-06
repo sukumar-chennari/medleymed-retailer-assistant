@@ -856,8 +856,8 @@ implementation to Chroma, and again after this SECTION_BOOST fix.
 
 **Q: How do you evaluate the agent/conversation layer, as opposed to pure retrieval?**
 A: Two layers now, and the first one grew far more than originally
-planned. `pytest` (354 tests, runs in a few seconds, `.github/workflows/
-tests.yml` runs it on every push/PR) covers **96% of the whole app** by
+planned. `pytest` (430 tests, runs in a few seconds, `.github/workflows/
+tests.yml` runs it on every push/PR) covers **98% of the whole app** by
 line — `guardrails.py`, `store.py`, `tools.py`, and `retrieval.py` are all
 at 100%; `main.py` and `agent.py` are at 98% and 96%. The last one is the
 most interesting engineering story: `_GuardrailMiddleware` (every
