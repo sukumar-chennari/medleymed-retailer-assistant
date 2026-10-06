@@ -67,3 +67,15 @@ def test_randomuuid_is_only_called_inside_the_fallback_helper():
     # so a bare call at top level or in the reset handler threw there too.
     remainder = _app_js_without_comments_and_helpers("newSessionId")
     assert "randomUUID" not in remainder
+
+
+def test_text_input_maxlength_matches_the_backend_text_limit():
+    # Real bug: ChatRequest caps text at schemas.MAX_TEXT_LEN, but the input
+    # had no maxlength, so a long typed/pasted message was accepted by the UI,
+    # sent, rejected with a 422, and shown as a generic "something went wrong"
+    # that fails identically on every retry. HTML maxlength counts UTF-16 code
+    # units (an emoji is 2) while pydantic counts characters, so an equal
+    # value is the safe direction: the browser can only be stricter.
+    match = re.search(r'id="text-input"[^>]*maxlength="(\d+)"', INDEX_HTML)
+    assert match, "#text-input in static/index.html has no maxlength attribute"
+    assert int(match.group(1)) == schemas.MAX_TEXT_LEN
