@@ -187,6 +187,30 @@ class TestHonestRepliesAreNotBlocked:
         assert self._blocked("I haven't placed any orders before. Your order has been placed.")
 
 
+class TestPleasantryDoesNotSwallowRealRequests:
+    """Real bug: a message that merely started or ended with a pleasantry got
+    the canned greeting/goodbye and never reached the model, silently
+    dropping the actual request ("thanks, order it" -> "Take care!")."""
+
+    def test_a_request_containing_a_pleasantry_is_left_for_the_normal_flow(self):
+        for text in [
+            "thanks, order it", "thanks! can I order it?", "thank you, what's the dosage",
+            "ok thanks, change address", "hi cancel my order", "bye, cancel my order",
+            "hey whats the price", "how are you feeling today?",
+        ]:
+            assert guardrails.deterministic_pleasantry_reply(text) is None, text
+
+    def test_genuine_pleasantries_still_get_their_deterministic_reply(self):
+        # The shortcut exists because the model handled these inconsistently;
+        # narrowing it must not hand them back to the model.
+        for text in [
+            "hi", "hello", "hey whatup", "mornign bro", "how are you", "hows it going bro",
+            "thanks", "thank you", "thanks a lot", "no thanks", "bye", "goodbye", "cya", "cheers",
+            "good morning", "yo",
+        ]:
+            assert guardrails.deterministic_pleasantry_reply(text) is not None, text
+
+
 class TestFabricatedReceiptIsBlocked:
     """Real bug, seen live in a conversation_eval.py run: asked to "reorder
     that", the model skipped reorder_last and invented a receipt for an order

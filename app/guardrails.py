@@ -364,6 +364,23 @@ GREETING_PHRASES = {
 MAX_PLEASANTRY_WORDS = 6
 
 
+# Real bug: a message that merely STARTS or ENDS with a pleasantry was answered
+# with the canned greeting/goodbye and never reached the model — "thanks,
+# order it", "bye, cancel my order", "ok thanks, change address", "hey whats
+# the price" all got "Take care!" / "Hi! I can help with...", silently
+# dropping the actual request. Any of these words means the message is asking
+# for something, so it isn't a pure pleasantry. Deliberately a short list of
+# unmistakable request words (not "yes"/"please"/"can", which are ordinary
+# polite filler) so genuine pleasantries — "hi", "thanks a lot", "no thanks",
+# "hows it going bro" — keep their deterministic reply.
+_PLEASANTRY_REQUEST_WORDS = {
+    "order", "orders", "ordering", "ordered", "reorder", "cancel", "cancelled", "canceled",
+    "buy", "purchase", "price", "cost", "dose", "dosage", "address", "ship", "shipping",
+    "email", "status", "refund", "change", "show", "tell", "want", "need",
+    "what", "which", "why", "when", "where", "safe", "feeling",
+}
+
+
 def deterministic_pleasantry_reply(text: str, now: datetime.datetime | None = None) -> str | None:
     """Greeting/pleasantry handling relies on a rule the model followed
     inconsistently in testing (a plain "hi" sometimes still triggered
@@ -377,6 +394,8 @@ def deterministic_pleasantry_reply(text: str, now: datetime.datetime | None = No
     words = re.findall(r"[a-z']+", text.lower())
     if not words:
         return None
+    if any(w in _PLEASANTRY_REQUEST_WORDS for w in words):
+        return None  # a real request that happens to include a pleasantry
 
     normalized = " ".join(words)
     if any(phrase in normalized for phrase in GREETING_PHRASES):
