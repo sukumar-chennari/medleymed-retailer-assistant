@@ -33,7 +33,7 @@ pytestmark = pytest.mark.usefixtures("isolated_db")
 def _middleware(
     session_id="s1",
     user_text="",
-    image_b64=None,
+    image_read=False,
     had_shown_recommendation=False,
     symptom_lookup_grounded=False,
     turn_state=None,
@@ -41,7 +41,7 @@ def _middleware(
     return agent._GuardrailMiddleware(
         session_id=session_id,
         user_text=user_text,
-        image_b64=image_b64,
+        image_read=image_read,
         had_shown_recommendation=had_shown_recommendation,
         symptom_lookup_grounded=symptom_lookup_grounded,
         turn_state=turn_state if turn_state is not None else {},
@@ -123,6 +123,27 @@ class TestLookupSymptom:
         parsed = json.loads(result.content)
         assert parsed["results"]
         assert parsed["results"][0]["product"] == "Paracetamol 500mg Tablets"
+
+    def test_an_unread_photo_does_not_stop_established_category_reuse(self):
+        # With no usable photo and no symptom text, an earlier-established
+        # category is the only grounding, so a model-invented category switch
+        # is corrected back to it (handler never runs).
+        agent._remember_products("s1", '{"matched": true, "products": [{"id": "fev-001"}]}')
+        mw = _middleware(session_id="s1", user_text="what is this?", image_read=False, symptom_lookup_grounded=True)
+        handler = _handler_returning("unused")
+        result = mw.wrap_tool_call(_FakeRequest("lookup_symptom", {"symptom": "cold"}), handler)
+        assert not handler.calls
+        assert json.loads(result.content)["category"] == "fever"
+
+    def test_a_read_photo_grounds_the_lookup_itself(self):
+        # A photo that WAS read is real grounding for whatever the model asks
+        # about, so the established-category correction is skipped and the
+        # model's own lookup runs.
+        agent._remember_products("s1", '{"matched": true, "products": [{"id": "fev-001"}]}')
+        mw = _middleware(session_id="s1", user_text="what is this?", image_read=True, symptom_lookup_grounded=True)
+        handler = _handler_returning(json.dumps({"matched": True, "category": "cold", "products": []}))
+        mw.wrap_tool_call(_FakeRequest("lookup_symptom", {"symptom": "cold"}), handler)
+        assert handler.calls
 
     def test_blocked_when_not_grounded(self):
         turn_state = {}

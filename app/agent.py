@@ -260,6 +260,24 @@ CONTINUATION_RE = re.compile(
 # prompt as "[Image analysis: ...]" and the model can repeat it back, so it
 # must never carry exception text.
 _IMAGE_UNREADABLE = "Image could not be read — ask the user to type the medicine name."
+# Every failure message describe_image returns (no vision API configured, API
+# error, empty response) starts with this, so callers can tell "the photo was
+# read" from "it wasn't" without describe_image changing its return type.
+_IMAGE_UNREADABLE_PREFIX = "Image could not be read"
+
+# Deterministic reply for a photo-only message that couldn't be read — the
+# same "don't leave a state/safety-relevant answer to the model" treatment as
+# pleasantries and clarifying questions. Without it the only guard left was
+# blocked_ungrounded_lookup, whose forced reply is OUT_OF_SCOPE_REPLY ("I
+# can't help with that here"), which is flatly wrong for a blurry photo.
+IMAGE_UNREADABLE_REPLY = (
+    "I couldn't read that photo. Could you type the medicine name, or "
+    "describe your symptoms (fever or cold)?"
+)
+
+
+def _image_was_read(description: str) -> bool:
+    return not description.startswith(_IMAGE_UNREADABLE_PREFIX)
 
 
 def describe_image(image_b64: str, media_type: str) -> str:
@@ -747,12 +765,23 @@ def _inject_catalog_hint(parts: list, source_text: str, session_id: str) -> None
 
 
 def _build_user_text(
-    text: str, image_b64: str | None, image_media_type: str | None, session_id: str
+    text: str,
+    image_b64: str | None,
+    image_media_type: str | None,
+    session_id: str,
+    image_description: str | None = None,
 ) -> str:
     parts = [text] if text else []
 
     if image_b64:
-        description = describe_image(image_b64, image_media_type or "image/jpeg")
+        # run_turn passes the description in once it has already read the
+        # photo (it needs the result to decide grounding), so the vision API
+        # is called exactly once per turn.
+        description = (
+            image_description
+            if image_description is not None
+            else describe_image(image_b64, image_media_type or "image/jpeg")
+        )
         parts.append(f"[Image analysis: {description}]")
         _inject_catalog_hint(parts, description, session_id)
     elif text:
@@ -892,7 +921,7 @@ class _GuardrailMiddleware(AgentMiddleware):
         self,
         session_id: str,
         user_text: str,
-        image_b64: str | None,
+        image_read: bool,
         had_shown_recommendation: bool,
         symptom_lookup_grounded: bool,
         turn_state: dict,
@@ -900,7 +929,7 @@ class _GuardrailMiddleware(AgentMiddleware):
         super().__init__()
         self.session_id = session_id
         self.user_text = user_text
-        self.image_b64 = image_b64
+        self.image_read = image_read
         self.had_shown_recommendation = had_shown_recommendation
         self.symptom_lookup_grounded = symptom_lookup_grounded
         self.turn_state = turn_state
@@ -962,7 +991,7 @@ class _GuardrailMiddleware(AgentMiddleware):
 
                 text_classifies = bool(user_text) and tools.classify(user_text) is not None
                 established = _established_category(session_id)
-                if not (bool(self.image_b64) or text_classifies) and established:
+                if not (self.image_read or text_classifies) and established:
                     # The current message's own text doesn't establish any
                     # category — the only reason this call isn't blocked as
                     # ungrounded below is an established category from
@@ -1322,6 +1351,22 @@ def run_turn(
             messages.append({"role": "assistant", "content": prequalified_reply})
             return prequalified_reply, messages
 
+    # Read the photo once, up front: whether it was actually READ decides what
+    # it's allowed to ground, and a failed read with no text to go on gets a
+    # deterministic reply instead of an LLM turn (see IMAGE_UNREADABLE_REPLY).
+    image_description = None
+    if image_b64:
+        image_description = describe_image(image_b64, image_media_type or "image/jpeg")
+        if not _image_was_read(image_description) and not (user_text and user_text.strip()):
+            messages.append({"role": "user", "content": "[Photo attached — could not be read]"})
+            messages.append({"role": "assistant", "content": IMAGE_UNREADABLE_REPLY})
+            return IMAGE_UNREADABLE_REPLY, messages
+    # Real bug: this used to be bool(image_b64), so a photo that FAILED to read
+    # (Gemini error, no API key, empty response) still licensed a
+    # lookup_symptom call and bypassed the blocked_ungrounded_lookup guard —
+    # the model could present catalog products for a photo nobody read.
+    image_read = image_description is not None and _image_was_read(image_description)
+
     # Snapshot BEFORE _build_user_text runs — it records this turn's own
     # detected products via _remember_products, which would otherwise make
     # "a recommendation exists" look true even on the very first mention of a
@@ -1330,7 +1375,9 @@ def run_turn(
         store.get_last_recommended_product(session_id)
     )
 
-    combined_text = _build_user_text(user_text, image_b64, image_media_type, session_id)
+    combined_text = _build_user_text(
+        user_text, image_b64, image_media_type, session_id, image_description=image_description
+    )
     messages.append({"role": "user", "content": combined_text})
 
     # Adding a 6th tool visibly increased how often the model calls
@@ -1348,7 +1395,7 @@ def run_turn(
     # main.py's bare-selection handling relies on, so a lookup here is grounded
     # too even though this message's own text doesn't classify.
     symptom_lookup_grounded = (
-        bool(image_b64)
+        image_read
         or (bool(user_text) and tools.classify(user_text) is not None)
         or bool(store.get_last_products(session_id))
     )
@@ -1376,7 +1423,7 @@ def run_turn(
         _GuardrailMiddleware(
             session_id=session_id,
             user_text=user_text,
-            image_b64=image_b64,
+            image_read=image_read,
             had_shown_recommendation=had_shown_recommendation,
             symptom_lookup_grounded=symptom_lookup_grounded,
             turn_state=turn_state,

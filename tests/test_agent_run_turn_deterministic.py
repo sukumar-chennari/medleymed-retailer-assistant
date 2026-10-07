@@ -65,3 +65,97 @@ class TestRunTurnPrequalifiedShortCircuit:
         reply, _ = agent.run_turn([], "my child has a wet cough", "s1")
         assert "pharmacist" in reply.lower()
         assert "guaifenesin" not in reply.lower()
+
+
+class _ReachedTheAgent(Exception):
+    """Raised by a stub standing in for the LLM/agent graph, so a test can
+    prove run_turn got PAST its deterministic short-circuits without ever
+    needing a real model."""
+
+
+def _read_fails(monkeypatch):
+    monkeypatch.setattr(agent, "describe_image", lambda image_b64, media_type: agent._IMAGE_UNREADABLE)
+
+
+def _agent_must_not_run(monkeypatch):
+    def boom(*args, **kwargs):
+        raise AssertionError("the LLM/agent graph must not be reached for this turn")
+
+    monkeypatch.setattr(agent, "create_agent", boom)
+    monkeypatch.setattr(agent, "_build_user_text", boom)
+
+
+class TestRunTurnUnreadablePhotoShortCircuit:
+    """Real bug: a photo that failed to read (Gemini error, no API key, empty
+    response) was still treated as grounding for lookup_symptom, and with no
+    text the only guard left forced OUT_OF_SCOPE_REPLY ("I can't help with
+    that here") — wrong for a blurry photo. A photo-only message that can't
+    be read now gets a deterministic "couldn't read that photo" reply, like
+    pleasantries and clarifying questions do, with no LLM turn at all."""
+
+    def test_a_photo_only_message_that_cannot_be_read_gets_the_deterministic_reply(self, monkeypatch):
+        _read_fails(monkeypatch)
+        _agent_must_not_run(monkeypatch)
+        reply, messages = agent.run_turn([], "", "s1", image_b64="ZmFrZQ==", image_media_type="image/png")
+        assert reply == agent.IMAGE_UNREADABLE_REPLY
+        assert "type the medicine name" in reply
+        assert [m["role"] for m in messages] == ["user", "assistant"]
+        assert messages[-1] == {"role": "assistant", "content": agent.IMAGE_UNREADABLE_REPLY}
+        assert store.get_last_products("s1") is None  # nothing was looked up
+
+    def test_whitespace_only_text_counts_as_no_text(self, monkeypatch):
+        _read_fails(monkeypatch)
+        _agent_must_not_run(monkeypatch)
+        reply, _ = agent.run_turn([], "   ", "s1", image_b64="ZmFrZQ==")
+        assert reply == agent.IMAGE_UNREADABLE_REPLY
+
+    def test_no_vision_api_configured_is_also_unreadable(self, monkeypatch):
+        monkeypatch.setattr(agent, "_gemini_client", None)
+        _agent_must_not_run(monkeypatch)
+        reply, _ = agent.run_turn([], "", "s1", image_b64="ZmFrZQ==")
+        assert reply == agent.IMAGE_UNREADABLE_REPLY
+
+    def test_a_readable_photo_is_not_short_circuited(self, monkeypatch):
+        monkeypatch.setattr(agent, "describe_image", lambda image_b64, media_type: "Paracetamol 500mg Tablets box")
+
+        def reached(*args, **kwargs):
+            raise _ReachedTheAgent
+
+        monkeypatch.setattr(agent, "create_agent", reached)
+        with pytest.raises(_ReachedTheAgent):
+            agent.run_turn([], "", "s1", image_b64="ZmFrZQ==", image_media_type="image/png")
+
+
+class TestRunTurnPhotoGrounding:
+    """The middleware is built from run_turn's own grounding decision, so
+    capture what it's given instead of running a model."""
+
+    def _capture_middleware_kwargs(self, monkeypatch, describe_result: str, user_text: str) -> dict:
+        monkeypatch.setattr(agent, "describe_image", lambda image_b64, media_type: describe_result)
+        captured: dict = {}
+
+        def fake_middleware(**kwargs):
+            captured.update(kwargs)
+            raise _ReachedTheAgent
+
+        monkeypatch.setattr(agent, "_GuardrailMiddleware", fake_middleware)
+        with pytest.raises(_ReachedTheAgent):
+            agent.run_turn([], user_text, "s1", image_b64="ZmFrZQ==", image_media_type="image/png")
+        return captured
+
+    def test_a_photo_that_could_not_be_read_does_not_ground_a_lookup(self, monkeypatch):
+        # Real bug: this used to be bool(image_b64), so a failed read still
+        # licensed lookup_symptom and bypassed blocked_ungrounded_lookup.
+        captured = self._capture_middleware_kwargs(monkeypatch, agent._IMAGE_UNREADABLE, "what is this?")
+        assert captured["image_read"] is False
+        assert captured["symptom_lookup_grounded"] is False
+
+    def test_a_photo_that_was_read_still_grounds_a_lookup(self, monkeypatch):
+        captured = self._capture_middleware_kwargs(monkeypatch, "Paracetamol 500mg Tablets box", "what is this?")
+        assert captured["image_read"] is True
+        assert captured["symptom_lookup_grounded"] is True
+
+    def test_text_that_classifies_still_grounds_even_if_the_photo_failed(self, monkeypatch):
+        captured = self._capture_middleware_kwargs(monkeypatch, agent._IMAGE_UNREADABLE, "I have a fever, here's the box")
+        assert captured["image_read"] is False
+        assert captured["symptom_lookup_grounded"] is True
