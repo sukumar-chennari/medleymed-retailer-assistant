@@ -187,6 +187,46 @@ class TestHonestRepliesAreNotBlocked:
         assert self._blocked("I haven't placed any orders before. Your order has been placed.")
 
 
+class TestFabricatedReceiptIsBlocked:
+    """Real bug, seen live in a conversation_eval.py run: asked to "reorder
+    that", the model skipped reorder_last and invented a receipt for an order
+    that never existed — and it passed check_unverified_completion, because
+    none of the claim phrases appear in a bare receipt."""
+
+    RECEIPT = (
+        "Order ID: ord-0002\nProduct: Cough Suppressant Syrup (Dextromorphorphan)\n"
+        "Quantity: 1\nTotal: $6.29\nShipping to: 123 First Rd"
+    )
+
+    def test_an_ungrounded_receipt_is_blocked(self):
+        result = guardrails.check_unverified_completion(self.RECEIPT, False, False, False)
+        assert result == guardrails.FAKE_COMPLETION_GUARD_REPLY
+
+    def test_the_label_is_matched_case_insensitively(self):
+        assert guardrails.claims_order_placed("ORDER ID: ord-0009 — all set")
+
+    def test_a_real_order_this_turn_grounds_the_same_text(self):
+        # e.g. a check_order_status listing: the guard must not touch it.
+        assert guardrails.check_unverified_completion(self.RECEIPT, True, False, False) is None
+
+    def test_the_apps_own_confirmation_template_is_grounded_not_blocked(self):
+        # build_order_confirmation also contains "Order ID:"; it's only ever
+        # produced for a real order, which sets the grounding flag.
+        reply = guardrails.build_order_confirmation({
+            "order_id": "ord-0001", "product_name": "Paracetamol 500mg Tablets", "quantity": 1,
+            "total_price_usd": 4.99, "address": "1 Test Way", "email_sent": False,
+        })
+        assert guardrails.check_unverified_completion(reply, True, False, False) is None
+
+    def test_asking_for_an_order_id_is_not_a_claim(self):
+        for reply in [
+            "What's the Order ID?",
+            "Please give me your order id and I'll look it up.",
+            "To cancel an order I need the order ID.",
+        ]:
+            assert guardrails.check_unverified_completion(reply, False, False, False) is None, reply
+
+
 class TestOrderConfirmationTemplates:
     def test_build_order_confirmation_includes_key_fields(self):
         order = {

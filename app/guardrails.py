@@ -163,6 +163,17 @@ def claims_order_placed(reply_text: str) -> bool:
             "placed", "confirmed", "shipped", "is on its way", "order summary",
             "place the order", "processing your order", "once it's processed",
             "order has been", "your order is",
+            # A receipt-shaped reply. Real bug, seen live in a
+            # conversation_eval.py run: asked to "reorder that", the model
+            # skipped reorder_last entirely and wrote "Order ID: ord-0002 /
+            # Product: ... / Quantity: 1 / Total: $6.29 / Shipping to: ..." —
+            # an invented receipt for an order that never existed — and none
+            # of the phrases above appear in it, so it sailed through. The
+            # app's own confirmations never reach this check (they are
+            # returned from after_agent before it runs) and an honest order
+            # listing is grounded by check_order_status, so an ungrounded
+            # "Order ID:" label is a fabricated receipt.
+            "order id:",
         ),
     )
 
