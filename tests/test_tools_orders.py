@@ -95,6 +95,25 @@ class TestSavedAddress:
         get_result = json.loads(tools.get_saved_address())
         assert get_result["address"] == "1 Test Way"
 
+    def test_a_blank_address_is_rejected_and_never_overwrites_the_real_one(self):
+        # Real bug: save_address("") wiped the customer's address (the next
+        # order said "No address on file") and save_address("   ") stored
+        # whitespace that start_order then asked them to confirm.
+        store.save_address("demo_user", "1 Real Street")
+        for blank in ["", "   ", "\n\t"]:
+            result = json.loads(tools.save_address(blank))
+            assert result["saved"] is False and "error" in result, repr(blank)
+            assert store.get_address("demo_user") == "1 Real Street", repr(blank)
+
+    def test_a_blank_address_is_not_saved_when_none_was_on_file_either(self):
+        assert json.loads(tools.save_address("   "))["saved"] is False
+        assert store.get_address("demo_user") is None
+
+    def test_the_address_is_saved_trimmed(self):
+        result = json.loads(tools.save_address("  1 Test Way  "))
+        assert result == {"saved": True, "address": "1 Test Way"}
+        assert store.get_address("demo_user") == "1 Test Way"
+
     def test_no_longer_accepts_a_user_id_argument(self):
         # Structurally prevents the bug from coming back: a model-supplied
         # user_id isn't just unused now, it's not an accepted argument at

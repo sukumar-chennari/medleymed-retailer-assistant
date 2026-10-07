@@ -155,6 +155,19 @@ def get_saved_address() -> str:
 
 
 def save_address(address: str) -> str:
+    # Real bug: this saved whatever it was given. The LLM can call this tool
+    # and this model is known to pass empty-string args (see
+    # check_order_status's docstring), so save_address("") overwrote the
+    # customer's real address with nothing (the next order then said "No
+    # address on file"), and save_address("   ") stored whitespace that
+    # start_order then asked the customer to confirm as their address — and
+    # either one also grounded the "I've saved your address" claim guard.
+    address = address.strip()
+    if not address:
+        return json.dumps({
+            "saved": False,
+            "error": "No address was given — ask the user for their shipping address.",
+        })
     store.save_address("demo_user", address)
     return json.dumps({"saved": True, "address": address})
 
