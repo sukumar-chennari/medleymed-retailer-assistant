@@ -797,6 +797,12 @@ OLLAMA_UNAVAILABLE_REPLY = (
 
 TOOL_ROUND_LIMIT_REPLY = "Sorry, I'm having trouble completing that request right now — could you rephrase?"
 
+# Replaces a model reply that came back blank. The small local model
+# occasionally returns no text at all after a tool call; nothing downstream
+# objected, so the customer saw an empty chat bubble and the empty string was
+# saved into the session history (and fed back to the model next turn).
+EMPTY_REPLY_FALLBACK = "Sorry, I didn't catch that — could you rephrase, or tell me your symptoms (fever or cold)?"
+
 
 def _build_tools(session_id: str) -> list:
     """Builds a fresh set of LangChain tools for this one turn, closing over
@@ -1446,5 +1452,8 @@ def run_turn(
         return OLLAMA_UNAVAILABLE_REPLY, messages
 
     reply_text = result["messages"][-1].content or ""
+    if not reply_text.strip():
+        _log_guard(session_id, "empty_reply_replaced", f"user_text={user_text!r}")
+        reply_text = EMPTY_REPLY_FALLBACK
     messages.append({"role": "assistant", "content": reply_text})
     return reply_text, messages

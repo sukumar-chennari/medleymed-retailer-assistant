@@ -159,3 +159,38 @@ class TestRunTurnPhotoGrounding:
         captured = self._capture_middleware_kwargs(monkeypatch, agent._IMAGE_UNREADABLE, "I have a fever, here's the box")
         assert captured["image_read"] is False
         assert captured["symptom_lookup_grounded"] is True
+
+
+class TestRunTurnBlankReply:
+    """Real bug: a blank model reply (the small local model sometimes returns
+    no text after a tool call) passed through unchanged — the customer saw an
+    empty chat bubble and "" was saved into the session history, which is fed
+    back to the model next turn. The LLM entry points are stubbed so no model
+    runs."""
+
+    def _run_with_model_reply(self, monkeypatch, content):
+        from langchain_core.messages import AIMessage
+
+        monkeypatch.setattr(agent, "create_agent", lambda *a, **k: object())
+        monkeypatch.setattr(
+            agent, "_invoke_agent_with_retry", lambda graph, payload, config: {"messages": [AIMessage(content=content)]}
+        )
+        # "I have a fever" would short-circuit into a clarifying question
+        # before the model is reached; this text falls through to the agent.
+        return agent.run_turn([], "tell me a story about trains", "s1")
+
+    def test_a_blank_reply_is_replaced_with_the_fallback(self, monkeypatch):
+        for blank in ["", "   ", "\n\n"]:
+            reply, messages = self._run_with_model_reply(monkeypatch, blank)
+            assert reply == agent.EMPTY_REPLY_FALLBACK, repr(blank)
+            assert messages[-1] == {"role": "assistant", "content": agent.EMPTY_REPLY_FALLBACK}
+
+    def test_the_replacement_is_logged_as_a_guardrail_event(self, monkeypatch):
+        self._run_with_model_reply(monkeypatch, "")
+        names = {event["name"] for event in store.get_metrics_summary()["recent_guardrail_events"]}
+        assert "empty_reply_replaced" in names
+
+    def test_a_normal_reply_is_untouched(self, monkeypatch):
+        reply, messages = self._run_with_model_reply(monkeypatch, "Here is a story.")
+        assert reply == "Here is a story."
+        assert messages[-1] == {"role": "assistant", "content": "Here is a story."}
