@@ -347,7 +347,11 @@ resetDemoButton.addEventListener("click", async () => {
 
 let pendingImage = null; // { b64, mediaType, dataUrl }
 
-function addBubble(role, text, imageDataUrl) {
+// Every assistant bubble gets 👍/👎 — except ones the page itself wrote (a
+// network failure, a rejected photo). Real bug: those had the buttons too, so
+// a click POSTed the client-side error text to /api/feedback as if it were
+// something the assistant said, skewing the dashboard's Helpful Rate.
+function addBubble(role, text, imageDataUrl, { feedback = role === "assistant" } = {}) {
   const bubble = document.createElement("div");
   bubble.className = `bubble ${role}`;
   if (imageDataUrl) {
@@ -358,7 +362,7 @@ function addBubble(role, text, imageDataUrl) {
   const textNode = document.createElement("span");
   textNode.textContent = text;
   bubble.appendChild(textNode);
-  if (role === "assistant") {
+  if (feedback) {
     bubble.appendChild(buildFeedbackControls(text));
   }
   chatEl.appendChild(bubble);
@@ -397,7 +401,7 @@ imageInput.addEventListener("change", () => {
     // Reset so picking the same file again still fires "change".
     imageInput.value = "";
     openChat();
-    addBubble("assistant", problem);
+    addBubble("assistant", problem, null, { feedback: false });
     return;
   }
   const reader = new FileReader();
@@ -467,7 +471,7 @@ formEl.addEventListener("submit", async (e) => {
     loadMetrics();
   } catch (err) {
     pendingBubble.remove();
-    addBubble("assistant", "Sorry, something went wrong reaching the assistant. Please try again.");
+    addBubble("assistant", "Sorry, something went wrong reaching the assistant. Please try again.", null, { feedback: false });
     console.error(err);
   } finally {
     isSending = false;
