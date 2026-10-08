@@ -211,6 +211,27 @@ class TestPleasantryDoesNotSwallowRealRequests:
             assert guardrails.deterministic_pleasantry_reply(text) is not None, text
 
 
+class TestGreetingPhraseHasALengthLimit:
+    """Real bug: the greeting-phrase check ("how are you", "hows it going", ...)
+    had no word limit, unlike every other pleasantry check, so a long message
+    that merely CONTAINED one was answered with the canned greeting and its
+    real question was dropped."""
+
+    def test_a_long_message_containing_a_greeting_phrase_is_not_a_greeting(self):
+        text = "how are you going to help my brother with his knee pain after the match yesterday evening"
+        assert guardrails.deterministic_pleasantry_reply(text) is None
+
+    def test_the_limit_sits_between_a_friendly_greeting_and_a_real_question(self):
+        eight_words = "hey bro how are you doing today friend"
+        assert len(eight_words.split()) == guardrails.MAX_GREETING_PHRASE_WORDS
+        assert guardrails.deterministic_pleasantry_reply(eight_words) == guardrails.GREETING_REPLY
+        assert guardrails.deterministic_pleasantry_reply(eight_words + " ok") is None
+
+    def test_short_greeting_phrases_still_work(self):
+        for text in ["how are you", "hows it going bro", "hi how are you", "hey how are you doing today"]:
+            assert guardrails.deterministic_pleasantry_reply(text) is not None, text
+
+
 class TestFabricatedReceiptIsBlocked:
     """Real bug, seen live in a conversation_eval.py run: asked to "reorder
     that", the model skipped reorder_last and invented a receipt for an order

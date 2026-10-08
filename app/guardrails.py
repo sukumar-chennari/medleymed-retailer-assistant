@@ -362,6 +362,14 @@ GREETING_PHRASES = {
     "what's good", "how is it going", "how's everything",
 }
 MAX_PLEASANTRY_WORDS = 6
+# The phrase check above ("how are you", ...) used to have NO length limit,
+# unlike every word-based check below it, so any long message that merely
+# contained one — "how are you going to help my brother with his knee pain
+# after the match yesterday evening" — got the canned "Hi! I can help with
+# fever or cold..." greeting and its real question was dropped. Phrases are
+# allowed a little more room than bare words ("hey bro how are you doing
+# today my friend"), but not an open-ended amount.
+MAX_GREETING_PHRASE_WORDS = 8
 
 
 # Real bug: a message that merely STARTS or ENDS with a pleasantry was answered
@@ -398,7 +406,7 @@ def deterministic_pleasantry_reply(text: str, now: datetime.datetime | None = No
         return None  # a real request that happens to include a pleasantry
 
     normalized = " ".join(words)
-    if any(phrase in normalized for phrase in GREETING_PHRASES):
+    if len(words) <= MAX_GREETING_PHRASE_WORDS and any(phrase in normalized for phrase in GREETING_PHRASES):
         return GREETING_REPLY
 
     if len(words) > MAX_PLEASANTRY_WORDS:
