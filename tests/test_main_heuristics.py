@@ -34,6 +34,42 @@ class TestExtractEmail:
         assert remainder == "123 Main St"
 
 
+class TestEmailPunctuation:
+    """Real bug: EMAIL_RE's tail `[\\w.-]+` also matched trailing punctuation,
+    so "my email is bob@gmail.com." was captured as "bob@gmail.com." — saved as
+    the customer's email and used as the confirmation recipient (a mail server
+    rejects the trailing dot). Fixing the pattern frees that punctuation, so
+    the remainder cleanup has to absorb it too, or a bare email stops being
+    recognized as bare and the stray punctuation is saved as an ADDRESS."""
+
+    def test_trailing_sentence_punctuation_is_not_part_of_the_email(self):
+        for text in ["my email is bob@gmail.com.", "it's bob@gmail.com!", "bob@gmail.com?", "email: bob@gmail.com;"]:
+            assert main._extract_email(text)[0] == "bob@gmail.com", text
+
+    def test_a_real_address_with_a_trailing_period_after_the_email_keeps_the_address(self):
+        email, remainder = main._extract_email("123 Main St, bob@gmail.com.")
+        assert email == "bob@gmail.com"
+        assert remainder == "123 Main St"
+
+    def test_multi_part_domains_still_match_in_full(self):
+        assert main._extract_email("a.b+tag@mail.co.uk")[0] == "a.b+tag@mail.co.uk"
+        assert main._extract_email("a.b+tag@mail.co.uk.")[0] == "a.b+tag@mail.co.uk"
+        assert main._extract_email("first.last@sub.domain.example.org")[0] == "first.last@sub.domain.example.org"
+
+    def test_a_bare_email_stays_bare_with_trailing_or_wrapping_punctuation(self):
+        for text in [
+            "bob123@gmail.com.", "bob123@gmail.com!", "(bob123@gmail.com)",
+            "<bob123@gmail.com>", '"bob123@gmail.com"', "[bob123@gmail.com]",
+        ]:
+            assert main._is_bare_email(text), text
+            assert not main._looks_like_an_address(text), text
+            assert not main._looks_like_a_first_time_address(text), text
+
+    def test_text_without_a_real_email_is_untouched(self):
+        assert main._extract_email("not an email") == (None, "not an email")
+        assert main._extract_email("bob@localhost") == (None, "bob@localhost")
+
+
 class TestLooksLikeAnEmail:
     def test_detects_a_real_email(self):
         assert main._looks_like_an_email("a@example.com")

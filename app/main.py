@@ -19,7 +19,12 @@ GENERIC_FAILURE_REPLY = (
     "keeps happening, check that Ollama is running."
 )
 
-EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
+# The domain is dot-separated labels that each END in a word character. Real
+# bug: the old tail `[\w.-]+` also matched trailing punctuation, so
+# "my email is bob@gmail.com." captured "bob@gmail.com." — a trailing-dot
+# address saved as the customer's email and used as the confirmation
+# recipient, which a mail server rejects.
+EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]*\w)+")
 
 
 @app.get("/health")
@@ -79,7 +84,13 @@ def _extract_email(text: str) -> tuple[str | None, str]:
     # Also drop a leading label word like "email:" or "mail" that introduced
     # the address, so it doesn't linger in the saved shipping address.
     remainder = re.sub(r"[,;:\-\s]*\b(e-?mail|mail)\b\s*:?\s*$", "", remainder, flags=re.IGNORECASE)
-    remainder = remainder.strip(" ,;:-")
+    # Punctuation around the email is left behind: sentence punctuation
+    # ("...bob@gmail.com.") now that the pattern no longer swallows it, and
+    # the wrapper in "(bob@gmail.com)", "<bob@gmail.com>" or a quoted one,
+    # which already left "()"/"<>" behind. Without stripping it a bare email
+    # isn't recognized as bare (see _is_bare_email) and the stray
+    # punctuation is saved as the shipping address.
+    remainder = remainder.strip(" ,;:-.!?()<>[]\"'")
     return email, remainder
 
 
