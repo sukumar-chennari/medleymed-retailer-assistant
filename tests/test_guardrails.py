@@ -421,7 +421,7 @@ class TestRememberRecommendedProduct:
     def test_remembers_a_product_named_by_id(self):
         from app import store
 
-        guardrails.remember_recommended_product("s1", "Paracetamol 500mg Tablets (fev-001) would be a good fit.")
+        guardrails.remember_recommended_product("s1", "Paracetamol 500mg Tablets (fev-001) would be a good fit. Would you like to order this?")
         assert store.get_last_recommended_product("s1") == "fev-001"
 
     def test_remembers_a_product_named_only_by_full_catalog_name(self):
@@ -431,14 +431,59 @@ class TestRememberRecommendedProduct:
         # readable name (no id) used to leave this blind, and a later "yes"
         # fell through to the model's own memory, which ordered a
         # *different* product than the one actually shown.
-        guardrails.remember_recommended_product("s1", "Paracetamol Extra Strength 650mg would be a good fit.")
+        guardrails.remember_recommended_product("s1", "Paracetamol Extra Strength 650mg would be a good fit. Would you like to order this?")
         assert store.get_last_recommended_product("s1") == "fev-002"
 
     def test_multiple_products_mentioned_is_too_ambiguous_to_remember(self):
         from app import store
 
-        guardrails.remember_recommended_product("s1", "Options: fev-001 or fev-002, either would work.")
+        guardrails.remember_recommended_product("s1", "Options: fev-001 or fev-002, either would work. Which one would you like to try?")
         assert store.get_last_recommended_product("s1") is None
+
+    def test_an_informational_reply_is_not_a_recommendation(self):
+        from app import store
+
+        # Real bug: any single product named in any free-text reply used to be
+        # recorded, so a dosage answer made a later "yes" (to "anything
+        # else?") start an order for a product the customer only asked about.
+        guardrails.remember_recommended_product(
+            "s1", "For Paracetamol 500mg Tablets, adults take 1-2 tablets every 4-6 hours, up to 8 in 24 hours."
+        )
+        assert store.get_last_recommended_product("s1") is None
+        guardrails.remember_recommended_product("s2", "Ibuprofen 200mg Tablets (fev-003) is not suitable for children.")
+        assert store.get_last_recommended_product("s2") is None
+
+    def test_the_phrasing_the_real_model_uses_counts(self):
+        from app import store
+
+        # Observed live: the model's own recommendation, with its own offer
+        # wording. A first version of the gate only knew "order this" and
+        # would have broken "yes" after exactly this reply.
+        guardrails.remember_recommended_product(
+            "s1",
+            "For a child's cold product, I recommend \"Children's Cold & Cough Syrup\" (id: col-006). "
+            "It is a liquid syrup.\n\nWould you like to place an order for this product?",
+        )
+        assert store.get_last_recommended_product("s1") == "col-006"
+
+    def test_in_order_to_is_not_an_offer(self):
+        from app import store
+
+        guardrails.remember_recommended_product(
+            "s1", "Paracetamol 500mg Tablets (fev-001): if you'd like to know more, take it with water in order to ease nausea."
+        )
+        assert store.get_last_recommended_product("s1") is None
+
+    def test_each_way_of_offering_the_product_counts(self):
+        from app import store
+
+        for i, offer in enumerate([
+            "Would you like to order this?", "Do you want to order it?", "Would you like to try it?",
+            "Shall I get you one? Want to order one?", "Which one would you like?",
+        ]):
+            sid = f"offer-{i}"
+            guardrails.remember_recommended_product(sid, f"Paracetamol 500mg Tablets (fev-001) is a good fit. {offer}")
+            assert store.get_last_recommended_product(sid) == "fev-001", offer
 
     def test_no_product_mentioned_remembers_nothing(self):
         from app import store

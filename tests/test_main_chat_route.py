@@ -177,3 +177,32 @@ class TestBareSelectionAndLastRecommended:
         assert "shipping address" in reply.lower()
         assert store.get_pending_order("s1") == {"product_id": "fev-001", "quantity": 1}
         assert store.get_last_recommended_product("s1") is None
+
+
+class TestYesAfterAnInformationalAnswer:
+    """Real bug: any single product named in any free-text model reply was
+    recorded as "the product just recommended", so after a dosage answer a
+    bare "yes" (to "anything else?") started an order for a product the
+    customer only asked about. Reproduced end to end; no model runs, since a
+    bare "yes" with a remembered product is handled deterministically."""
+
+    def test_yes_after_a_dosage_answer_does_not_start_an_order(self, monkeypatch):
+        from app import guardrails
+
+        guardrails.remember_recommended_product(
+            "s1", "For Paracetamol 500mg Tablets, adults take 1-2 tablets every 4-6 hours."
+        )
+        # "yes" is now free text for the model (nothing deterministic claims it).
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("stubbed", messages))
+        assert _chat("s1", "yes") == "stubbed"
+        assert store.get_pending_order("s1") is None
+
+    def test_yes_after_a_real_recommendation_still_starts_the_order(self):
+        from app import guardrails
+
+        guardrails.remember_recommended_product(
+            "s1", "Paracetamol 500mg Tablets (fev-001) would be a good fit. Would you like to order this?"
+        )
+        reply = _chat("s1", "yes")
+        assert "shipping address" in reply.lower()
+        assert store.get_pending_order("s1") == {"product_id": "fev-001", "quantity": 1}

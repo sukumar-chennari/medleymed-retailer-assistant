@@ -320,6 +320,21 @@ def recover_leaked_lookup(reply_text: str) -> tuple[str, str] | None:
 PRODUCT_ID_RE = re.compile(r"\b(?:fev|col)-\d{3}\b", re.IGNORECASE)
 
 
+# A reply only RECOMMENDS a product — something a bare "yes" can accept — if it
+# offers to order it. Matches the phrasings real recommendations use: the
+# system prompt's "Would you like to order this?", the model's own variants
+# (observed live: "Would you like to place an order for this product?"), the
+# deterministic single-product reply, and a product list's "Which one would
+# you like to try?". An offer verb followed, in the same sentence, by
+# order/try/buy/purchase/go with.
+_ORDER_OFFER_RE = re.compile(
+    r"\b(?:would you like|do you want|want to|like to|shall i|should i)\b[^.?!\n]{0,60}?\b(?:order|try|buy|purchase|go with)\b"
+    r"|\border (?:this|that|it|one)\b"
+    r"|\bwhich one would you like\b",
+    re.IGNORECASE,
+)
+
+
 def remember_recommended_product(session_id: str, reply_text: str) -> None:
     """Tracks the single product the assistant just recommended (parsed out
     of its own reply) so a later bare "yes"/"ok" confirmation — the natural
@@ -333,6 +348,13 @@ def remember_recommended_product(session_id: str, reply_text: str) -> None:
     model's own memory, which ordered a *different* product (Extra Strength
     650mg) than the one actually shown. Falling back to matching by catalog
     product name closes that gap."""
+    # Real bug: this used to record ANY single product named in ANY free-text
+    # reply, so an informational answer ("For Paracetamol 500mg Tablets, adults
+    # take 1-2 tablets every 4-6 hours...") made a later "yes" — to "anything
+    # else?", say — start an order for a product the customer only asked about.
+    # "in order to" is just English, not an offer.
+    if not _ORDER_OFFER_RE.search(reply_text.replace("in order to", " ")):
+        return
     matches = {m.lower() for m in PRODUCT_ID_RE.findall(reply_text)}
     if not matches:
         text_lower = reply_text.lower()
