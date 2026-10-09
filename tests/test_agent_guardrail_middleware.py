@@ -407,6 +407,36 @@ def _after_agent(mw, reply_text: str) -> str:
     return result["messages"][0].content
 
 
+class TestAfterAgentUnverifiedCancellation:
+    def test_an_ungrounded_cancellation_claim_is_replaced_and_logged(self):
+        mw = _middleware(turn_state={})
+        assert _after_agent(mw, "I've cancelled your order ord-0001.") == guardrails.CANCELLATION_NOT_DONE_REPLY
+        names = {e["name"] for e in store.get_metrics_summary()["recent_guardrail_events"]}
+        assert "unverified_cancellation_blocked" in names
+
+    def test_it_also_catches_a_claim_after_the_cancel_tool_call_was_blocked(self):
+        # blocked_unconfirmed_cancel stops the TOOL; the model can still SAY it
+        # was done. Nothing in turn_state records a real cancellation.
+        mw = _middleware(user_text="hmm", turn_state={})
+        assert _after_agent(mw, "Done, order cancelled!") == guardrails.CANCELLATION_NOT_DONE_REPLY
+
+    def test_a_real_cancellation_still_renders_the_apps_own_confirmation(self):
+        order = {"order_id": "ord-0001", "product_name": "Paracetamol 500mg Tablets"}
+        mw = _middleware(turn_state={"cancelled_order": order})
+        assert _after_agent(mw, "whatever the model says") == guardrails.build_cancellation_confirmation(order)
+
+    def test_a_status_listing_that_mentions_cancelled_is_not_blocked(self):
+        # check_order_status returning real orders sets real_order_placed.
+        mw = _middleware(turn_state={"real_order_placed": True})
+        reply = "ord-0001 has been cancelled; ord-0002 is on its way."
+        assert _after_agent(mw, reply) == reply
+
+    def test_an_offer_to_cancel_is_untouched(self):
+        mw = _middleware(turn_state={})
+        reply = "Would you like me to cancel your order?"
+        assert _after_agent(mw, reply) == reply
+
+
 class TestAfterAgentStructuralOverrides:
     def test_blocked_ungrounded_lookup_forces_the_out_of_scope_reply(self):
         mw = _middleware(turn_state={"blocked_ungrounded_lookup": True})

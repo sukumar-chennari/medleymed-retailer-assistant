@@ -187,6 +187,43 @@ class TestHonestRepliesAreNotBlocked:
         assert self._blocked("I haven't placed any orders before. Your order has been placed.")
 
 
+class TestUnverifiedCancellation:
+    """Real bug: cancel_order had a guard on the TOOL CALL but nothing on the
+    CLAIM, so with no real cancellation "I've cancelled your order" reached
+    the customer unchanged — they believe it's cancelled while it will still
+    ship."""
+
+    def test_past_tense_and_passive_cancellation_claims_are_detected(self):
+        for text in [
+            "I've cancelled your order ord-0001.", "Done, order cancelled!", "Your order has been cancelled.",
+            "Sure — your order is now canceled.", "I have successfully canceled it for you.",
+            "Order cancelled — anything else?",
+        ]:
+            assert guardrails.claims_order_cancelled(text), text
+
+    def test_offers_refusals_negations_questions_and_listings_are_not_claims(self):
+        for text in [
+            "Would you like me to cancel your order?", "I can't cancel that order.",
+            "Your order hasn't been cancelled.", "I haven't cancelled anything yet.",
+            "Do you want me to cancel it?", "No order has been cancelled.",
+            "Which order has been cancelled?", "Your orders: ord-0001 - status: cancelled",
+            "You can cancel an order any time before it ships.",
+            "Orders that were cancelled earlier don't count toward the limit.",
+        ]:
+            assert not guardrails.claims_order_cancelled(text), text
+
+    def test_an_ungrounded_claim_gets_the_honest_reply(self):
+        reply = guardrails.check_unverified_cancellation("I've cancelled your order ord-0001.", False)
+        assert reply == guardrails.CANCELLATION_NOT_DONE_REPLY
+        assert "haven't cancelled anything" in reply
+
+    def test_a_claim_grounded_by_an_order_status_report_is_left_alone(self):
+        assert guardrails.check_unverified_cancellation("ord-0001 has been cancelled.", True) is None
+
+    def test_a_reply_that_makes_no_claim_is_left_alone(self):
+        assert guardrails.check_unverified_cancellation("Here are some options.", False) is None
+
+
 class TestPleasantryDoesNotSwallowRealRequests:
     """Real bug: a message that merely started or ended with a pleasantry got
     the canned greeting/goodbye and never reached the model, silently

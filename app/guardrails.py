@@ -14,6 +14,10 @@ import re
 
 from app import store, tools
 
+CANCELLATION_NOT_DONE_REPLY = (
+    "I haven't cancelled anything yet. Tell me which order you'd like to cancel "
+    "(for example, \"cancel my last order\") and I'll do it."
+)
 OUT_OF_SCOPE_REPLY = "This demo only handles fever and cold OTC guidance — I can't help with that here."
 
 FAKE_COMPLETION_GUARD_REPLY = (
@@ -102,7 +106,7 @@ _SENTENCE_BREAK_RE = re.compile(r"[.!?\n;]")
 _NEGATION_RE = re.compile(r"\b(?:no|not|never|cannot|unable)\b|n['\u2019]t\b")
 _NEXT_WORD_NEGATION_RE = re.compile(r"^\s*(?:(?:not|never)\b|\w+n['\u2019]t\b)")
 _QUESTION_OPENER_RE = re.compile(
-    r"^\s*(?:do|does|did|can|could|would|will|should|is|are|may|what|how|when|where|why|who)\b"
+    r"^\s*(?:do|does|did|can|could|would|will|should|is|are|may|what|which|how|when|where|why|who)\b"
 )
 # Kept short on purpose: a wider window would let an unrelated "no"/"not"
 # earlier in a long sentence exempt a genuine claim ("...no worries" AFTER a
@@ -176,6 +180,43 @@ def claims_order_placed(reply_text: str) -> bool:
             "order id:",
         ),
     )
+
+
+def claims_order_cancelled(reply_text: str) -> bool:
+    """A reply asserting an order WAS cancelled. Narrow on purpose — only
+    past-tense/passive claim phrasings ("I've cancelled", "has been
+    cancelled", "is now canceled"), so offers ("Would you like me to cancel
+    it?"), refusals ("I can't cancel that"), negations ("hasn't been
+    cancelled") and status listings ("status: cancelled") are not claims."""
+    return _has_unnegated_claim(
+        reply_text.lower(),
+        (
+            "i've cancelled", "i have cancelled", "i cancelled",
+            "i've canceled", "i have canceled", "i canceled",
+            "has been cancelled", "has been canceled",
+            "successfully cancelled", "successfully canceled",
+            "is now cancelled", "is now canceled",
+            "order cancelled", "order canceled",
+        ),
+    )
+
+
+def check_unverified_cancellation(reply_text: str, grounded_by_order_status: bool) -> str | None:
+    """Real bug: cancel_order had a guard on the TOOL CALL (it only runs when
+    this message asks to cancel) but nothing on the CLAIM, so with no real
+    cancellation this turn "I've cancelled your order ord-0001." or "Done,
+    order cancelled!" reached the customer unchanged — they believe the order
+    is cancelled while it is still active and will ship. (A real
+    cancellation never gets here: after_agent renders its own confirmation
+    from the real result before this check runs.)
+
+    grounded_by_order_status: check_order_status returned real orders this
+    turn, so a reply listing them may legitimately say "cancelled". Returns a
+    replacement reply, or None if the reply is fine."""
+    if grounded_by_order_status or not claims_order_cancelled(reply_text):
+        return None
+    print(f"[GUARD] blocked unverified cancellation claim: {reply_text!r}")
+    return CANCELLATION_NOT_DONE_REPLY
 
 
 def claims_email_sent(reply_text: str) -> bool:

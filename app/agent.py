@@ -1263,14 +1263,24 @@ class _GuardrailMiddleware(AgentMiddleware):
             final = guardrails.reply_for_deferred_order(self.turn_state["deferred_order"])
         else:
             guardrails.remember_recommended_product(session_id, reply_text)
-            guard_reply = guardrails.check_unverified_completion(
-                reply_text,
-                self.turn_state.get("real_order_placed", False),
-                self.turn_state.get("real_email_sent", False),
-                self.turn_state.get("real_address_saved", False),
+            # check_order_status (when it returned real orders) sets
+            # real_order_placed, which is exactly the "a status report
+            # happened" grounding the cancellation check needs; a real
+            # cancellation never reaches this branch (rendered above).
+            guard_reply = guardrails.check_unverified_cancellation(
+                reply_text, self.turn_state.get("real_order_placed", False)
             )
             if guard_reply:
-                _log_guard(session_id, "unverified_completion_blocked", f"{reply_text!r}")
+                _log_guard(session_id, "unverified_cancellation_blocked", f"{reply_text!r}")
+            else:
+                guard_reply = guardrails.check_unverified_completion(
+                    reply_text,
+                    self.turn_state.get("real_order_placed", False),
+                    self.turn_state.get("real_email_sent", False),
+                    self.turn_state.get("real_address_saved", False),
+                )
+                if guard_reply:
+                    _log_guard(session_id, "unverified_completion_blocked", f"{reply_text!r}")
             final = guard_reply or reply_text
 
             # Only touch a reply that stood untouched by the guard above —
