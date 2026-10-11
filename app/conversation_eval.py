@@ -54,6 +54,33 @@ def _no_leaked_tool_name(reply: str) -> bool:
     return not any(name in lower for name in agent.TOOL_NAMES)
 
 
+# Reply-text checks alone proved too weak: on Oct 7 a run scored the model's
+# INVENTED receipt ("Order ID: ord-0002 / Product: ... / Shipping to: 123
+# First Rd" — it had skipped the reorder_last tool and no order existed) as a
+# PASS for "confirms the address already on file", because the check only
+# looked for the address string anywhere in the reply. This harness runs
+# in-process against an isolated database, so turns can also assert on REAL
+# state (turn["state_checks"], each called with the session id) — a made-up
+# reply can't fake an order row.
+def _asks_to_confirm_address(address: str):
+    """The deterministic deferred-order reply (guardrails.reply_for_deferred_
+    order): "We have this address on file: X. Should I ship to this address,
+    or would you like to give a different one?" — and NOT a receipt."""
+    return lambda r: address in r and "address on file" in r.lower() and "Order ID" not in r
+
+
+def _order_count_is(expected: int):
+    return lambda session_id: len(store.list_orders("demo_user")) == expected
+
+
+def _order_status_is(order_id: str, status: str):
+    return lambda session_id: (store.get_order(order_id) or {}).get("status") == status
+
+
+def _awaiting_address_confirmation(session_id: str) -> bool:
+    return store.get_pending_address_confirmation(session_id) is not None
+
+
 # Each case is a fresh session, run turn by turn; each turn's checks run
 # against that turn's real reply. (name, check_fn) pairs so a failure
 # report names exactly what didn't hold, not just "case 2 turn 3 failed."
@@ -113,9 +140,11 @@ CONVERSATION_CASES = [
             {
                 "text": "123 Cancel Reorder Rd",
                 "checks": [("first order confirmed", lambda r: "Order confirmed!" in r and "ord-0001" in r)],
+                "state_checks": [("a real order exists", _order_count_is(1))],
             },
             {
                 "text": "please cancel my order",
+                "state_checks": [("the real order is actually cancelled", _order_status_is("ord-0001", "cancelled"))],
                 "checks": [
                     ("actually cancels the real order, not the email offer", lambda r: "cancelled" in r.lower() and "ord-0001" in r),
                 ],
@@ -123,11 +152,16 @@ CONVERSATION_CASES = [
             {
                 "text": "reorder that for me",
                 "checks": [
-                    ("confirms the address on file for the same product", lambda r: "Cancel Reorder Rd" in r),
+                    ("confirms the address on file for the same product", _asks_to_confirm_address("Cancel Reorder Rd")),
+                ],
+                "state_checks": [
+                    ("no second order exists yet", _order_count_is(1)),
+                    ("is genuinely awaiting address confirmation", _awaiting_address_confirmation),
                 ],
             },
             {
                 "text": "yes",
+                "state_checks": [("a real second order exists", _order_count_is(2))],
                 "checks": [
                     ("second order confirmed with a new order id", lambda r: "Order confirmed!" in r and "ord-0002" in r),
                     ("same product reordered", lambda r: "Cough Suppressant" in r),
@@ -155,6 +189,7 @@ CONVERSATION_CASES = [
             },
             {
                 "text": "please cancel my order",
+                "state_checks": [("the real order is actually cancelled", _order_status_is("ord-0001", "cancelled"))],
                 "checks": [("actually cancels the real order", lambda r: "cancelled" in r.lower() and "ord-0001" in r)],
             },
             {
@@ -181,11 +216,16 @@ CONVERSATION_CASES = [
             {"text": "yes", "checks": [("asks for a shipping address", lambda r: "shipping address" in r.lower())]},
             {
                 "text": "123 First Rd",
+                "state_checks": [("a real order exists", _order_count_is(1))],
                 "checks": [("first order confirmed", lambda r: "Order confirmed!" in r and "ord-0001" in r)],
             },
             {
                 "text": "reorder that",
-                "checks": [("confirms the address already on file", lambda r: "123 First Rd" in r)],
+                "checks": [("confirms the address already on file", _asks_to_confirm_address("123 First Rd"))],
+                "state_checks": [
+                    ("no second order exists yet", _order_count_is(1)),
+                    ("is genuinely awaiting address confirmation", _awaiting_address_confirmation),
+                ],
             },
             {
                 "text": "no, i will give a different one",
@@ -195,6 +235,7 @@ CONVERSATION_CASES = [
             },
             {
                 "text": "456 Second Ave",
+                "state_checks": [("a real second order exists", _order_count_is(2))],
                 "checks": [
                     ("second order confirmed", lambda r: "Order confirmed!" in r and "ord-0002" in r),
                     ("ships to the new address, not the old one", lambda r: "456 Second Ave" in r and "123 First Rd" not in r),
@@ -220,9 +261,20 @@ CONVERSATION_CASES = [
                 "text": "123 Unrelated Question Rd",
                 "checks": [("first order confirmed", lambda r: "Order confirmed!" in r and "ord-0001" in r)],
             },
-            {"text": "reorder that", "checks": [("confirms the address already on file", lambda r: "123 Unrelated Question Rd" in r)]},
+            {
+                "text": "reorder that",
+                "checks": [("confirms the address already on file", _asks_to_confirm_address("123 Unrelated Question Rd"))],
+                "state_checks": [
+                    ("no second order exists yet", _order_count_is(1)),
+                    ("is genuinely awaiting address confirmation", _awaiting_address_confirmation),
+                ],
+            },
             {
                 "text": "can you help me fix a bug in my python script",
+                "state_checks": [
+                    ("no order was invented by the unrelated turn", _order_count_is(1)),
+                    ("the confirmation is still pending", _awaiting_address_confirmation),
+                ],
                 "checks": [
                     ("answers instead of repeating the confirm-address question", lambda r: "can't help with that here" in r.lower()),
                     ("never claims an order was placed", lambda r: "Order confirmed!" not in r),
@@ -230,6 +282,7 @@ CONVERSATION_CASES = [
             },
             {
                 "text": "yes",
+                "state_checks": [("a real second order exists", _order_count_is(2))],
                 "checks": [
                     ("the pending order still completes afterward", lambda r: "Order confirmed!" in r and "ord-0002" in r),
                 ],
@@ -400,6 +453,11 @@ def run_eval() -> tuple[int, int]:
                 total += 1
                 ok = bool(check_fn(reply))  # a check accidentally returning e.g. a re.Match must not break the tally
                 print(f"    [{'PASS' if ok else 'FAIL'}] {check_name}")
+                passed += ok
+            for check_name, check_fn in turn.get("state_checks", []):
+                total += 1
+                ok = bool(check_fn(session_id))
+                print(f"    [{'PASS' if ok else 'FAIL'}] (state) {check_name}")
                 passed += ok
 
     print(f"\n{passed}/{total} checks passed")
