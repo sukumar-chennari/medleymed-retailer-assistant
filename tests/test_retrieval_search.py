@@ -113,3 +113,33 @@ class TestEmptyCollection:
 
         assert result == []
         fake_client.embed.assert_not_called()
+
+
+class TestSearchDoesNotOverNarrow:
+    """Real bug: results were narrowed to the one product a distinctive title
+    word named, discarding products the query also pointed at."""
+
+    def test_comparing_two_products_returns_both(self):
+        results = retrieval.search("paracetamol vs ibuprofen which is better for fever")
+        products = {r["product"] for r in results}
+        assert "Ibuprofen 200mg Tablets" in products
+        assert any("Paracetamol" in p for p in products)  # used to be dropped entirely
+
+    def test_a_childs_dextromethorphan_question_includes_the_childrens_syrup(self):
+        # It used to return ONLY the adult syrup's dosage: only that product's
+        # title says dextromethorphan, though the children's syrup contains it.
+        results = retrieval.search("dextromethorphan dosage for children")
+        assert "Children's Cold & Cough Syrup" in {r["product"] for r in results}
+
+    def test_a_five_year_old_question_includes_the_childrens_syrup(self):
+        results = retrieval.search("cough suppressant for my 5 year old")
+        assert "Children's Cold & Cough Syrup" in {r["product"] for r in results}
+
+    def test_a_generic_pain_relief_question_is_not_pinned_to_the_multi_symptom_product(self):
+        results = retrieval.search("what pain relief is there for fever")
+        assert {r["product"] for r in results} != {"Cold & Flu Multi-Symptom Relief"}
+        assert any(r["source"].startswith("fev-") for r in results)
+
+    def test_a_query_naming_one_product_is_still_narrowed_to_it(self):
+        results = retrieval.search("can I take ibuprofen for a fever")
+        assert results and {r["product"] for r in results} == {"Ibuprofen 200mg Tablets"}

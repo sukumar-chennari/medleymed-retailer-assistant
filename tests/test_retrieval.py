@@ -104,6 +104,64 @@ class TestIdentifySingleProduct:
         assert retrieval._identify_single_product("what's the weather today") is None
 
 
+class TestIdentifySingleProductDoesNotOverNarrow:
+    """Real bug: a distinctive title word narrowed results to that one product
+    even when the query also pointed elsewhere. "paracetamol vs ibuprofen"
+    returned only ibuprofen; "dextromethorphan dosage for children" returned
+    only the ADULT cough syrup's dosage (the children's syrup contains
+    dextromethorphan but its title doesn't say so); "pain relief for fever"
+    returned only Cold & Flu Multi-Symptom Relief. Uses the real catalog, like
+    the rest of this file, so a catalog change that breaks this fails here."""
+
+    def test_a_query_naming_another_products_ingredient_is_not_narrowed(self):
+        assert retrieval._identify_single_product("paracetamol vs ibuprofen which is better for fever") is None
+        assert retrieval._identify_single_product("ibuprofen and paracetamol together") is None
+
+    def test_an_ingredient_shared_with_another_product_alone_does_not_narrow(self):
+        assert retrieval._identify_single_product("dextromethorphan dosage") is None
+
+    def test_a_question_about_a_child_is_never_narrowed_to_an_adult_product(self):
+        for query in [
+            "dextromethorphan dosage for children", "cough suppressant for my 5 year old",
+            "ibuprofen dosage for my kid", "cough suppressant syrup for a toddler",
+        ]:
+            assert retrieval._identify_single_product(query) is None, query
+
+    def test_a_generic_word_cannot_pick_a_product_on_its_own(self):
+        assert retrieval._identify_single_product("what pain relief is there for fever") is None
+        assert retrieval._identify_single_product("relief for body aches and fever") is None
+
+    def test_a_query_that_really_names_one_product_still_narrows(self):
+        # The point of the filter — none of this may regress.
+        for query, title in [
+            ("can I take ibuprofen for a fever", "Ibuprofen 200mg Tablets"),
+            ("side effects of cetirizine", "Cetirizine 10mg Antihistamine Tablets"),
+            ("dosage for guaifenesin expectorant syrup", "Guaifenesin Expectorant Syrup"),
+            ("dosage for cough suppressant syrup", "Cough Suppressant Syrup (Dextromethorphan)"),
+            ("what's in cold and flu multi-symptom relief", "Cold & Flu Multi-Symptom Relief"),
+        ]:
+            assert retrieval._identify_single_product(query) == title, query
+
+    def test_extra_strength_still_narrows_even_though_paracetamol_is_shared(self):
+        # "paracetamol" is in four products' ingredients, but "extra strength"
+        # singles one out, and the target itself contains paracetamol.
+        assert (
+            retrieval._identify_single_product("how much extra strength paracetamol can I take")
+            == "Paracetamol Extra Strength 650mg"
+        )
+
+
+class TestIngredientOwners:
+    def test_maps_each_ingredient_word_to_every_product_containing_it(self):
+        owners = retrieval._ingredient_owners()
+        assert owners["dextromethorphan"] == {"Cough Suppressant Syrup (Dextromethorphan)", "Children's Cold & Cough Syrup"}
+        assert owners["ibuprofen"] == {"Ibuprofen 200mg Tablets"}
+        assert len(owners["paracetamol"]) == 4
+
+    def test_short_words_and_the_plus_separator_are_ignored(self):
+        assert all(len(word) >= 5 for word in retrieval._ingredient_owners())
+
+
 class TestLoadCollection:
     """_load_collection is the self-invalidating cache in front of the RAG
     index — the actual correctness question here is "does it rebuild

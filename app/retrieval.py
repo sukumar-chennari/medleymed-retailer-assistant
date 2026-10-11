@@ -5,6 +5,7 @@ data_ingest.py for how it's built).
 
 import json
 import re
+from pathlib import Path
 
 import chromadb
 import ollama
@@ -86,6 +87,38 @@ def _title_mentioned(query_lower: str, title: str) -> bool:
     return bool(_distinctive_words.get(title, set()) & query_words)
 
 
+# Words that happen to appear in exactly one product title but are ordinary
+# English in a query, so they must not by themselves pick a product: "what
+# pain relief is there for fever" is not a question about "Cold & Flu
+# Multi-Symptom Relief". Kept to the one word actually observed misfiring —
+# "extra"/"strength" are deliberately NOT here, they are how "extra strength
+# paracetamol" finds Paracetamol Extra Strength 650mg.
+_GENERIC_ANCHOR_WORDS = {"relief"}
+
+# A question about a child must not be narrowed to an adult-only product.
+_CHILD_QUERY_RE = re.compile(
+    r"\b(?:child|children|kid|kids|baby|babies|infant|toddler|toddlers|pediatric|paediatric"
+    r"|\d+[- ]?(?:year|yr|month)s?[- ]?old)\b"
+)
+
+
+def _ingredient_owners() -> dict[str, set[str]]:
+    """Each 5+ letter word of every product's active_ingredient -> the set of
+    product titles containing it. Titles alone don't capture ingredients:
+    "Children's Cold & Cough Syrup" contains dextromethorphan but its title
+    never says so, while "Cough Suppressant Syrup (Dextromethorphan)" does."""
+    catalog = json.loads((Path(__file__).parent / "data" / "catalog.json").read_text())
+    owners: dict[str, set[str]] = {}
+    for product in catalog:
+        for word in TITLE_WORD_RE.findall(product["active_ingredient"].lower()):
+            if len(word) >= 5:
+                owners.setdefault(word, set()).add(product["name"])
+    return owners
+
+
+_ingredient_owners_by_word = _ingredient_owners()
+
+
 def _identify_single_product(query_lower: str) -> str | None:
     """Returns the one product title the query names, if a distinctive
     word identifies exactly one — used to filter results down to that
@@ -99,8 +132,39 @@ def _identify_single_product(query_lower: str) -> str | None:
     candidate set itself removes the chance for that regardless of
     whether the model would have honored the instruction that turn."""
     query_words = set(TITLE_WORD_RE.findall(query_lower))
-    matched_titles = {title for title, words in _distinctive_words.items() if words & query_words}
-    return next(iter(matched_titles)) if len(matched_titles) == 1 else None
+    matched_titles = {
+        title for title, words in _distinctive_words.items() if (words - _GENERIC_ANCHOR_WORDS) & query_words
+    }
+    if len(matched_titles) != 1:
+        return None
+    target = next(iter(matched_titles))
+
+    # Real bug: narrowing to the ONE product a distinctive title word names
+    # silently discarded every other product the query also pointed at.
+    # "paracetamol vs ibuprofen which is better for fever" returned only
+    # ibuprofen; "dextromethorphan dosage for children" returned only the
+    # ADULT cough syrup's dosage, because only its title says dextromethorphan
+    # while the children's syrup contains it too. Two ways the query can be
+    # about more than the target:
+    #  (a) it names an ingredient the target does NOT contain (another product
+    #      is in play — "paracetamol" in a question matched to ibuprofen);
+    #  (b) the only thing that matched the target is an ingredient other
+    #      products share, so nothing singles THIS one out ("dextromethorphan"
+    #      alone). A distinctive non-ingredient word ("extra strength") still
+    #      narrows even when the query also says "paracetamol".
+    for word in query_words:
+        owners = _ingredient_owners_by_word.get(word)
+        if owners and target not in owners:
+            return None
+    anchors = (_distinctive_words[target] - _GENERIC_ANCHOR_WORDS) & query_words
+    if all(len(_ingredient_owners_by_word.get(word, ())) > 1 for word in anchors):
+        return None
+
+    # Same principle for age: never narrow a question about a child down to an
+    # adult-only product's chunks.
+    if _CHILD_QUERY_RE.search(query_lower) and "children" not in target.lower():
+        return None
+    return target
 
 
 def _load_collection():
