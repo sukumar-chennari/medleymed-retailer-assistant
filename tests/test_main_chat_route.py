@@ -206,3 +206,79 @@ class TestYesAfterAnInformationalAnswer:
         reply = _chat("s1", "yes")
         assert "shipping address" in reply.lower()
         assert store.get_pending_order("s1") == {"product_id": "fev-001", "quantity": 1}
+
+
+class TestPlainReorderIsDeterministic:
+    """Real bug: "reorder that" was left to the model, which in 3 of ~8 live
+    conversation_eval.py runs skipped its reorder_last tool call (inventing a
+    receipt, or replying generically) so no address confirmation was ever set
+    up. A plain request is now handled in code. run_turn is stubbed to RAISE,
+    proving the model is never reached for these."""
+
+    def _seed_one_order(self, session_id="s1"):
+        store.save_address("demo_user", "123 First Rd")
+        return store.create_order(user_id="demo_user", product_id="col-004", address="123 First Rd")
+
+    def _model_must_not_run(self, monkeypatch):
+        def boom(*args, **kwargs):
+            raise AssertionError("the model must not be reached for a plain reorder request")
+
+        monkeypatch.setattr(main, "run_turn", boom)
+
+    def test_a_plain_request_sets_up_the_address_confirmation(self, monkeypatch):
+        self._seed_one_order()
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", "reorder that for me")
+        assert "address on file" in reply.lower() and "123 First Rd" in reply
+        assert store.get_pending_address_confirmation("s1") == {"product_id": "col-004", "quantity": 1}
+        assert len(store.list_orders("demo_user")) == 1  # nothing placed yet
+
+    def test_it_works_with_an_email_confirmation_still_pending(self, monkeypatch):
+        # THE scenario that flaked: an order was just placed with no email on
+        # file, so pending_email is set, which used to route this to the model.
+        order = self._seed_one_order()
+        store.set_pending_email("s1", order["order_id"])
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", "can you order that again")
+        assert "address on file" in reply.lower()
+        assert store.get_pending_address_confirmation("s1") is not None
+        assert store.get_pending_email("s1") == order["order_id"]  # still there
+
+    def test_a_cancelled_last_order_can_be_reordered(self, monkeypatch):
+        order = self._seed_one_order()
+        store.cancel_order(order["order_id"], "demo_user")
+        self._model_must_not_run(monkeypatch)
+        _chat("s1", "reorder that")
+        assert store.get_pending_address_confirmation("s1") == {"product_id": "col-004", "quantity": 1}
+
+    def test_with_no_previous_order_it_says_so_instead_of_inventing_one(self, monkeypatch):
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", "reorder that")
+        assert "No previous orders" in reply
+        assert store.get_pending_address_confirmation("s1") is None
+
+    def test_a_follow_up_rejecting_the_address_now_asks_for_a_new_one(self, monkeypatch):
+        # The turn that fell through to the model when the reorder flaked.
+        self._seed_one_order()
+        self._model_must_not_run(monkeypatch)
+        _chat("s1", "reorder that")
+        reply = _chat("s1", "no, i will give a different one")
+        assert "new shipping address" in reply.lower()
+
+    def test_anything_beyond_a_plain_request_is_still_left_to_the_model(self, monkeypatch):
+        self._seed_one_order()
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        for text in [
+            "reorder that, 2 of them", "reorder another", "reorder it twice", "reorder fev-001",
+            "don't reorder that", "reorder that and email me at a@b.com",
+            "I would like to reorder that same medicine for my whole extended family tomorrow",
+        ]:
+            assert _chat("s1", text) == "from the model", text
+            assert store.get_pending_address_confirmation("s1") is None, text
+
+    def test_a_pending_address_confirmation_is_not_hijacked(self, monkeypatch):
+        self._seed_one_order()
+        store.set_pending_address_confirmation("s1", "fev-001", 1)
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        assert _chat("s1", "reorder that") == "from the model"
+        assert store.get_pending_address_confirmation("s1") == {"product_id": "fev-001", "quantity": 1}

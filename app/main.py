@@ -7,7 +7,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 
 from app import guardrails, store, tools
-from app.agent import resolve_clarification, run_turn
+from app.agent import _has_reorder_intent, resolve_clarification, run_turn
 from app.schemas import ChatRequest, ChatResponse, FeedbackRequest
 
 logger = logging.getLogger("medicine_assistant")
@@ -401,6 +401,33 @@ def _looks_like_order_cancellation(text: str) -> bool:
     return "cancel" in words and "order" in words
 
 
+# A plain "reorder that" must be handled in code, not left to the model.
+# Real bug, seen in 3 of ~8 live conversation_eval.py runs: the model skipped
+# its reorder_last tool call and either invented a receipt for an order that
+# never existed (now caught by the "order id:" guard) or fell back to a
+# generic reply — so no address confirmation was ever set up, and the next
+# message ("no, I'll give a different one") fell through to the model too.
+# Same "don't trust the model with a state change" treatment as a bare
+# "yes" or a numbered selection. Deliberately only the PLAIN request: any
+# quantity ("2 of them", "another", "twice"), product id, email, or a long
+# message is left to the model, which can use reorder_last's quantity
+# argument.
+_QUANTITY_WORDS_RE = re.compile(
+    r"\b(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|twice|double|couple|pair|another|more|extra)\b",
+    re.IGNORECASE,
+)
+MAX_REORDER_REQUEST_WORDS = 8
+
+
+def _is_plain_reorder_request(text: str) -> bool:
+    words = re.findall(r"[a-z']+", text.lower())
+    if not words or len(words) > MAX_REORDER_REQUEST_WORDS:
+        return False
+    if "@" in text or guardrails.PRODUCT_ID_RE.search(text) or _QUANTITY_WORDS_RE.search(text):
+        return False
+    return _has_reorder_intent(text)
+
+
 def _reply_for_start_order_result(order: dict) -> str:
     if "error" in order:
         return f"Sorry, {order['error']}"
@@ -516,6 +543,16 @@ def chat(req: ChatRequest):
                 image_b64=req.image_b64,
                 image_media_type=req.image_media_type,
             )
+        elif text and not pending_product_id and _is_plain_reorder_request(text):
+            # Placed before the pending-email branches on purpose: the usual
+            # moment to say "reorder that" is right after an order was placed
+            # with no email on file yet, i.e. with pending_email set, which
+            # used to send this message to the model. pending_email stays set
+            # (the customer can still give an email), same as before.
+            order = json.loads(tools.reorder_last(req.session_id))
+            reply = _reply_for_start_order_result(order)
+            messages.append({"role": "user", "content": text})
+            messages.append({"role": "assistant", "content": reply})
         elif pending_email_order_id and text and _looks_like_an_email(text):
             store.clear_pending_email(req.session_id)
             email_in_text, _ = _extract_email(text)
