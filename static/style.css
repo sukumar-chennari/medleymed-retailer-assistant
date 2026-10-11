@@ -80,7 +80,7 @@ body {
 
 .reset-demo-button {
   font-size: 0.78rem;
-  color: #888;
+  color: #6b6b6b;
   background: transparent;
   border: 1px solid #d8dce1;
   border-radius: 6px;
@@ -157,7 +157,7 @@ body {
 
 .stat-label {
   font-size: 0.78rem;
-  color: #777;
+  color: #707070;
   text-transform: uppercase;
   letter-spacing: 0.03em;
 }
@@ -178,7 +178,7 @@ body {
 
 .guardrail-log-empty {
   padding: 12px 0;
-  color: #888;
+  color: #6b6b6b;
   font-size: 0.9rem;
 }
 
@@ -210,7 +210,7 @@ body {
 }
 
 .guardrail-log-time {
-  color: #999;
+  color: #6b6b6b;
   white-space: nowrap;
   font-size: 0.8rem;
 }
@@ -239,7 +239,7 @@ body {
 }
 
 .catalog-empty {
-  color: #888;
+  color: #6e6e6e;
   font-size: 0.9rem;
   grid-column: 1 / -1;
 }
@@ -279,7 +279,7 @@ body {
 
 .category-pill.fever {
   background: #ffe9e6;
-  color: #c2410c;
+  color: #b93c0b;
 }
 
 .category-pill.cold {
@@ -350,7 +350,7 @@ body {
 }
 
 .order-item.order-cancelled {
-  color: #999;
+  color: #767676;
   text-decoration: line-through;
 }
 
