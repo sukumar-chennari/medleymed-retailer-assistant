@@ -151,6 +151,29 @@ class TestIdentifySingleProductDoesNotOverNarrow:
         )
 
 
+class TestBestMatchingTitle:
+    """Real bug: the section boost (Dosage chunk for a dosage question) needed
+    a distinctive title word, which fev-001, fev-004 and col-006 don't have, so
+    for them it could never fire. This is how such a product is recognized
+    instead. Real catalog, like the rest of this file."""
+
+    def test_a_pediatric_product_is_recognized_by_name(self):
+        assert retrieval._best_matching_title("children's paracetamol dosing") == "Children's Paracetamol Syrup"
+        assert retrieval._best_matching_title("children's cold and cough syrup dosage") == "Children's Cold & Cough Syrup"
+
+    def test_a_child_question_maps_to_the_pediatric_product_even_without_the_word_children(self):
+        assert retrieval._best_matching_title("how much paracetamol can I give my child") == "Children's Paracetamol Syrup"
+        assert retrieval._best_matching_title("paracetamol syrup dosage for my 5 year old") == "Children's Paracetamol Syrup"
+
+    def test_it_needs_a_unique_winner_with_at_least_two_matching_words(self):
+        assert retrieval._best_matching_title("paracetamol dosage") is None  # four products tie on one word
+        assert retrieval._best_matching_title("dosage") is None
+        assert retrieval._best_matching_title("what is the weather today") is None
+
+    def test_an_adult_query_does_not_pick_a_pediatric_product(self):
+        assert "Children" not in (retrieval._best_matching_title("dosage for cough suppressant syrup") or "")
+
+
 class TestIngredientOwners:
     def test_maps_each_ingredient_word_to_every_product_containing_it(self):
         owners = retrieval._ingredient_owners()

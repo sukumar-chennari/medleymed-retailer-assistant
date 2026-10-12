@@ -143,3 +143,34 @@ class TestSearchDoesNotOverNarrow:
     def test_a_query_naming_one_product_is_still_narrowed_to_it(self):
         results = retrieval.search("can I take ibuprofen for a fever")
         assert results and {r["product"] for r in results} == {"Ibuprofen 200mg Tablets"}
+
+
+class TestSearchSectionBoostForProductsWithoutADistinctiveTitleWord:
+    """Real bug: the section boost only fired for products with a title word
+    unique to them, which fev-001, fev-004 and col-006 lack — so for them the
+    asked-for section was never boosted and ANOTHER product's chunk won."""
+
+    def test_a_childs_paracetamol_question_gets_the_childrens_own_dosage_not_the_adult_one(self):
+        # It used to return the children's syrup Overview plus the ADULT
+        # Extra Strength product's Dosage, and never the children's Dosage.
+        for query in ["children's paracetamol dosing", "how much paracetamol can I give my child"]:
+            results = retrieval.search(query)
+            assert results[0]["product"] == "Children's Paracetamol Syrup", query
+            assert results[0]["section"] == "Dosage", query
+            assert not any(r["product"] == "Paracetamol Extra Strength 650mg" for r in results), query
+
+    def test_the_childrens_cold_syrup_question_gets_its_own_dosage_not_the_paracetamol_syrups(self):
+        # It used to return col-006's Overview plus fev-004's (paracetamol
+        # syrup) Dosage — a different medicine's dosing.
+        for query in ["children's cold and cough syrup dosage", "dosing for children's cold and cough syrup"]:
+            results = retrieval.search(query)
+            assert results[0]["product"] == "Children's Cold & Cough Syrup", query
+            assert results[0]["section"] == "Dosage", query
+            assert not any(r["product"] == "Children's Paracetamol Syrup" for r in results), query
+
+    def test_the_500mg_dosage_question_includes_the_dosage_section_either_word_order(self):
+        # "paracetamol 500mg dosage" returned only Overview + Side Effects.
+        for query in ["paracetamol 500mg dosage", "dosage for paracetamol 500mg"]:
+            results = retrieval.search(query)
+            assert results[0]["product"] == "Paracetamol 500mg Tablets", query
+            assert results[0]["section"] == "Dosage", query

@@ -119,6 +119,33 @@ def _ingredient_owners() -> dict[str, set[str]]:
 _ingredient_owners_by_word = _ingredient_owners()
 
 
+def _title_words_by_title(collection) -> dict[str, set[str]]:
+    """Every 5+ letter word of each product title (NOT just the distinctive
+    ones), for _best_matching_title's overlap count."""
+    titles = {m["title"] for m in collection.get()["metadatas"]}
+    return {title: {w for w in TITLE_WORD_RE.findall(title.lower()) if len(w) >= 5} for title in titles}
+
+
+def _best_matching_title(query_lower: str) -> str | None:
+    """The product whose title overlaps the query MOST, if that is a unique
+    winner with at least two matching words — for products that have no
+    distinctive title word of their own (fev-001 "Paracetamol 500mg Tablets",
+    fev-004 "Children's Paracetamol Syrup", col-006 "Children's Cold & Cough
+    Syrup"), which _title_mentioned can therefore never recognize. A question
+    about a child counts toward the pediatric products ("children" in the
+    title) even when it says "child"/"kid"/"5 year old", since that is the
+    whole way the query names them."""
+    query_words = set(TITLE_WORD_RE.findall(query_lower))
+    child_query = bool(_CHILD_QUERY_RE.search(query_lower)) and "children" not in query_words
+    scores = {
+        title: len(words & query_words) + (1 if child_query and "children" in title.lower() else 0)
+        for title, words in _title_words.items()
+    }
+    best = max(scores.values(), default=0)
+    winners = [title for title, score in scores.items() if score == best]
+    return winners[0] if best >= 2 and len(winners) == 1 else None
+
+
 def _identify_single_product(query_lower: str) -> str | None:
     """Returns the one product title the query names, if a distinctive
     word identifies exactly one — used to filter results down to that
@@ -192,6 +219,7 @@ def _load_collection():
 
 _collection = _load_collection()
 _distinctive_words = _distinctive_words_by_title(_collection)
+_title_words = _title_words_by_title(_collection)
 
 
 def search(query: str, top_k: int = 3) -> list[dict]:
@@ -240,13 +268,26 @@ def search(query: str, top_k: int = 3) -> list[dict]:
     fetch_n = min(30, _collection.count())
     result = _collection.query(query_embeddings=[query_vector], n_results=fetch_n)
 
+    best_title = _best_matching_title(query_lower)
     scored = []
     for doc, meta, distance in zip(result["documents"][0], result["metadatas"][0], result["distances"][0]):
         score = 1 - distance  # collection is cosine-space: distance = 1 - cosine_similarity
         if query_strengths and query_strengths & _mg_strengths(meta["title"]):
             score = min(score + STRENGTH_BOOST, 1.0)
         section_keywords = SECTION_KEYWORDS.get(meta["section"], ())
-        if any(kw in query_lower for kw in section_keywords) and _title_mentioned(query_lower, meta["title"]):
+        # Real bug: this used to require _title_mentioned alone, which is never
+        # true for a product with no distinctive title word, so for fev-001/
+        # fev-004/col-006 the asked-for section was never boosted and ANOTHER
+        # product's chunk won: "children's paracetamol dosing" returned the
+        # children's syrup Overview plus the ADULT 650mg product's Dosage;
+        # "children's cold and cough syrup dosage" returned the paracetamol
+        # syrup's Dosage; "paracetamol 500mg dosage" returned no Dosage at all.
+        product_named = (
+            _title_mentioned(query_lower, meta["title"])
+            or bool(query_strengths and query_strengths & _mg_strengths(meta["title"]))
+            or meta["title"] == best_title
+        )
+        if any(kw in query_lower for kw in section_keywords) and product_named:
             score = min(score + SECTION_BOOST, 1.0)
         scored.append({"product": meta["title"], "source": meta["source"], "section": meta["section"], "text": doc, "score": score})
 
