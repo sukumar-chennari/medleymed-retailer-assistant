@@ -53,19 +53,38 @@ def chunk_document(filename: str, text: str) -> list[dict]:
     title_match = re.match(r"#\s+(.+)", text.strip())
     doc_title = title_match.group(1).strip() if title_match else filename
 
-    sections = re.split(r"\n(?=## )", text)
+    # Real bug: this used to split only on "\n## " and silently DROP anything
+    # that didn't start with exactly "## ": a section written "##Dosage" (no
+    # space) vanished from the index entirely, text before the first "##"
+    # heading was discarded, and a file with no "##" headings produced zero
+    # chunks — all without a single error, so one typo in a knowledge-base
+    # edit would silently delete a medicine's dosage from the assistant. Now a
+    # heading is "##" not followed by another "#" (so "###" sub-headings stay
+    # inside their section), the space is optional, and leading text becomes
+    # an "Introduction" chunk instead of disappearing.
+    sections = re.split(r"\n(?=##(?!#))", text)
     chunks = []
     for section in sections:
         section = section.strip()
-        if not section or not section.startswith("##"):
+        if not section:
             continue
-        header_match = re.match(r"##\s+(.+)", section)
-        section_title = header_match.group(1).strip() if header_match else "Overview"
+        if re.match(r"##(?!#)", section):
+            header_match = re.match(r"##\s*(.+)", section)
+            section_title = header_match.group(1).strip() if header_match else "Overview"
+            chunk_text = section
+        else:
+            # Text before the first heading. The "# Title" line itself is not
+            # content (the title is carried in each chunk's metadata).
+            body = re.sub(r"^#\s+.+\n?", "", section, count=1).strip() if title_match else section
+            if not body:
+                continue
+            section_title = "Introduction"
+            chunk_text = f"## Introduction\n{body}"
         chunks.append({
             "source": filename,
             "title": doc_title,
             "section": section_title,
-            "text": section,
+            "text": chunk_text,
         })
     return chunks
 

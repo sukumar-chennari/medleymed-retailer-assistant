@@ -99,6 +99,48 @@ class TestChunkDocument:
             assert sections == {"Overview", "Dosage", "Common Side Effects", "Warnings"}, filename
 
 
+class TestChunkDocumentIsLossless:
+    """Real bug: chunk_document silently DROPPED anything that didn't start
+    with exactly "## " — a section written "##Dosage" vanished from the index,
+    text before the first heading was discarded, and a file with no "##"
+    headings produced zero chunks, all without an error. One typo in a
+    knowledge-base edit would silently delete a medicine's dosage from the
+    assistant. (The 10 real files are fine; this guards future edits.)"""
+
+    def test_a_heading_without_a_space_is_kept(self):
+        chunks = data_ingest.chunk_document("x.md", "# T\n##Overview\nO text.\n## Dosage\nD text.\n")
+        assert [c["section"] for c in chunks] == ["Overview", "Dosage"]
+        assert any("O text." in c["text"] for c in chunks)
+
+    def test_text_before_the_first_heading_becomes_an_introduction_chunk(self):
+        chunks = data_ingest.chunk_document("x.md", "# T\nIntro paragraph that matters.\n\n## Overview\nO text.\n")
+        assert [c["section"] for c in chunks] == ["Introduction", "Overview"]
+        assert "Intro paragraph that matters." in chunks[0]["text"]
+        assert not any(c["text"].startswith("# T") for c in chunks)  # the title line is not content
+
+    def test_a_file_with_no_section_headings_is_kept_not_dropped(self):
+        chunks = data_ingest.chunk_document("x.md", "# T\nJust a paragraph with real dosing info.\n")
+        assert [c["section"] for c in chunks] == ["Introduction"]
+        assert "real dosing info" in chunks[0]["text"]
+
+    def test_a_file_with_no_title_and_no_headings_is_kept_too(self):
+        chunks = data_ingest.chunk_document("plain.md", "plain text only\n")
+        assert [c["section"] for c in chunks] == ["Introduction"]
+        assert chunks[0]["title"] == "plain.md"
+
+    def test_a_triple_hash_subheading_stays_inside_its_section(self):
+        chunks = data_ingest.chunk_document("x.md", "# T\n## Dosage\nAdults:\n### Children\nask a doctor\n")
+        assert [c["section"] for c in chunks] == ["Dosage"]
+        assert "### Children" in chunks[0]["text"] and "ask a doctor" in chunks[0]["text"]
+
+    def test_a_title_only_file_has_nothing_to_keep(self):
+        assert data_ingest.chunk_document("x.md", "# Only A Title\n") == []
+
+    def test_the_standard_layout_is_unchanged(self):
+        chunks = data_ingest.chunk_document("sample.md", SAMPLE_DOC)
+        assert [c["section"] for c in chunks] == ["Overview", "Dosage", "Common Side Effects", "Warnings"]
+
+
 class TestBuildIndex:
     def test_builds_a_real_index_with_a_mocked_embedding_model(self, tmp_path, monkeypatch):
         monkeypatch.setattr(data_ingest, "CHROMA_DIR", tmp_path / "chroma_db")
