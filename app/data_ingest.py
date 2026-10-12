@@ -27,7 +27,7 @@ _client = ollama.Client(host=config.OLLAMA_HOST)
 def load_documents() -> list[tuple[str, str]]:
     """Returns [(filename, full_text), ...] for every .md file in the
     knowledge base, sorted for a deterministic ingestion order."""
-    return [(path.name, path.read_text()) for path in sorted(KB_DIR.glob("*.md"))]
+    return [(path.name, path.read_text(encoding="utf-8")) for path in sorted(KB_DIR.glob("*.md"))]
 
 
 def compute_content_hash() -> str:
@@ -122,7 +122,7 @@ def build_index() -> list[dict]:
     META_PATH.write_text(json.dumps({
         "content_hash": compute_content_hash(),
         "embed_model": config.EMBED_MODEL,
-    }))
+    }), encoding="utf-8")
     return all_chunks
 
 

@@ -7,7 +7,7 @@ from typing import Optional
 DATA_DIR = Path(__file__).parent / "data"
 DB_PATH = DATA_DIR / "app.db"
 
-_catalog: list[dict] = json.loads((DATA_DIR / "catalog.json").read_text())
+_catalog: list[dict] = json.loads((DATA_DIR / "catalog.json").read_text(encoding="utf-8"))
 _catalog_by_id: dict[str, dict] = {p["id"]: p for p in _catalog}
 _catalog_by_id_normalized: dict[str, dict] = {p["id"].strip().lower(): p for p in _catalog}
 
@@ -93,7 +93,7 @@ def _init_db() -> None:
         # already non-empty, so a previously saved address/email survives a
         # restart instead of resetting to the demo_user.json defaults.
         if conn.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
-            demo_user = json.loads((DATA_DIR / "demo_user.json").read_text())
+            demo_user = json.loads((DATA_DIR / "demo_user.json").read_text(encoding="utf-8"))
             conn.execute(
                 "INSERT INTO users (user_id, name, address, email) VALUES (?, ?, ?, ?)",
                 (demo_user["user_id"], demo_user.get("name"), demo_user.get("address"), demo_user.get("email")),
@@ -430,7 +430,7 @@ def reset_demo_data() -> None:
     previous audience would otherwise carry over and confuse a fresh
     walkthrough — without needing to restart the server or touch the
     database file by hand."""
-    demo_user = json.loads((DATA_DIR / "demo_user.json").read_text())
+    demo_user = json.loads((DATA_DIR / "demo_user.json").read_text(encoding="utf-8"))
     with _connect() as conn:
         conn.execute("DELETE FROM orders")
         conn.execute("DELETE FROM session_state")

@@ -107,7 +107,7 @@ def _ingredient_owners() -> dict[str, set[str]]:
     product titles containing it. Titles alone don't capture ingredients:
     "Children's Cold & Cough Syrup" contains dextromethorphan but its title
     never says so, while "Cough Suppressant Syrup (Dextromethorphan)" does."""
-    catalog = json.loads((Path(__file__).parent / "data" / "catalog.json").read_text())
+    catalog = json.loads((Path(__file__).parent / "data" / "catalog.json").read_text(encoding="utf-8"))
     owners: dict[str, set[str]] = {}
     for product in catalog:
         for word in TITLE_WORD_RE.findall(product["active_ingredient"].lower()):
@@ -202,7 +202,7 @@ def _load_collection():
     and restarting the app picks up the change automatically instead of
     silently serving outdated embeddings."""
     if data_ingest.META_PATH.exists():
-        meta = json.loads(data_ingest.META_PATH.read_text())
+        meta = json.loads(data_ingest.META_PATH.read_text(encoding="utf-8"))
         if meta.get("content_hash") == data_ingest.compute_content_hash():
             client = chromadb.PersistentClient(path=str(data_ingest.CHROMA_DIR))
             try:

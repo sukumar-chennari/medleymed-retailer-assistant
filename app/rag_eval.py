@@ -393,7 +393,7 @@ def build_html_report(evaluated: list[dict], include_agent: bool) -> None:
 </body>
 </html>"""
 
-    REPORT_PATH.write_text(html_doc)
+    REPORT_PATH.write_text(html_doc, encoding="utf-8")
 
 
 if __name__ == "__main__":
