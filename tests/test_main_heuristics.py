@@ -14,6 +14,8 @@ No LLM or database needed — every function tested here is pure text
 matching.
 """
 
+import pytest
+
 from app import main
 
 
@@ -128,6 +130,29 @@ class TestIsBareEmail:
 
     def test_no_email_is_not_bare(self):
         assert not main._is_bare_email("123 Main St")
+
+
+class TestProductNamesAreNeverAddresses:
+    """Real bug: a product name's digits ("200mg") and length passed the
+    "digit and 8+ chars" address test, so with an order awaiting its address
+    "I'd like to order Ibuprofen 200mg Tablets" was saved as the shipping
+    address and the first product shipped to that sentence."""
+
+    @pytest.mark.parametrize("text", [
+        "Ibuprofen 200mg Tablets", "I'd like to order Ibuprofen 200mg Tablets",
+        "I want Cetirizine 10mg", "paracetamol 500mg please", "Children\u2019s Paracetamol Syrup",
+        "Cold & Flu Multi-Symptom Relief", "col-004",
+    ])
+    def test_a_product_reference_is_not_an_address(self, text):
+        assert main._looks_like_an_address(text) is False
+        assert main._looks_like_a_first_time_address(text) is False
+
+    @pytest.mark.parametrize("text", [
+        "123 Main Street, Hyderabad", "Flat 4, 10 Paracetamol Lane", "Order Street 5, Mumbai",
+        "Plot 9, Cold Storage Road", "hyderabad",
+    ])
+    def test_real_addresses_that_share_words_with_products_still_pass(self, text):
+        assert main._looks_like_a_first_time_address(text) is True
 
 
 class TestLooksLikeAFirstTimeAddress:

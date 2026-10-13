@@ -152,6 +152,27 @@ def _is_filler_only(text: str) -> bool:
     return bool(_ADDRESS_FILLER_ONLY_RE.match(text))
 
 
+_DRUG_WITH_STRENGTH_RE = re.compile(r"^[a-z]+ \d+\s?mg\b")
+
+
+def _names_a_catalog_product(text: str) -> bool:
+    """True when the text contains a catalog product's name, or its drug name
+    with the strength ("ibuprofen 200mg"). Such text is a product reference,
+    never a shipping address — but the name's digits ("200mg") and length
+    used to be enough for _looks_like_an_address to accept it, so a pending
+    order took "I'd like to order Ibuprofen 200mg Tablets" as the address
+    and shipped the FIRST product to that sentence."""
+    normalized = " ".join(text.lower().replace("\u2019", "'").split())
+    for product in store.get_catalog():
+        name = product["name"].lower()
+        if name in normalized:
+            return True
+        short = _DRUG_WITH_STRENGTH_RE.match(name)
+        if short and short.group(0) in normalized:
+            return True
+    return False
+
+
 def _looks_like_an_address(text: str) -> bool:
     """A pending order treats the user's next message as their shipping address —
     but only if it plausibly is one. Without this, a reply like "thank you" or
@@ -160,6 +181,8 @@ def _looks_like_an_address(text: str) -> bool:
     a message like "order col-001" has a digit and is long enough to pass the
     basic check, but is clearly a product reference, not an address."""
     if guardrails.PRODUCT_ID_RE.search(text):
+        return False
+    if _names_a_catalog_product(text):
         return False
     if _is_bare_email(text):
         return False
@@ -187,6 +210,8 @@ def _looks_like_a_first_time_address(text: str) -> bool:
     if _looks_like_an_address(text):
         return True
     if guardrails.PRODUCT_ID_RE.search(text):
+        return False
+    if _names_a_catalog_product(text):
         return False
     if _is_bare_email(text):
         return False

@@ -340,3 +340,18 @@ class TestNamedProductOrder:
         assert "address" in reply.lower()
         assert store.get_pending_order("s1")["product_id"] == "fev-003"
         assert store.list_orders("demo_user") == []  # nothing was placed
+
+
+class TestProductNameIsNotTakenAsAnAddress:
+    def test_a_product_phrase_with_an_order_waiting_never_becomes_the_address(self, monkeypatch):
+        store.set_pending_order("s1", "fev-001", 1)
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        for text in ["Ibuprofen 200mg Tablets", "I want Cetirizine 10mg", "paracetamol 500mg please"]:
+            assert _chat("s1", text) == "from the model", text
+            assert store.list_orders("demo_user") == [], text
+            assert store.get_pending_order("s1")["product_id"] == "fev-001", text
+
+    def test_a_real_address_still_completes_the_order(self, monkeypatch):
+        store.set_pending_order("s1", "fev-001", 1)
+        reply = _chat("s1", "Flat 4, 10 Paracetamol Lane")
+        assert "Order confirmed!" in reply and "Flat 4, 10 Paracetamol Lane" in reply
