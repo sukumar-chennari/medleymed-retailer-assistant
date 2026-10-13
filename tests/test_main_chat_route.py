@@ -282,3 +282,61 @@ class TestPlainReorderIsDeterministic:
         monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
         assert _chat("s1", "reorder that") == "from the model"
         assert store.get_pending_address_confirmation("s1") == {"product_id": "fev-001", "quantity": 1}
+
+
+class TestNamedProductOrder:
+    """The dashboard's "Ask Assistant" button sends "I'd like to order <name>".
+    That used to reach the model, which asked an age/dry-or-wet clarification
+    or claimed the product wasn't in the catalog: 0 of 10 catalog products
+    started an order. A message that clearly orders exactly one named
+    product now starts the order deterministically."""
+
+    @staticmethod
+    def _model_must_not_run(monkeypatch):
+        def _boom(*args, **kwargs):
+            raise AssertionError("the model must not be reached for a plainly named order")
+
+        monkeypatch.setattr(main, "run_turn", _boom)
+
+    @pytest.mark.parametrize("product", store.get_catalog(), ids=lambda p: p["id"])
+    def test_the_ask_assistant_button_text_starts_that_products_order(self, monkeypatch, product):
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", f"I'd like to order {product['name']}")
+        assert "address" in reply.lower()
+        assert store.get_pending_order("s1")["product_id"] == product["id"]
+
+    def test_a_product_id_alone_is_enough_to_name_the_product(self, monkeypatch):
+        self._model_must_not_run(monkeypatch)
+        _chat("s1", "please order col-005")
+        assert store.get_pending_order("s1")["product_id"] == "col-005"
+
+    def test_it_works_with_an_email_confirmation_still_pending(self, monkeypatch):
+        store.set_pending_email("s1", "ord-previous")
+        self._model_must_not_run(monkeypatch)
+        _chat("s1", "I'd like to order Ibuprofen 200mg Tablets")
+        assert store.get_pending_order("s1")["product_id"] == "fev-003"
+        assert store.get_pending_email("s1") == "ord-previous"
+
+    def test_anything_beyond_a_plain_named_order_is_left_to_the_model(self, monkeypatch):
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        for text in [
+            "I'd like to order 2 Ibuprofen 200mg Tablets", "order Ibuprofen 200mg Tablets twice",
+            "don't order Ibuprofen 200mg Tablets", "dosage of Ibuprofen 200mg Tablets",
+            "what are the side effects of Ibuprofen 200mg Tablets before I order",
+            "I'd like to order Ibuprofen 200mg Tablets or Cetirizine 10mg Antihistamine Tablets",
+            "Ibuprofen 200mg Tablets", "order ibuprofen",
+            "order Ibuprofen 200mg Tablets and email me at a@b.com",
+            "I would really like to order Ibuprofen 200mg Tablets for the whole entire family please today",
+        ]:
+            assert _chat("s1", text) == "from the model", text
+            assert store.get_pending_order("s1") is None, text
+
+    def test_naming_another_product_while_one_awaits_its_address_switches_the_order(self, monkeypatch):
+        # Previously the whole sentence was saved as the shipping address
+        # and the FIRST product was ordered to it.
+        store.set_pending_order("s1", "fev-001", 1)
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", "I'd like to order Ibuprofen 200mg Tablets")
+        assert "address" in reply.lower()
+        assert store.get_pending_order("s1")["product_id"] == "fev-003"
+        assert store.list_orders("demo_user") == []  # nothing was placed

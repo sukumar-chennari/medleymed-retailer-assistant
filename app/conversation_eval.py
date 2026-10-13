@@ -290,6 +290,35 @@ CONVERSATION_CASES = [
         ],
     },
     {
+        "name": "ask_assistant_button_names_a_product",
+        # Fully deterministic. The dashboard's "Ask Assistant" button sends
+        # "I'd like to order <product name>"; on Oct 13 a probe found 0 of 10
+        # catalog products started an order from it (the model asked an
+        # age/dry-or-wet question or claimed the product wasn't stocked).
+        # Naming a different product while one awaits its address must also
+        # switch the order, not save the sentence as the shipping address.
+        "turns": [
+            {
+                "text": "I'd like to order Ibuprofen 200mg Tablets",
+                "checks": [("asks for a shipping address", lambda r: "address" in r.lower())],
+                "state_checks": [("no order placed yet", _order_count_is(0))],
+            },
+            {
+                "text": "I'd like to order Guaifenesin Expectorant Syrup",
+                "checks": [("asks for a shipping address again", lambda r: "address" in r.lower())],
+                "state_checks": [("the sentence was not taken as an address", _order_count_is(0))],
+            },
+            {
+                "text": "45 Test Road, Pune",
+                "checks": [
+                    ("orders the product named last", lambda r: "Order confirmed!" in r and "Guaifenesin" in r),
+                    ("ships to the address given", lambda r: "45 Test Road, Pune" in r),
+                ],
+                "state_checks": [("exactly one real order exists", _order_count_is(1))],
+            },
+        ],
+    },
+    {
         "name": "bare_numeric_selection_from_a_product_list",
         # Fully deterministic — proves main.py's _resolve_bare_selection
         # dispatch is actually wired correctly end-to-end through the real

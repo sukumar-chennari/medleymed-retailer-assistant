@@ -7,7 +7,14 @@ from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 
 from app import guardrails, store, tools
-from app.agent import _has_reorder_intent, resolve_clarification, run_turn
+from app.agent import (
+    INFO_QUESTION_RE,
+    ORDER_INTENT_RE,
+    _has_reorder_intent,
+    _has_unnegated_intent,
+    resolve_clarification,
+    run_turn,
+)
 from app.schemas import ChatRequest, ChatResponse, FeedbackRequest
 
 logger = logging.getLogger("medicine_assistant")
@@ -428,6 +435,54 @@ def _is_plain_reorder_request(text: str) -> bool:
     return _has_reorder_intent(text)
 
 
+# A message that clearly orders ONE specific catalog product by name — which is
+# exactly what the dashboard's "Ask Assistant" button sends ("I'd like to
+# order <product name>") — must start that order, not be put through the
+# symptom-clarification machinery. Real bug, found by sending that button's
+# text for all 10 catalog products through the real route: 0 of 10 started an
+# order. Most got "Is this fever for a child, or for an adult/yourself?" —
+# including "Children's Paracetamol Syrup" — and "Cough Suppressant Syrup"
+# got "is your cough dry or wet?"; after answering, the customer was told the
+# product they had already named "would be a good fit" and STILL hadn't been
+# asked for an address; and the model told one customer it "couldn't find
+# Guaifenesin Expectorant Syrup in our catalog". Handled in code, like a bare
+# numbered selection and a plain "reorder that". Only the clear case:
+# unnegated order intent, exactly one product named (by full name or id), not
+# an information question, and no quantity cue left once the name is removed
+# (the product names themselves contain numbers like "500mg") — anything else
+# is left to the model.
+_MAX_NAMED_ORDER_WORDS = 14
+
+
+def _resolve_named_product_order(text: str) -> dict | None:
+    words = re.findall(r"[a-z']+", text.lower())
+    if not words or len(words) > _MAX_NAMED_ORDER_WORDS or "@" in text:
+        return None
+    if words[0] in _QUESTION_WORDS or INFO_QUESTION_RE.search(text):
+        return None
+    if not _has_unnegated_intent(text, ORDER_INTENT_RE):
+        return None
+
+    normalized = " ".join(text.lower().replace("\u2019", "'").split())
+    named = {}
+    for product in store.get_catalog():
+        name = product["name"].lower()
+        if name in normalized:
+            named[product["id"]] = (product, name)
+    for product_id in {m.lower() for m in guardrails.PRODUCT_ID_RE.findall(text)}:
+        product = store.find_product(product_id)
+        if product:
+            named.setdefault(product["id"], (product, product["id"]))
+    if len(named) != 1:
+        return None
+    product, matched = next(iter(named.values()))
+
+    rest = normalized.replace(matched, " ")
+    if _QUANTITY_WORDS_RE.search(rest):
+        return None
+    return product
+
+
 def _reply_for_start_order_result(order: dict) -> str:
     if "error" in order:
         return f"Sorry, {order['error']}"
@@ -550,6 +605,14 @@ def chat(req: ChatRequest):
             # used to send this message to the model. pending_email stays set
             # (the customer can still give an email), same as before.
             order = json.loads(tools.reorder_last(req.session_id))
+            reply = _reply_for_start_order_result(order)
+            messages.append({"role": "user", "content": text})
+            messages.append({"role": "assistant", "content": reply})
+        elif text and (named_product := _resolve_named_product_order(text)):
+            # Next to the plain-reorder branch above, ahead of the pending-email
+            # branches, for the same reason: this is usually said right after an
+            # order was placed with no email on file yet (pending_email set).
+            order = json.loads(tools.start_order(named_product["id"], req.session_id))
             reply = _reply_for_start_order_result(order)
             messages.append({"role": "user", "content": text})
             messages.append({"role": "assistant", "content": reply})
