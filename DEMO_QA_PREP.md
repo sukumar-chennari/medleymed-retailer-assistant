@@ -539,9 +539,12 @@ for the one narrow task of "read text off a photo." Text conversation stays
 100% local; vision is the one deliberate exception, and it's still free.
 
 **Q: Is conversation history sent on every turn, or does the model only see the latest message?**
-A: Full history — every prior user/assistant/tool message in the session is
-sent alongside the system prompt on every call (`[{"role": "system", ...}] +
-messages`). That's what lets `symptom_lookup_grounded` reasoning ("a category
+A: Recent history — the session's messages are sent alongside the system
+prompt on every call (`[{"role": "system", ...}] + messages`), capped at the
+last 40 (`store.MAX_SESSION_MESSAGES`, trimmed in whole user/assistant pairs
+so the model never sees a reply without its question). Without the cap a long
+session eventually overflows the local model's context window and every turn
+slows down. That's what lets `symptom_lookup_grounded` reasoning ("a category
 was already established earlier this session") work, but it's also exactly
 the mechanism that made deterministic state machines necessary — the model
 re-reads the whole history each turn and doesn't reliably "remember" what it
@@ -856,10 +859,11 @@ implementation to Chroma, and again after this SECTION_BOOST fix.
 
 **Q: How do you evaluate the agent/conversation layer, as opposed to pure retrieval?**
 A: Two layers now, and the first one grew far more than originally
-planned. `pytest` (430 tests, runs in a few seconds, `.github/workflows/
-tests.yml` runs it on every push/PR) covers **98% of the whole app** by
-line — `guardrails.py`, `store.py`, `tools.py`, and `retrieval.py` are all
-at 100%; `main.py` and `agent.py` are at 98% and 96%. The last one is the
+planned. `pytest` (about 550 tests, runs in a few seconds, `.github/workflows/
+tests.yml` runs it on every push/PR) covers **99% of the app** by line —
+`guardrails.py`, `store.py`, `tools.py`, and `retrieval.py` are all at 100%;
+`main.py` and `agent.py` are at 99%. (Re-run `pytest --cov=app` before
+quoting exact numbers; they move with every commit.) The last one is the
 most interesting engineering story: `_GuardrailMiddleware` (every
 "blocked_X"/citation-append/leaked-tool-intent guard in the project),
 `run_turn`'s own deterministic short-circuits, and every `@tool` closure
@@ -907,16 +911,14 @@ garbage collector. Fixed by making `_connect()` a real
 `@contextlib.contextmanager`.
 
 **Q: If you had more time, what would you add to evaluation?**
-A: An automated conversation-level eval set for the parts pytest can't
-cover — a fixed list of multi-turn scripted transcripts (the same ones
-used for manual regression testing, formalized) asserting on structural
-reply properties robust to LLM nondeterminism (contains "order
-confirmed," doesn't contain a tool name, asks a specific clarifying
-question) rather than exact text, so the manual regression sweep becomes
-closer to a real automated suite. I'd also add retrieval evaluation
-beyond hit@k — e.g. mean reciprocal rank, to catch a *correct-but-lower-
-ranked* result becoming worse over time even while still technically
-appearing in the top-3.
+A: Two things. First, run `app/conversation_eval.py` in CI: it already exists
+(scripted multi-turn transcripts with assertions on structural reply
+properties and on real database state), but it needs the local Ollama model,
+so today it is a manual pre-release check, not an automatic gate. Running it
+in CI would need a model-serving runner or a recorded-model mode. Second,
+retrieval evaluation beyond hit@k — e.g. mean reciprocal rank, to catch a
+*correct-but-lower-ranked* result becoming worse over time even while still
+technically appearing in the top-3.
 
 **Q: How do you know the guardrails themselves work, versus just believing your own code comments?**
 A: Every guardrail fix in this project follows the same pattern: reproduce
