@@ -375,3 +375,43 @@ class TestProductNameIsNotTakenAsAnAddress:
         store.set_pending_order("s1", "fev-001", 1)
         reply = _chat("s1", "Flat 4, 10 Paracetamol Lane")
         assert "Order confirmed!" in reply and "Flat 4, 10 Paracetamol Lane" in reply
+
+
+class TestNamingAnOrderIsNotADecline:
+    """Real bug: with a pending email / address question, a short message
+    naming an existing order ("cancel ord-0002 please") matched the decline
+    words and was answered "the order's already confirmed without an email
+    receipt" — nothing was cancelled and the customer was told it was fine."""
+
+    def _model_reply(self, monkeypatch):
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+
+    @pytest.mark.parametrize("text", ["cancel ord-0001 please", "no, cancel ord-0001", "cancel ORD-0001"])
+    def test_pending_email(self, monkeypatch, text):
+        store.set_pending_email("s1", "ord-0001")
+        self._model_reply(monkeypatch)
+        assert _chat("s1", text) == "from the model"
+        assert store.get_pending_email("s1") == "ord-0001"
+
+    @pytest.mark.parametrize("text", ["cancel ord-0001 please", "no, cancel ord-0001"])
+    def test_pending_address_confirmation(self, monkeypatch, text):
+        store.set_pending_address_confirmation("s1", "fev-001", 1)
+        self._model_reply(monkeypatch)
+        assert _chat("s1", text) == "from the model"
+        assert store.get_pending_address_confirmation("s1") == {"product_id": "fev-001", "quantity": 1}
+
+    @pytest.mark.parametrize("text", ["cancel ord-0001 please", "no, cancel ord-0001"])
+    def test_pending_order_address(self, monkeypatch, text):
+        store.set_pending_order("s1", "fev-001", 1)
+        self._model_reply(monkeypatch)
+        assert _chat("s1", text) == "from the model"
+        assert store.get_pending_order("s1")["product_id"] == "fev-001"
+
+    def test_plain_declines_still_work_in_each_context(self, monkeypatch):
+        self._model_reply(monkeypatch)
+        store.set_pending_email("s1", "ord-0001")
+        assert "without an email receipt" in _chat("s1", "no thanks")
+        store.set_pending_address_confirmation("s2", "fev-001", 1)
+        assert "won't place that order" in _chat("s2", "cancel that")
+        store.set_pending_order("s3", "fev-001", 1)
+        assert "without a shipping address" in _chat("s3", "no thanks")

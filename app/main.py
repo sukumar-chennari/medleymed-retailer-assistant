@@ -182,7 +182,7 @@ def _looks_like_an_address(text: str) -> bool:
     basic check, but is clearly a product reference, not an address."""
     if guardrails.PRODUCT_ID_RE.search(text):
         return False
-    if _names_a_catalog_product(text):
+    if _names_a_catalog_product(text) or _names_an_order_id(text):
         return False
     if _is_bare_email(text):
         return False
@@ -211,7 +211,7 @@ def _looks_like_a_first_time_address(text: str) -> bool:
         return True
     if guardrails.PRODUCT_ID_RE.search(text):
         return False
-    if _names_a_catalog_product(text):
+    if _names_a_catalog_product(text) or _names_an_order_id(text):
         return False
     if _is_bare_email(text):
         return False
@@ -430,7 +430,21 @@ def _looks_like_order_cancellation(text: str) -> bool:
     conversation_eval.py: "please cancel my order" was silently swallowed
     as "no, skip the confirmation email" and the order was never touched."""
     words = set(re.findall(r"[a-z']+", text.lower()))
-    return "cancel" in words and "order" in words
+    return "cancel" in words and ("order" in words or _names_an_order_id(text))
+
+
+_ORDER_ID_IN_TEXT_RE = re.compile(r"\bord-\d+\b", re.IGNORECASE)
+
+
+def _names_an_order_id(text: str) -> bool:
+    """A message naming a specific order ("cancel ord-0002 please") is about
+    that order, never an answer to a pending email/address question. Real
+    bug: with an email prompt outstanding, that message matched the decline
+    words ("cancel") and got "the order's already confirmed without an email
+    receipt" — the order was not cancelled and the customer was told it was
+    fine. The same words are consumed by the two address-pending decline
+    branches, which also told the customer nothing was placed."""
+    return bool(_ORDER_ID_IN_TEXT_RE.search(text))
 
 
 # A plain "reorder that" must be handled in code, not left to the model.
@@ -621,7 +635,7 @@ def chat(req: ChatRequest):
             reply = _complete_pending_order(req.session_id, pending_address_confirmation, text)
             messages.append({"role": "user", "content": text})
             messages.append({"role": "assistant", "content": reply})
-        elif pending_address_confirmation and text and _wants_different_address(text):
+        elif pending_address_confirmation and text and _wants_different_address(text) and not _names_an_order_id(text):
             # They've signaled they want to give a new one but haven't
             # supplied it yet — ask specifically for it instead of repeating
             # the same compound question. pending_address_confirmation stays
@@ -630,7 +644,7 @@ def chat(req: ChatRequest):
             reply = "No problem — what's the new shipping address?"
             messages.append({"role": "user", "content": text})
             messages.append({"role": "assistant", "content": reply})
-        elif pending_address_confirmation and text and _declines(text):
+        elif pending_address_confirmation and text and _declines(text) and not _names_an_order_id(text):
             store.clear_pending_address_confirmation(req.session_id)
             reply = "No problem — I won't place that order. Let me know if you change your mind."
             messages.append({"role": "user", "content": text})
@@ -705,7 +719,7 @@ def chat(req: ChatRequest):
                 image_b64=req.image_b64,
                 image_media_type=req.image_media_type,
             )
-        elif pending_product_id and text and _declines(text):
+        elif pending_product_id and text and _declines(text) and not _names_an_order_id(text):
             store.clear_pending_order(req.session_id)
             reply = "No problem — I won't place that order without a shipping address. Let me know if you change your mind."
             messages.append({"role": "user", "content": text})
