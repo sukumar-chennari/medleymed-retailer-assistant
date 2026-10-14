@@ -369,6 +369,7 @@ class TestCheckOrderStatus:
         assert turn_state["real_order_placed"] is True
         assert turn_state["real_email_sent"] is True
         assert turn_state["real_address_saved"] is True
+        assert turn_state["order_status"] == [{"order_id": "ord-0001"}]
 
     def test_no_orders_does_not_ground_anything(self):
         turn_state = {}
@@ -376,6 +377,7 @@ class TestCheckOrderStatus:
         handler = _handler_returning(json.dumps({"orders": []}))
         mw.wrap_tool_call(_FakeRequest("check_order_status", {}), handler)
         assert "real_order_placed" not in turn_state
+        assert not turn_state.get("order_status")
 
     def test_non_json_handler_response_does_not_raise(self):
         turn_state = {}
@@ -462,6 +464,30 @@ class TestAfterAgentStructuralOverrides:
         result = _after_agent(mw, "some vague model text")
         assert "cancelled" in result.lower()
         assert "ord-0002" in result
+
+    def test_order_status_renders_the_real_rows_not_the_models_retelling(self):
+        # Observed: the model showed the customer's NEW saved address as the
+        # shipping address of an older order, with the tool result correct.
+        orders = [
+            {"order_id": "ord-0001", "product_name": "Ibuprofen 200mg Tablets", "quantity": 1,
+             "total_price_usd": 5.29, "address": "10 High St, Leeds", "status": "cancelled"},
+            {"order_id": "ord-0002", "product_name": "Cetirizine 10mg Antihistamine Tablets", "quantity": 2,
+             "total_price_usd": 11.98, "address": "10 High St, Leeds", "status": "placed"},
+        ]
+        mw = _middleware(turn_state={"order_status": orders})
+        result = _after_agent(mw, "ord-0002 ships to 99 New Rd, York and is pending")
+        assert "99 New Rd" not in result and "pending" not in result
+        assert result.count("Shipping to: 10 High St, Leeds") == 2
+        assert "Status: cancelled" in result and "Status: placed" in result
+        assert "Quantity: 2" in result and "$11.98" in result
+
+    def test_a_deferred_order_still_wins_over_an_order_status_report(self):
+        mw = _middleware(turn_state={
+            "order_status": [{"order_id": "ord-0001", "product_name": "X", "address": "a", "status": "placed"}],
+            "deferred_order": {"needs_address_confirmation": True, "address_on_file": "10 High St, Leeds"},
+        })
+        assert "10 High St, Leeds" in _after_agent(mw, "anything")
+        assert "Order ID" not in _after_agent(mw, "anything")
 
     def test_leaked_decline_out_of_scope_is_forced_to_the_canned_reply(self):
         mw = _middleware()

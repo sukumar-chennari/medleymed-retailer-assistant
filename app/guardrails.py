@@ -74,6 +74,27 @@ def build_cancellation_confirmation(order: dict) -> str:
     )
 
 
+def build_order_status_report(orders: list[dict]) -> str:
+    """Lists the customer's real orders, newest last, straight from the
+    check_order_status result — every field comes from the order row, so the
+    report cannot show an address, quantity or status the order doesn't have.
+    Same rationale as build_order_confirmation."""
+    blocks = []
+    for order in orders:
+        quantity = order.get("quantity", 1)
+        total = order.get("total_price_usd", order.get("price_usd"))
+        blocks.append(
+            f"Order ID: {order['order_id']}\n"
+            f"Product: {order['product_name']}\n"
+            f"Quantity: {quantity}\n"
+            f"Total: ${total}\n"
+            f"Shipping to: {order['address']}\n"
+            f"Status: {order['status']}"
+        )
+    heading = "Here is your order:" if len(blocks) == 1 else "Here are your orders:"
+    return heading + "\n\n" + "\n\n".join(blocks)
+
+
 def reply_for_deferred_order(order: dict) -> str:
     """The correct thing to say after a start_order call that deferred
     (never completes synchronously — see tools.start_order) rather than

@@ -1166,10 +1166,12 @@ class _GuardrailMiddleware(AgentMiddleware):
                 response = handler(request)
                 _log_tool_call(session_id, name, args, response.content)
                 try:
-                    has_orders = bool(json.loads(response.content).get("orders"))
-                except (TypeError, ValueError):
-                    has_orders = False
+                    orders = json.loads(response.content).get("orders")
+                except (TypeError, ValueError, AttributeError):
+                    orders = None
+                has_orders = bool(orders)
                 if has_orders:
+                    self.turn_state["order_status"] = orders
                     self.turn_state["real_order_placed"] = True
                     self.turn_state["real_email_sent"] = True
                     self.turn_state["real_address_saved"] = True
@@ -1261,6 +1263,15 @@ class _GuardrailMiddleware(AgentMiddleware):
             # guardrails.reply_for_deferred_order for the two distinct
             # observed failures this avoids.
             final = guardrails.reply_for_deferred_order(self.turn_state["deferred_order"])
+        elif self.turn_state.get("order_status"):
+            # The orders are real data, so the report is rendered from it, not
+            # from the model's retelling. Observed (Oct 14): asked to "show my
+            # orders", the model printed the customer's NEW saved address as
+            # the shipping address of an order that had shipped to the old
+            # one, listed the cancelled order without its details, and
+            # described an order as "pending since you asked me to change the
+            # address" — all while the tool result it was reading was correct.
+            final = guardrails.build_order_status_report(self.turn_state["order_status"])
         else:
             guardrails.remember_recommended_product(session_id, reply_text)
             # check_order_status (when it returned real orders) sets
@@ -1427,6 +1438,7 @@ def run_turn(
         "real_address_saved": False,
         "completed_order": None,
         "cancelled_order": None,
+        "order_status": None,
         "deferred_order": None,
         "blocked_ungrounded_lookup": False,
         "declined_forced": False,

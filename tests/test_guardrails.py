@@ -490,3 +490,25 @@ class TestRememberRecommendedProduct:
 
         guardrails.remember_recommended_product("s1", "Could you tell me more about your symptoms?")
         assert store.get_last_recommended_product("s1") is None
+
+
+class TestBuildOrderStatusReport:
+    def test_a_single_order_uses_the_singular_heading(self):
+        report = guardrails.build_order_status_report([
+            {"order_id": "ord-0001", "product_name": "Ibuprofen 200mg Tablets", "quantity": 1,
+             "total_price_usd": 5.29, "address": "10 High St, Leeds", "status": "placed"},
+        ])
+        assert report.startswith("Here is your order:")
+        assert "Status: placed" in report
+
+    def test_every_field_comes_from_the_order_row(self):
+        orders = [
+            {"order_id": "ord-0001", "product_name": "A", "quantity": 2, "price_usd": 3.0,
+             "address": "addr one", "status": "cancelled"},
+            {"order_id": "ord-0002", "product_name": "B", "address": "addr two", "status": "placed",
+             "price_usd": 4.5},
+        ]
+        report = guardrails.build_order_status_report(orders)
+        assert report.startswith("Here are your orders:")
+        assert "Shipping to: addr one" in report and "Shipping to: addr two" in report
+        assert "Total: $3.0" in report and "Quantity: 1" in report  # default quantity when absent
