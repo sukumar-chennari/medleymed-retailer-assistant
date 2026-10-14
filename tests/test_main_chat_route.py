@@ -305,6 +305,25 @@ class TestNamedProductOrder:
         assert "address" in reply.lower()
         assert store.get_pending_order("s1")["product_id"] == product["id"]
 
+    @pytest.mark.parametrize("text, quantity", [
+        ("I'd like to order 2 Ibuprofen 200mg Tablets", 2),
+        ("order Ibuprofen 200mg Tablets twice", 2),
+        ("buy a pair of Ibuprofen 200mg Tablets", 2),
+        ("order one Ibuprofen 200mg Tablets", 1),
+        ("order Ibuprofen 200mg Tablets x2", 2),
+        ("order fev-003 x 2", 2),
+    ])
+    def test_an_explicit_quantity_is_carried_into_the_order(self, monkeypatch, text, quantity):
+        self._model_must_not_run(monkeypatch)
+        _chat("s1", text)
+        assert store.get_pending_order("s1") == {"product_id": "fev-003", "quantity": quantity}
+
+    def test_a_quantity_over_the_limit_is_capped_and_the_customer_is_told(self, monkeypatch):
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", "order 5 Ibuprofen 200mg Tablets")
+        assert "capped at our per-order limit" in reply
+        assert store.get_pending_order("s1")["quantity"] == 2
+
     def test_a_product_id_alone_is_enough_to_name_the_product(self, monkeypatch):
         self._model_must_not_run(monkeypatch)
         _chat("s1", "please order col-005")
@@ -320,7 +339,8 @@ class TestNamedProductOrder:
     def test_anything_beyond_a_plain_named_order_is_left_to_the_model(self, monkeypatch):
         monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
         for text in [
-            "I'd like to order 2 Ibuprofen 200mg Tablets", "order Ibuprofen 200mg Tablets twice",
+            "order another Ibuprofen 200mg Tablets", "order more Ibuprofen 200mg Tablets",
+            "order 2 Ibuprofen 200mg Tablets, actually three", "order two Ibuprofen 200mg Tablets x 3",
             "don't order Ibuprofen 200mg Tablets", "dosage of Ibuprofen 200mg Tablets",
             "what are the side effects of Ibuprofen 200mg Tablets before I order",
             "I'd like to order Ibuprofen 200mg Tablets or Cetirizine 10mg Antihistamine Tablets",

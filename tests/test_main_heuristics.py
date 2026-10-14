@@ -349,3 +349,18 @@ class TestResolveBareSelection:
 
     def test_unrelated_text_resolves_to_none(self):
         assert main._resolve_bare_selection("actually never mind", self.PRODUCTS) is None
+
+
+class TestParseQuantity:
+    @pytest.mark.parametrize("rest, expected", [
+        (" order  ", 1), ("order 2 ", 2), ("order three", 3), ("order  twice", 2),
+        ("order a couple of ", 2), ("order x4", 4), ("order 0 ", 0), ("order 12 ", 12),
+    ])
+    def test_one_quantity_cue_is_read(self, rest, expected):
+        assert main._parse_quantity(rest) == expected
+
+    @pytest.mark.parametrize("rest", [
+        "order another ", "order more ", "order extra ", "order 2 and 3 ", "order two, x 3",
+    ])
+    def test_ambiguous_cues_are_left_to_the_model(self, rest):
+        assert main._parse_quantity(rest) is None

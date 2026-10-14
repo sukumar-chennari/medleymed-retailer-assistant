@@ -319,6 +319,27 @@ CONVERSATION_CASES = [
         ],
     },
     {
+        "name": "named_order_with_a_quantity",
+        # Fully deterministic. "order 2 <product>" used to reach the model,
+        # which re-asked the age question or invented a product (0 of 5
+        # phrasings reached a pending order on Oct 14).
+        "turns": [
+            {
+                "text": "order 2 Cetirizine 10mg Antihistamine Tablets",
+                "checks": [("asks for a shipping address", lambda r: "address" in r.lower())],
+                "state_checks": [("no order placed yet", _order_count_is(0))],
+            },
+            {
+                "text": "8 Quantity Lane, Pune",
+                "checks": [
+                    ("confirms the named product", lambda r: "Order confirmed!" in r and "Cetirizine" in r),
+                    ("with the quantity asked for", lambda r: "Quantity: 2" in r),
+                ],
+                "state_checks": [("exactly one real order exists", _order_count_is(1))],
+            },
+        ],
+    },
+    {
         "name": "bare_numeric_selection_from_a_product_list",
         # Fully deterministic — proves main.py's _resolve_bare_selection
         # dispatch is actually wired correctly end-to-end through the real

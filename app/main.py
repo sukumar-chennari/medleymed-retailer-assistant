@@ -473,13 +473,42 @@ def _is_plain_reorder_request(text: str) -> bool:
 # Guaifenesin Expectorant Syrup in our catalog". Handled in code, like a bare
 # numbered selection and a plain "reorder that". Only the clear case:
 # unnegated order intent, exactly one product named (by full name or id), not
-# an information question, and no quantity cue left once the name is removed
-# (the product names themselves contain numbers like "500mg") — anything else
-# is left to the model.
+# an information question, and at most one unambiguous quantity cue once the
+# name is removed (the names themselves contain numbers like "500mg") —
+# anything else is left to the model. A quantity ("order 2 Ibuprofen 200mg
+# Tablets", "... twice") was first left to the model too, and it re-asked the
+# age question or invented a product ("Col-004, which is a fever medicine"):
+# 0 of 5 phrasings reached a pending order.
 _MAX_NAMED_ORDER_WORDS = 14
 
+# Quantity cues a named order may carry. "another/more/extra" are NOT here:
+# they depend on what was ordered before, so the model gets those.
+_NUMBER_WORDS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+    "seven": 7, "eight": 8, "nine": 9, "ten": 10, "twice": 2, "double": 2,
+    "couple": 2, "pair": 2,
+}
+_QUANTITY_TOKEN_RE = re.compile(r"\b(?:\d+|" + "|".join(_NUMBER_WORDS) + r")\b")
+_AMBIGUOUS_QUANTITY_RE = re.compile(r"\b(?:another|more|extra)\b")
 
-def _resolve_named_product_order(text: str) -> dict | None:
+
+def _parse_quantity(rest: str) -> int | None:
+    """The one explicit quantity in `rest` (the message with the product name
+    removed), 1 when there is none, None when it is ambiguous (two cues, or
+    "another"/"more"/"extra"). Out-of-range values are returned as-is:
+    tools.start_order clamps them and says so."""
+    if _AMBIGUOUS_QUANTITY_RE.search(rest):
+        return None
+    tokens = _QUANTITY_TOKEN_RE.findall(re.sub(r"\bx(\d+)\b", r"\1", rest))
+    if not tokens:
+        return 1
+    if len(tokens) > 1:
+        return None
+    token = tokens[0]
+    return int(token) if token.isdigit() else _NUMBER_WORDS[token]
+
+
+def _resolve_named_product_order(text: str) -> tuple[dict, int] | None:
     words = re.findall(r"[a-z']+", text.lower())
     if not words or len(words) > _MAX_NAMED_ORDER_WORDS or "@" in text:
         return None
@@ -502,10 +531,10 @@ def _resolve_named_product_order(text: str) -> dict | None:
         return None
     product, matched = next(iter(named.values()))
 
-    rest = normalized.replace(matched, " ")
-    if _QUANTITY_WORDS_RE.search(rest):
+    quantity = _parse_quantity(normalized.replace(matched, " "))
+    if quantity is None:
         return None
-    return product
+    return product, quantity
 
 
 def _reply_for_start_order_result(order: dict) -> str:
@@ -633,11 +662,12 @@ def chat(req: ChatRequest):
             reply = _reply_for_start_order_result(order)
             messages.append({"role": "user", "content": text})
             messages.append({"role": "assistant", "content": reply})
-        elif text and (named_product := _resolve_named_product_order(text)):
+        elif text and (named_order := _resolve_named_product_order(text)):
             # Next to the plain-reorder branch above, ahead of the pending-email
             # branches, for the same reason: this is usually said right after an
             # order was placed with no email on file yet (pending_email set).
-            order = json.loads(tools.start_order(named_product["id"], req.session_id))
+            named_product, named_quantity = named_order
+            order = json.loads(tools.start_order(named_product["id"], req.session_id, named_quantity))
             reply = _reply_for_start_order_result(order)
             messages.append({"role": "user", "content": text})
             messages.append({"role": "assistant", "content": reply})
