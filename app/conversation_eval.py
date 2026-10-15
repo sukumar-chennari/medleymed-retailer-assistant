@@ -394,6 +394,26 @@ CONVERSATION_CASES = [
         ],
     },
     {
+        "name": "catalog_listing_then_order_by_name",
+        # Fully deterministic. "show me all your products" used to get the
+        # out-of-scope decline.
+        "turns": [
+            {
+                "text": "show me all your products",
+                "checks": [
+                    ("lists a fever and a cold product with prices", lambda r: "Ibuprofen 200mg Tablets — $5.29" in r and "Guaifenesin Expectorant Syrup — $6.79" in r),
+                    ("is not the out-of-scope decline", lambda r: "can't help with that here" not in r.lower()),
+                ],
+            },
+            {"text": "I'd like to order Guaifenesin Expectorant Syrup", "checks": [("asks for an address", lambda r: "address" in r.lower())]},
+            {
+                "text": "3 List Road, Pune",
+                "checks": [("orders the named product", lambda r: "Order confirmed!" in r and "Guaifenesin" in r)],
+                "state_checks": [("one real order", _order_count_is(1))],
+            },
+        ],
+    },
+    {
         "name": "bare_numeric_selection_from_a_product_list",
         # Fully deterministic — proves main.py's _resolve_bare_selection
         # dispatch is actually wired correctly end-to-end through the real

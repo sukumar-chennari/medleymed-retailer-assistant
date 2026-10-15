@@ -678,6 +678,43 @@ def _price_reply(text: str) -> str | None:
     return "Here are the prices:\n" + "\n".join(f"- {p['name']} — ${p['price_usd']:.2f}" for p in named)
 
 
+# "Show me all your products" / "what do you sell?" got the out-of-scope
+# decline ("This demo only handles fever and cold OTC guidance") — a customer
+# asking what the shop carries was told the shop can't help. Answered from the
+# catalog. Anything that names a symptom ("what do you have for a cold?") goes
+# the normal recommendation route instead.
+_CATALOG_LISTING_RE = re.compile(
+    r"\b(?:(?:all|every|each)\s+(?:of\s+)?(?:your\s+|the\s+)?(?:products?|medicines?|medications?|items?|drugs?)"
+    r"|(?:your|the)\s+(?:full\s+)?(?:products?|medicines?|medications?|catalog(?:ue)?|inventory|range|menu)"
+    r"|what\s+(?:do|can)\s+you\s+(?:sell|carry|stock|offer)"
+    r"|what\s+(?:products?|medicines?|medications?|items?)\s+(?:do\s+you|are\s+(?:there|available))"
+    r"|(?:product|medicine)\s+(?:list|catalog(?:ue)?))\b",
+    re.IGNORECASE,
+)
+_CATALOG_LISTING_STARTS = {
+    "show", "list", "what", "what's", "whats", "which", "see", "tell", "give", "can", "could", "do", "display",
+}
+_MAX_CATALOG_LISTING_WORDS = 12
+
+
+def _catalog_listing_reply(text: str) -> str | None:
+    words = re.findall(r"[a-z']+", text.lower())
+    if not words or len(words) > _MAX_CATALOG_LISTING_WORDS or "@" in text:
+        return None
+    if words[0] not in _CATALOG_LISTING_STARTS or not _CATALOG_LISTING_RE.search(text):
+        return None
+    if tools.classify(text) is not None or _products_named_in(text) or _has_unnegated_intent(text, ORDER_INTENT_RE):
+        return None
+    lines = ["Here's what we carry:"]
+    for category, heading in (("fever", "Fever"), ("cold", "Cold, cough & allergy")):
+        lines.append(f"\n{heading}:")
+        for product in store.get_catalog():
+            if product["category"] == category:
+                lines.append(f"- {product['name']} — ${product['price_usd']:.2f}")
+    lines.append("\nTell me what you're dealing with and I'll recommend one, or name the one you'd like to order.")
+    return "\n".join(lines)
+
+
 def _reply_for_start_order_result(order: dict) -> str:
     if "error" in order:
         return f"Sorry, {order['error']}"
@@ -825,6 +862,12 @@ def chat(req: ChatRequest):
             # Answered without touching any pending state, so a price question
             # asked mid-order leaves the order waiting for its address.
             reply = price_reply
+            messages.append({"role": "user", "content": text})
+            messages.append({"role": "assistant", "content": reply})
+        elif text and not pending_product_id and not pending_address_confirmation and (
+            listing_reply := _catalog_listing_reply(text)
+        ):
+            reply = listing_reply
             messages.append({"role": "user", "content": text})
             messages.append({"role": "assistant", "content": reply})
         elif text and not pending_product_id and not pending_address_confirmation and _is_address_query(text):

@@ -518,3 +518,45 @@ class TestPriceQuestions:
         for text in ["how much ibuprofen should I take", "how much is shipping", "price of guaifenesin dosage",
                      "how much is the weather"]:
             assert _chat("s1", text) == "from the model", text
+
+
+class TestCatalogListing:
+    """Real bug: "show me all your products" got the out-of-scope decline — a
+    customer asking what the shop carries was told the shop can't help."""
+
+    @staticmethod
+    def _model_must_not_run(monkeypatch):
+        def _boom(*args, **kwargs):
+            raise AssertionError("the model must not be reached")
+
+        monkeypatch.setattr(main, "run_turn", _boom)
+
+    @pytest.mark.parametrize("text", [
+        "show me all your products", "what do you sell?", "what medicines do you have",
+        "list your catalog", "can I see all the medicines", "what products do you have",
+    ])
+    def test_the_whole_real_catalog_is_listed_with_prices(self, monkeypatch, text):
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", text)
+        for product in store.get_catalog():
+            assert f"- {product['name']} — ${product['price_usd']:.2f}" in reply
+
+    def test_naming_a_product_from_the_list_then_starts_its_order(self, monkeypatch):
+        self._model_must_not_run(monkeypatch)
+        _chat("s1", "show me all your products")
+        _chat("s1", "I'd like to order Guaifenesin Expectorant Syrup")
+        assert store.get_pending_order("s1")["product_id"] == "col-005"
+
+    def test_symptoms_products_and_orders_are_left_to_the_model(self, monkeypatch):
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        for text in ["what do you have for a cold", "show me products for fever", "what is paracetamol",
+                     "tell me about your products and the dosage of ibuprofen", "order all your products",
+                     "show me the ibuprofen product"]:
+            assert _chat("s1", text) == "from the model", text
+
+    def test_with_an_order_awaiting_its_address_the_question_is_not_saved_as_the_address(self, monkeypatch):
+        store.set_pending_order("s1", "fev-001", 1)
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        assert _chat("s1", "what do you sell?") == "from the model"
+        assert store.list_orders("demo_user") == []
+        assert store.get_pending_order("s1")["product_id"] == "fev-001"
