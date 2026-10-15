@@ -470,3 +470,51 @@ class TestSavedAddressRequests:
         store.set_pending_order("s1", "fev-001", 1)
         reply = _chat("s1", "99 New Rd, York")
         assert "Order confirmed!" in reply and "99 New Rd, York" in reply
+
+
+class TestPriceQuestions:
+    """Prices live in the catalog, not the knowledge base. Real bug: "how much
+    does Ibuprofen 200mg Tablets cost?" got "the price is not explicitly
+    stated in our knowledge base", and "what's the price of col-003" got the
+    out-of-scope decline."""
+
+    @staticmethod
+    def _model_must_not_run(monkeypatch):
+        def _boom(*args, **kwargs):
+            raise AssertionError("the model must not be reached")
+
+        monkeypatch.setattr(main, "run_turn", _boom)
+
+    @pytest.mark.parametrize("product", store.get_catalog(), ids=lambda p: p["id"])
+    def test_every_catalog_price_is_answered_exactly(self, monkeypatch, product):
+        self._model_must_not_run(monkeypatch)
+        by_name = _chat("s1", f"how much does {product['name']} cost?")
+        assert by_name == f"{product['name']} costs ${product['price_usd']:.2f}."
+        assert f"${product['price_usd']:.2f}" in _chat("s2", f"what's the price of {product['id']}")
+
+    def test_an_ingredient_lists_every_product_containing_it(self, monkeypatch):
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", "price of paracetamol")
+        for name in ["Paracetamol 500mg Tablets", "Paracetamol Extra Strength 650mg", "Children's Paracetamol Syrup"]:
+            assert name in reply
+        assert "Ibuprofen" not in reply
+
+    def test_cheapest_is_computed_from_the_catalog(self, monkeypatch):
+        self._model_must_not_run(monkeypatch)
+        catalog = store.get_catalog()
+        cheapest_fever = min((p for p in catalog if p["category"] == "fever"), key=lambda p: p["price_usd"])
+        reply = _chat("s1", "what is your cheapest fever medicine?")
+        assert cheapest_fever["name"] in reply and f"${cheapest_fever['price_usd']:.2f}" in reply
+
+    def test_a_price_question_mid_order_leaves_the_order_waiting(self, monkeypatch):
+        store.set_pending_order("s1", "fev-001", 1)
+        self._model_must_not_run(monkeypatch)
+        assert "$5.29" in _chat("s1", "how much is Ibuprofen 200mg Tablets?")
+        assert store.get_pending_order("s1")["product_id"] == "fev-001"
+        assert store.list_orders("demo_user") == []
+
+    def test_dosing_and_unrelated_how_much_questions_still_go_to_the_model(self, monkeypatch):
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        for text in ["how much ibuprofen should I take", "how much is shipping", "price of guaifenesin dosage",
+                     "how much is the weather"]:
+            assert _chat("s1", text) == "from the model", text

@@ -371,6 +371,29 @@ CONVERSATION_CASES = [
         ],
     },
     {
+        "name": "price_questions_come_from_the_catalog",
+        # Fully deterministic. Before Oct 15 "how much does <product> cost?"
+        # got "the price is not stated in our knowledge base" and "price of
+        # col-003" got the out-of-scope decline. A price question asked while
+        # an order awaits its address must not disturb that order.
+        "turns": [
+            {"text": "how much does Ibuprofen 200mg Tablets cost?", "checks": [("states the catalog price", lambda r: "$5.29" in r)]},
+            {"text": "what's the price of col-003", "checks": [("states the catalog price", lambda r: "$8.49" in r)]},
+            {"text": "what is your cheapest cold medicine", "checks": [("names the cheapest cold product", lambda r: "$5.99" in r)]},
+            {"text": "order Ibuprofen 200mg Tablets", "checks": [("asks for an address", lambda r: "address" in r.lower())]},
+            {
+                "text": "how much is Paracetamol 500mg Tablets?",
+                "checks": [("answers the price", lambda r: "$4.99" in r)],
+                "state_checks": [("no order placed by a price question", _order_count_is(0))],
+            },
+            {
+                "text": "7 Price Street, Pune",
+                "checks": [("the waiting order still completes", lambda r: "Order confirmed!" in r and "Ibuprofen" in r)],
+                "state_checks": [("one real order", _order_count_is(1))],
+            },
+        ],
+    },
+    {
         "name": "bare_numeric_selection_from_a_product_list",
         # Fully deterministic — proves main.py's _resolve_bare_selection
         # dispatch is actually wired correctly end-to-end through the real

@@ -611,6 +611,73 @@ def _reply_for_address_query() -> str:
     return f"The shipping address I have on file for you is: {address}"
 
 
+# Price questions. The catalog has a price for every product and the order
+# confirmation shows it, but asking for it first failed: "how much does
+# Ibuprofen 200mg Tablets cost?" got "the price is not explicitly stated in
+# our knowledge base" (while recommending a dose), "what's the price of
+# col-003" got the out-of-scope decline, and "how many tablets..." style
+# questions got an age clarification. The knowledge-base documents hold no
+# prices — the catalog does — so these are answered from it in code.
+_PRICE_RE = re.compile(
+    r"\b(?:prices?|pricing|priced|costs?|how much (?:is|are|does|do|would|for))\b", re.IGNORECASE
+)
+_PRICE_NOT_DOSE_RE = re.compile(r"\b(?:dose|dosage|dosing|take|taking|safe|side\s*effects?)\b", re.IGNORECASE)
+_CHEAPEST_RE = re.compile(
+    r"\b(?:cheap(?:est)?|lowest[- ]priced?|least expensive|most affordable)\b", re.IGNORECASE
+)
+_COLD_CATEGORY_WORDS = {"cold", "cough", "flu", "congestion", "runny", "allergy", "allergies", "hayfever"}
+_MAX_PRICE_QUESTION_WORDS = 16
+
+
+def _products_named_in(text: str) -> list[dict]:
+    """Catalog products the text names: by full name or id, otherwise by an
+    active-ingredient word ("ibuprofen" -> Ibuprofen 200mg Tablets,
+    "paracetamol" -> all three paracetamol products)."""
+    normalized = " ".join(text.lower().replace("\u2019", "'").split())
+    catalog = store.get_catalog()
+    named = [p for p in catalog if p["name"].lower() in normalized]
+    ids = {m.lower() for m in guardrails.PRODUCT_ID_RE.findall(text)}
+    named += [p for p in catalog if p["id"] in ids and p not in named]
+    if named:
+        return named
+    tokens = set(re.findall(r"[a-z]+", normalized))
+    return [
+        p for p in catalog
+        if any(len(word) >= 5 and word in tokens for word in re.findall(r"[a-z]+", p["active_ingredient"].lower()))
+    ]
+
+
+def _price_reply(text: str) -> str | None:
+    words = re.findall(r"[a-z']+", text.lower())
+    if not words or len(words) > _MAX_PRICE_QUESTION_WORDS or "@" in text:
+        return None
+    if _PRICE_NOT_DOSE_RE.search(text):
+        return None
+    catalog = store.get_catalog()
+
+    if _CHEAPEST_RE.search(text):
+        if set(words) & {"fever"} and not set(words) & _COLD_CATEGORY_WORDS:
+            category, label = "fever", "fever "
+        elif set(words) & _COLD_CATEGORY_WORDS and "fever" not in words:
+            category, label = "cold", "cold "
+        else:
+            category, label = None, ""
+        pool = [p for p in catalog if category is None or p["category"] == category]
+        cheapest = min(p["price_usd"] for p in pool)
+        winners = [p for p in pool if p["price_usd"] == cheapest]
+        listed = " and ".join(f"{p['name']}" for p in winners)
+        return f"The lowest-priced {label}product we carry is {listed} at ${cheapest:.2f}."
+
+    if not _PRICE_RE.search(text):
+        return None
+    named = _products_named_in(text)
+    if not named:
+        return None
+    if len(named) == 1:
+        return f"{named[0]['name']} costs ${named[0]['price_usd']:.2f}."
+    return "Here are the prices:\n" + "\n".join(f"- {p['name']} — ${p['price_usd']:.2f}" for p in named)
+
+
 def _reply_for_start_order_result(order: dict) -> str:
     if "error" in order:
         return f"Sorry, {order['error']}"
@@ -752,6 +819,12 @@ def chat(req: ChatRequest):
             and (new_address := _extract_address_change(text))
         ):
             reply = _reply_for_address_change(new_address)
+            messages.append({"role": "user", "content": text})
+            messages.append({"role": "assistant", "content": reply})
+        elif text and (price_reply := _price_reply(text)):
+            # Answered without touching any pending state, so a price question
+            # asked mid-order leaves the order waiting for its address.
+            reply = price_reply
             messages.append({"role": "user", "content": text})
             messages.append({"role": "assistant", "content": reply})
         elif text and not pending_product_id and not pending_address_confirmation and _is_address_query(text):
