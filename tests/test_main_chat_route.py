@@ -415,3 +415,58 @@ class TestNamingAnOrderIsNotADecline:
         assert "won't place that order" in _chat("s2", "cancel that")
         store.set_pending_order("s3", "fev-001", 1)
         assert "without a shipping address" in _chat("s3", "no thanks")
+
+
+class TestSavedAddressRequests:
+    """Real bug (live probe): "change my shipping address to X" made the model
+    call save_address and then invent an "Order updated!" receipt for orders it
+    never touched; the guard replaced that with "what symptom is this for
+    (fever or cold)?". "What address do you have on file?" got the same
+    non-answer. Both are now answered from the real saved address."""
+
+    @staticmethod
+    def _model_must_not_run(monkeypatch):
+        def _boom(*args, **kwargs):
+            raise AssertionError("the model must not be reached")
+
+        monkeypatch.setattr(main, "run_turn", _boom)
+
+    def test_changing_the_address_saves_it_for_future_orders(self, monkeypatch):
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", "change my shipping address to 99 New Rd, York")
+        assert store.get_address("demo_user") == "99 New Rd, York"
+        assert "99 New Rd, York" in reply and "future orders" in reply
+        assert "already placed" not in reply  # no orders exist yet
+
+    def test_it_says_plainly_that_existing_orders_keep_their_address(self, monkeypatch):
+        store.save_address("demo_user", "10 High St, Leeds")
+        store.create_order("demo_user", "fev-001", "10 High St, Leeds", 1)
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", "Please update my address to 99 New Rd, York.")
+        assert store.get_address("demo_user") == "99 New Rd, York"
+        assert "still ship to the address they were placed with" in reply
+        assert store.list_orders("demo_user")[0]["address"] == "10 High St, Leeds"
+
+    def test_asking_for_the_saved_address_reads_it_back(self, monkeypatch):
+        store.save_address("demo_user", "10 High St, Leeds")
+        self._model_must_not_run(monkeypatch)
+        assert "10 High St, Leeds" in _chat("s1", "what address do you have on file for me?")
+
+    def test_asking_with_no_address_saved_says_so(self, monkeypatch):
+        self._model_must_not_run(monkeypatch)
+        assert "don't have a shipping address" in _chat("s1", "what's my shipping address")
+
+    def test_a_product_name_is_never_saved_as_the_new_address(self, monkeypatch):
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        assert _chat("s1", "change my address to Ibuprofen 200mg Tablets") == "from the model"
+        assert store.get_address("demo_user") in (None, "")
+
+    def test_questions_about_something_else_are_left_to_the_model(self, monkeypatch):
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        for text in ["what is the address of your pharmacy?", "what are the side effects, address me politely"]:
+            assert _chat("s1", text) == "from the model", text
+
+    def test_a_pending_address_question_is_not_hijacked(self, monkeypatch):
+        store.set_pending_order("s1", "fev-001", 1)
+        reply = _chat("s1", "99 New Rd, York")
+        assert "Order confirmed!" in reply and "99 New Rd, York" in reply

@@ -551,6 +551,66 @@ def _resolve_named_product_order(text: str) -> tuple[dict, int] | None:
     return product, quantity
 
 
+# "Change my shipping address to X" and "what address do you have on file?"
+# have no tool-backed path that works with the small local model. Real bug,
+# found by a live probe: the model called save_address, then wrote "Order
+# updated! ... Shipping to: X" for orders it never touched, the
+# unverified-completion guard replaced that with its generic "what symptom
+# is this for (fever or cold)?" — and the plain question "what address do you
+# have on file for me?" got the same non-answer. Both are handled in code.
+# Saying plainly that already-placed orders keep their address matters: there
+# is no tool that edits an order, and the model's invented "updated" receipts
+# claimed otherwise.
+_ADDRESS_CHANGE_RE = re.compile(
+    r"^\s*(?:please\s+)?(?:(?:can|could|would) you\s+(?:please\s+)?)?"
+    r"(?:change|update|set|replace|switch)\s+(?:my|the)\s+"
+    r"(?:(?:shipping|delivery|home)\s+)?address\s+(?:to|as)\s+(?P<address>.+?)\s*[.!]?\s*$",
+    re.IGNORECASE,
+)
+_ADDRESS_QUERY_RE = re.compile(
+    r"\b(?:my\s+(?:(?:shipping|delivery|saved|home|current)\s+)?address"
+    r"|(?:saved|stored)\s+address"
+    r"|address\s+(?:do\s+you\s+have|you\s+have|is\s+saved|(?:is\s+)?on\s+file))\b",
+    re.IGNORECASE,
+)
+_ADDRESS_QUERY_STARTS = {"what", "what's", "whats", "which", "show", "tell", "do", "can", "could", "where"}
+_MAX_ADDRESS_QUERY_WORDS = 12
+
+
+def _extract_address_change(text: str) -> str | None:
+    match = _ADDRESS_CHANGE_RE.match(text)
+    if not match:
+        return None
+    address = match.group("address").strip()
+    return address if _looks_like_a_first_time_address(address) else None
+
+
+def _is_address_query(text: str) -> bool:
+    words = re.findall(r"[a-z']+", text.lower())
+    if not words or len(words) > _MAX_ADDRESS_QUERY_WORDS or "@" in text:
+        return False
+    if _has_unnegated_intent(text, ORDER_INTENT_RE) or _ADDRESS_CHANGE_RE.match(text):
+        return False
+    return words[0] in _ADDRESS_QUERY_STARTS and bool(_ADDRESS_QUERY_RE.search(text))
+
+
+def _reply_for_address_change(address: str) -> str:
+    saved = json.loads(tools.save_address(address))
+    if not saved.get("saved"):
+        return "Sorry, I couldn't save that address — could you send it again?"
+    note = ""
+    if store.list_orders("demo_user"):
+        note = " Orders you've already placed still ship to the address they were placed with."
+    return f"Done — I've saved {saved['address']} as your shipping address for future orders.{note}"
+
+
+def _reply_for_address_query() -> str:
+    address = store.get_address("demo_user")
+    if not address:
+        return "I don't have a shipping address on file for you yet — I'll ask for one when you place an order."
+    return f"The shipping address I have on file for you is: {address}"
+
+
 def _reply_for_start_order_result(order: dict) -> str:
     if "error" in order:
         return f"Sorry, {order['error']}"
@@ -683,6 +743,19 @@ def chat(req: ChatRequest):
             named_product, named_quantity = named_order
             order = json.loads(tools.start_order(named_product["id"], req.session_id, named_quantity))
             reply = _reply_for_start_order_result(order)
+            messages.append({"role": "user", "content": text})
+            messages.append({"role": "assistant", "content": reply})
+        elif (
+            text
+            and not pending_product_id
+            and not pending_address_confirmation
+            and (new_address := _extract_address_change(text))
+        ):
+            reply = _reply_for_address_change(new_address)
+            messages.append({"role": "user", "content": text})
+            messages.append({"role": "assistant", "content": reply})
+        elif text and not pending_product_id and not pending_address_confirmation and _is_address_query(text):
+            reply = _reply_for_address_query()
             messages.append({"role": "user", "content": text})
             messages.append({"role": "assistant", "content": reply})
         elif pending_email_order_id and text and _looks_like_an_email(text):

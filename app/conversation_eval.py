@@ -340,6 +340,37 @@ CONVERSATION_CASES = [
         ],
     },
     {
+        "name": "change_and_read_back_the_saved_address",
+        # Fully deterministic. On Oct 14 a probe found "change my shipping
+        # address to X" made the model invent an "Order updated!" receipt
+        # (blocked, then replaced with "what symptom is this for?"), and
+        # "what address do you have on file?" got the same non-answer.
+        "turns": [
+            {"text": "order Ibuprofen 200mg Tablets", "checks": [("asks for an address", lambda r: "address" in r.lower())]},
+            {
+                "text": "10 High St, Leeds",
+                "checks": [("order placed", lambda r: "Order confirmed!" in r)],
+                "state_checks": [("one real order", _order_count_is(1))],
+            },
+            {
+                "text": "change my shipping address to 99 New Rd, York",
+                "checks": [
+                    ("confirms the new address for future orders", lambda r: "99 New Rd, York" in r and "future orders" in r),
+                    ("says the existing order keeps its address", lambda r: "already placed" in r),
+                    ("no invented receipt", lambda r: "Order ID" not in r and "symptom" not in r.lower()),
+                ],
+                "state_checks": [
+                    ("no order was created or edited", _order_count_is(1)),
+                    ("the old order still ships to the old address", lambda sid: store.get_order("ord-0001")["address"] == "10 High St, Leeds"),
+                ],
+            },
+            {
+                "text": "what address do you have on file for me?",
+                "checks": [("reads back the new saved address", lambda r: "99 New Rd, York" in r and "symptom" not in r.lower())],
+            },
+        ],
+    },
+    {
         "name": "bare_numeric_selection_from_a_product_list",
         # Fully deterministic — proves main.py's _resolve_bare_selection
         # dispatch is actually wired correctly end-to-end through the real
