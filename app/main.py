@@ -10,6 +10,7 @@ from app import guardrails, store, tools
 from app.agent import (
     INFO_QUESTION_RE,
     ORDER_INTENT_RE,
+    _has_cancel_intent,
     _has_reorder_intent,
     _has_unnegated_intent,
     resolve_clarification,
@@ -715,6 +716,92 @@ def _catalog_listing_reply(text: str) -> str | None:
     return "\n".join(lines)
 
 
+# Email requests outside the "order just placed, want a receipt?" prompt.
+# Live probe (Oct 16): "my email is sukumar@example.com" before ordering got a
+# greeting and was NOT saved (so the later order said "I don't have an email
+# on file"); "what email do you have for me?" got the generic "what symptom is
+# this for (fever or cold)?" non-answer; "send me the receipt" just reprinted
+# the order. All three are handled in code from the real saved data.
+_EMAIL_WORD_RE = re.compile(r"\be-?mail\b", re.IGNORECASE)
+_RECEIPT_REQUEST_RE = re.compile(
+    r"\b(?:send|email|e-mail|resend|forward|mail)\b.*\b(?:receipt|confirmation|order details|invoice)\b",
+    re.IGNORECASE,
+)
+_EMAIL_QUERY_STARTS = {"what", "what's", "whats", "which", "show", "tell", "do", "can", "could", "where"}
+_MAX_EMAIL_REQUEST_WORDS = 14
+
+
+def _latest_active_order() -> dict | None:
+    orders = [o for o in store.list_orders("demo_user") if o["status"] != "cancelled"]
+    return max(orders, key=lambda o: o["order_id"]) if orders else None
+
+
+def _words_ok(text: str) -> bool:
+    words = re.findall(r"[a-z']+", text.lower())
+    # "order confirmation/details" is the subject of a receipt request, not an
+    # intent to order.
+    without_subject = re.sub(r"\border\s+(?:confirmation|details|receipt|summary)\b", " ", text, flags=re.IGNORECASE)
+    return (
+        bool(words)
+        and len(words) <= _MAX_EMAIL_REQUEST_WORDS
+        and not _has_unnegated_intent(without_subject, ORDER_INTENT_RE)
+        and not _has_reorder_intent(text)
+        and not _has_cancel_intent(text)
+    )
+
+
+def _email_to_save(text: str) -> str | None:
+    """An email the customer is handing over unprompted ("my email is X",
+    "use X as my email", "email me the receipt at X")."""
+    if not _words_ok(text) or "?" in text:
+        return None
+    email, _ = _extract_email(text)
+    if not email:
+        return None
+    if _EMAIL_WORD_RE.search(text) or _RECEIPT_REQUEST_RE.search(text):
+        return email
+    return None
+
+
+def _is_email_query(text: str) -> bool:
+    words = re.findall(r"[a-z']+", text.lower())
+    if not _words_ok(text) or "@" in text or words[0] not in _EMAIL_QUERY_STARTS:
+        return False
+    return bool(_EMAIL_WORD_RE.search(text)) and bool(
+        re.search(r"\b(?:my|saved|stored|on file|you have|do you have)\b", text, re.IGNORECASE)
+    )
+
+
+def _is_receipt_request(text: str) -> bool:
+    return _words_ok(text) and "@" not in text and "?" not in text and bool(_RECEIPT_REQUEST_RE.search(text))
+
+
+def _reply_for_email_save(email: str, text: str) -> str:
+    order = _latest_active_order()
+    if order and _RECEIPT_REQUEST_RE.search(text):
+        return _complete_pending_email(email, order["order_id"])
+    store.save_email("demo_user", email)
+    return f"Thanks — I've saved {email} as your email address, so I can send your order confirmations there."
+
+
+def _reply_for_email_query() -> str:
+    email = store.get_email("demo_user")
+    if not email:
+        return "I don't have an email address on file for you yet — you can give me one any time and I'll save it."
+    return f"The email address I have on file for you is: {email}"
+
+
+def _reply_for_receipt_request(session_id: str) -> str:
+    order = _latest_active_order()
+    if not order:
+        return "You don't have any active orders yet, so there's no receipt to send."
+    email = store.get_email("demo_user")
+    if email:
+        return _complete_pending_email(email, order["order_id"])
+    store.set_pending_email(session_id, order["order_id"])
+    return f"Sure — what email address should I send the confirmation for order {order['order_id']} to?"
+
+
 def _reply_for_start_order_result(order: dict) -> str:
     if "error" in order:
         return f"Sorry, {order['error']}"
@@ -856,6 +943,20 @@ def chat(req: ChatRequest):
             and (new_address := _extract_address_change(text))
         ):
             reply = _reply_for_address_change(new_address)
+            messages.append({"role": "user", "content": text})
+            messages.append({"role": "assistant", "content": reply})
+        elif text and not pending_product_id and not pending_address_confirmation and (
+            not pending_email_order_id and (email_to_save := _email_to_save(text))
+        ):
+            reply = _reply_for_email_save(email_to_save, text)
+            messages.append({"role": "user", "content": text})
+            messages.append({"role": "assistant", "content": reply})
+        elif text and not pending_product_id and not pending_address_confirmation and _is_email_query(text):
+            reply = _reply_for_email_query()
+            messages.append({"role": "user", "content": text})
+            messages.append({"role": "assistant", "content": reply})
+        elif text and not pending_product_id and not pending_address_confirmation and _is_receipt_request(text):
+            reply = _reply_for_receipt_request(req.session_id)
             messages.append({"role": "user", "content": text})
             messages.append({"role": "assistant", "content": reply})
         elif text and (price_reply := _price_reply(text)):

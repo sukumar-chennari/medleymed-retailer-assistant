@@ -425,6 +425,35 @@ CONVERSATION_CASES = [
         ],
     },
     {
+        "name": "email_given_up_front_and_receipt_requests",
+        # Fully deterministic (mail is forced to mock mode by _disable_real_email).
+        # Before Oct 16 "my email is X" ahead of an order got a greeting and
+        # was not saved, "what email do you have for me?" got "what symptom
+        # is this for?", and "send me the receipt" reprinted the order.
+        "turns": [
+            {
+                "text": "my email is sukumar@example.com",
+                "checks": [("confirms the email was saved", lambda r: "saved sukumar@example.com" in r)],
+                "state_checks": [("the email is really saved", lambda sid: store.get_email("demo_user") == "sukumar@example.com")],
+            },
+            {"text": "order Ibuprofen 200mg Tablets", "checks": [("asks for an address", lambda r: "address" in r.lower())]},
+            {
+                "text": "10 High St, Leeds",
+                "checks": [("the order is confirmed and the email goes out without asking", lambda r: "Order confirmed!" in r and "confirmation email has been sent" in r)],
+                "state_checks": [("one real order", _order_count_is(1))],
+            },
+            {
+                "text": "what email do you have for me?",
+                "checks": [("reads back the saved email", lambda r: "sukumar@example.com" in r and "symptom" not in r.lower())],
+            },
+            {
+                "text": "send me the receipt",
+                "checks": [("sends the confirmation for the real order", lambda r: "ord-0001" in r and "sukumar@example.com" in r)],
+                "state_checks": [("no extra order created", _order_count_is(1))],
+            },
+        ],
+    },
+    {
         "name": "bare_numeric_selection_from_a_product_list",
         # Fully deterministic — proves main.py's _resolve_bare_selection
         # dispatch is actually wired correctly end-to-end through the real

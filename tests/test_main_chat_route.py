@@ -560,3 +560,83 @@ class TestCatalogListing:
         assert _chat("s1", "what do you sell?") == "from the model"
         assert store.list_orders("demo_user") == []
         assert store.get_pending_order("s1")["product_id"] == "fev-001"
+
+
+class TestEmailRequestsOutsideThePendingPrompt:
+    """Live probe: "my email is X" before ordering got a greeting and was not
+    saved; "what email do you have for me?" got the "what symptom is this for"
+    non-answer; "send me the receipt" just reprinted the order."""
+
+    @staticmethod
+    def _model_must_not_run(monkeypatch):
+        def _boom(*args, **kwargs):
+            raise AssertionError("the model must not be reached")
+
+        monkeypatch.setattr(main, "run_turn", _boom)
+
+    @staticmethod
+    def _place_order():
+        store.save_address("demo_user", "10 High St, Leeds")
+        return store.create_order("demo_user", "fev-003", "10 High St, Leeds", 1)
+
+    @pytest.mark.parametrize("text", [
+        "my email is sukumar@example.com", "use sukumar@example.com as my email",
+        "sukumar@example.com is my email.",
+    ])
+    def test_an_unprompted_email_is_saved(self, monkeypatch, text):
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", text)
+        assert store.get_email("demo_user") == "sukumar@example.com"
+        assert "sukumar@example.com" in reply
+
+    def test_the_saved_email_is_read_back(self, monkeypatch):
+        self._model_must_not_run(monkeypatch)
+        assert "don't have an email" in _chat("s1", "what email do you have for me?")
+        store.save_email("demo_user", "a@b.com")
+        assert "a@b.com" in _chat("s1", "what email do you have for me?")
+
+    def test_a_receipt_request_with_an_email_on_file_sends_it_for_the_latest_order(self, monkeypatch):
+        order = self._place_order()
+        store.save_email("demo_user", "a@b.com")
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", "send me the receipt")
+        assert order["order_id"] in reply and "a@b.com" in reply and "sent the confirmation" in reply
+
+    def test_a_receipt_request_with_no_email_asks_for_one_and_captures_the_reply(self, monkeypatch):
+        order = self._place_order()
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", "please resend my order confirmation")
+        assert "what email address" in reply.lower()
+        assert store.get_pending_email("s1") == order["order_id"]
+        assert "sent the confirmation" in _chat("s1", "a@b.com")
+        assert store.get_email("demo_user") == "a@b.com"
+
+    def test_a_receipt_request_with_no_orders_says_so(self, monkeypatch):
+        self._model_must_not_run(monkeypatch)
+        assert "no receipt to send" in _chat("s1", "send me the receipt")
+
+    def test_a_receipt_request_naming_an_email_saves_it_and_sends(self, monkeypatch):
+        order = self._place_order()
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", "email me the receipt at a@b.com")
+        assert store.get_email("demo_user") == "a@b.com"
+        assert order["order_id"] in reply
+
+    def test_a_cancelled_order_is_never_the_one_receipted(self, monkeypatch):
+        order = self._place_order()
+        store.cancel_order(order["order_id"], "demo_user")
+        self._model_must_not_run(monkeypatch)
+        assert "no receipt to send" in _chat("s1", "send me the receipt")
+
+    def test_other_email_messages_are_left_alone(self, monkeypatch):
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        for text in ["order Ibuprofen 200mg Tablets, my email is a@b.com", "reorder that and email me at a@b.com",
+                     "what is the email of the pharmacy support@shop.com?", "what is your email", "how do I get a receipt"]:
+            assert _chat("s1", text) == "from the model", text
+        assert store.get_email("demo_user") is None
+
+    def test_the_pending_email_prompt_still_owns_its_own_reply(self, monkeypatch):
+        order = self._place_order()
+        store.set_pending_email("s1", order["order_id"])
+        reply = _chat("s1", "my email is a@b.com")
+        assert "sent the confirmation" in reply and store.get_pending_email("s1") is None
