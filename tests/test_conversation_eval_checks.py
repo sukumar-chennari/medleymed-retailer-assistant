@@ -84,3 +84,19 @@ class TestEveryAddressConfirmationTurnChecksRealState:
             for turn in case["turns"]:
                 for name, fn in turn.get("state_checks", []):
                     assert isinstance(name, str) and name and callable(fn), (case["name"], name)
+
+
+class TestHarnessNeverSendsRealEmail:
+    """A developer machine's .env can hold live SMTP credentials, and the
+    harness drives the real chat route — so any scripted order reaching the
+    confirmation-email step would send a REAL message. Found Oct 16 when a
+    new case's receipt request did exactly that."""
+
+    def test_isolating_the_db_switches_real_smtp_off(self, monkeypatch):
+        from app import config, tools
+
+        monkeypatch.setattr(config, "SMTP_CONFIGURED", True)
+        monkeypatch.setattr(store, "DB_PATH", store.DB_PATH)  # restored after the test
+        ce._use_isolated_db()
+        assert config.SMTP_CONFIGURED is False
+        assert '"mode": "mock"' in tools.send_confirmation_email("someone@example.com", "details")

@@ -32,13 +32,24 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from app import agent, main, store
+from app import agent, config, main, store
 
 ORDER_ID_RE = re.compile(r"ord-\d{4}")
 CITATION_RE = re.compile(r"\(Source: [\w.-]+\.md")
 
 
+def _disable_real_email() -> None:
+    """This harness drives the real chat route, and a developer machine's .env
+    can hold live SMTP credentials: on such a machine any scripted order that
+    reaches the confirmation-email step would send a REAL message through that
+    account (found Oct 16, when a new case's receipt request did exactly that
+    to an @example.com address). tools.send_confirmation_email falls back to
+    its mock mode when SMTP isn't configured, so switch it off for the run."""
+    config.SMTP_CONFIGURED = False
+
+
 def _use_isolated_db() -> None:
+    _disable_real_email()
     tmp_dir = tempfile.mkdtemp(prefix="conversation_eval_db_")
     store.DB_PATH = Path(tmp_dir) / "conversation_eval.db"
     store._init_db()
