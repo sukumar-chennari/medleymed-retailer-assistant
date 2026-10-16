@@ -10,7 +10,7 @@ from pathlib import Path
 import chromadb
 import ollama
 
-from app import config, data_ingest
+from app import config, data_ingest, safety_topics
 
 _client = ollama.Client(host=config.OLLAMA_HOST)
 
@@ -48,6 +48,7 @@ STRENGTH_BOOST = 0.2
 # word is worse than not boosting at all, since it actively promotes the
 # wrong products instead of just failing to promote the right one.
 SECTION_BOOST = 0.15
+TOPIC_BOOST = 0.15
 SECTION_KEYWORDS = {
     "Dosage": ("dosage", "dose", "dosing", "how much", "how many"),
     "Common Side Effects": ("side effect", "side-effect"),
@@ -269,6 +270,7 @@ def search(query: str, top_k: int = 3) -> list[dict]:
     result = _collection.query(query_embeddings=[query_vector], n_results=fetch_n)
 
     best_title = _best_matching_title(query_lower)
+    topics_asked = safety_topics.covered_patterns_for(query)
     scored = []
     for doc, meta, distance in zip(result["documents"][0], result["metadatas"][0], result["distances"][0]):
         score = 1 - distance  # collection is cosine-space: distance = 1 - cosine_similarity
@@ -289,6 +291,14 @@ def search(query: str, top_k: int = 3) -> list[dict]:
         )
         if any(kw in query_lower for kw in section_keywords) and product_named:
             score = min(score + SECTION_BOOST, 1.0)
+        # Same idea for a safety topic the question asks about (pregnancy,
+        # asthma, alcohol, ...): the chunk that actually mentions it can sit in
+        # a Warnings section that raw similarity ranks below the Overview —
+        # "is Guaifenesin ... suitable for people with asthma" returned only
+        # the Overview, so the one sentence about asthma never reached the
+        # model. Gated on the product being named, like the boosts above.
+        if product_named and any(topic.search(doc) for topic in topics_asked):
+            score = min(score + TOPIC_BOOST, 1.0)
         scored.append({"product": meta["title"], "source": meta["source"], "section": meta["section"], "text": doc, "score": score})
 
     target_product = _identify_single_product(query_lower)

@@ -174,3 +174,12 @@ class TestSearchSectionBoostForProductsWithoutADistinctiveTitleWord:
             results = retrieval.search(query)
             assert results[0]["product"] == "Paracetamol 500mg Tablets", query
             assert results[0]["section"] == "Dosage", query
+
+
+class TestSearchSafetyTopicBoost:
+    def test_the_chunk_that_mentions_the_asked_topic_is_returned(self):
+        # Real bug: the only sentence about asthma sits in col-005's Warnings
+        # chunk, which raw similarity ranked below the Overview, so the model
+        # never saw it for this question.
+        results = retrieval.search("is Guaifenesin Expectorant Syrup suitable for people with asthma")
+        assert any("asthma" in r["text"].lower() for r in results)

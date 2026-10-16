@@ -12,7 +12,7 @@ import datetime
 import json
 import re
 
-from app import store, tools
+from app import safety_topics, store, tools
 
 CANCELLATION_NOT_DONE_REPLY = (
     "I haven't cancelled anything yet. Tell me which order you'd like to cancel "
@@ -71,6 +71,24 @@ def build_cancellation_confirmation(order: dict) -> str:
     return (
         f"Order {order['order_id']} ({order['product_name']}) has been cancelled.\n\n"
         f"You're welcome to place a new order anytime."
+    )
+
+
+def safety_topics_asked(question: str) -> list[str]:
+    return safety_topics.topics_asked(question)
+
+
+def uncovered_safety_topics(question: str, results: list[dict]) -> list[str]:
+    return safety_topics.uncovered(question, results)
+
+
+def kb_gap_reply(topics: list[str]) -> str:
+    listed = " and ".join(topics) if len(topics) < 3 else ", ".join(topics[:-1]) + " and " + topics[-1]
+    return (
+        f"I don't have information about {listed} for this medicine in my knowledge base, "
+        f"so I can't answer that reliably. Please ask a pharmacist or doctor — they can check it against "
+        f"your situation. I'm happy to answer other questions about dosage, side effects or warnings.\n\n"
+        f"{DISCLAIMER}"
     )
 
 

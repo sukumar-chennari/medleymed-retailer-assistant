@@ -26,7 +26,7 @@ from langchain_core.tools import tool
 from langchain_ollama import ChatOllama
 from langgraph.errors import GraphRecursionError
 
-from app import config, guardrails, store, tools
+from app import config, guardrails, retrieval, store, tools
 
 MAX_TOOL_ROUNDS = 6
 
@@ -1168,6 +1168,10 @@ class _GuardrailMiddleware(AgentMiddleware):
                 response = handler(request)
                 _log_tool_call(session_id, name, args, response.content)
                 self._track_retrieval(response.content)
+                try:
+                    self.turn_state["kb_results"] = json.loads(response.content).get("results") or []
+                except (TypeError, ValueError, AttributeError):
+                    self.turn_state["kb_results"] = []
                 return response
 
             if name == "check_order_status":
@@ -1232,6 +1236,23 @@ class _GuardrailMiddleware(AgentMiddleware):
         if sources:
             self.turn_state["retrieval_sources"] = sources
 
+    def _uncovered_safety_topics(self) -> list[str]:
+        """Safety topics the customer asked about that the knowledge base text
+        retrieved this turn does not mention. When the model never looked
+        anything up, the lookup is done here so a reply written from nothing
+        is caught as well."""
+        question = self.user_text or ""
+        if not guardrails.safety_topics_asked(question):
+            return []
+        results = self.turn_state.get("kb_results")
+        if results is None:
+            try:
+                results = retrieval.search(question)
+            except Exception as exc:  # embeddings unavailable: fail open, as before
+                print(f"[KB GAP CHECK ERROR] {exc}")
+                return []
+        return guardrails.uncovered_safety_topics(question, results)
+
     def after_agent(self, state, runtime) -> dict | None:
         last = state["messages"][-1]
         reply_text = last.content or ""
@@ -1282,6 +1303,11 @@ class _GuardrailMiddleware(AgentMiddleware):
             # guardrails.reply_for_deferred_order for the two distinct
             # observed failures this avoids.
             final = guardrails.reply_for_deferred_order(self.turn_state["deferred_order"])
+        elif gap_topics := self._uncovered_safety_topics():
+            # The model would otherwise answer from general knowledge and
+            # attribute it to our knowledge base — see guardrails._SAFETY_TOPICS.
+            _log_guard(session_id, "kb_gap_blocked", f"{gap_topics}: {reply_text!r}")
+            final = guardrails.kb_gap_reply(gap_topics)
         elif self.turn_state.get("order_status"):
             # The orders are real data, so the report is rendered from it, not
             # from the model's retelling. Observed (Oct 14): asked to "show my
@@ -1458,6 +1484,7 @@ def run_turn(
         "completed_order": None,
         "cancelled_order": None,
         "order_status": None,
+        "kb_results": None,
         "deferred_order": None,
         "blocked_ungrounded_lookup": False,
         "declined_forced": False,
