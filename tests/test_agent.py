@@ -37,6 +37,28 @@ class TestIntentRegexes:
     def test_info_question_re_does_not_match_plain_symptom_text(self):
         assert not agent.INFO_QUESTION_RE.search("I have a fever and a headache")
 
+    @pytest.mark.parametrize("text", [
+        "is cetirizine safe during pregnancy", "can I drink alcohol with paracetamol 500mg tablets",
+        "should I take ibuprofen with food", "does cetirizine make you drowsy",
+        "can I drive after taking cetirizine", "how long does paracetamol take to work",
+        "how should I store cough syrup", "can children take pseudoephedrine",
+        "is ibuprofen suitable for people with asthma", "what happens if I miss a dose of paracetamol",
+        "what is guaifenesin used for", "how many tablets in a pack of paracetamol",
+    ])
+    def test_everyday_safety_and_usage_questions_count_as_info_questions(self, text):
+        # Real bug: 9 of these 12 got a child-or-adult clarifying question
+        # instead of an answer.
+        assert agent.INFO_QUESTION_RE.search(text), text
+        assert agent._needs_clarification(text) is None
+
+    @pytest.mark.parametrize("text", [
+        "I have a fever and a headache", "I have a dry cough", "my son has a runny nose",
+        "my throat hurts and I can't sleep", "fever since yesterday, I'm tired",
+        "I need something for my cold, I work with kids", "high temperature in my baby",
+    ])
+    def test_symptom_statements_are_still_not_info_questions(self, text):
+        assert not agent.INFO_QUESTION_RE.search(text), text
+
     def test_order_intent_re(self):
         for text in ["order fev-001", "I'd like to buy this", "get me one of those"]:
             assert agent.ORDER_INTENT_RE.search(text), text

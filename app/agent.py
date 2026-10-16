@@ -177,7 +177,26 @@ INFO_QUESTION_RE = re.compile(
     r"\b(side\s*effects?|dosage|dosing|dose|warnings?|interactions?|overdose|"
     r"ingredients?|what'?s in|what is in|composition|"
     r"can (i|you) take|is it safe|"
-    r"how (much|many)\b.{0,40}(take|mg|dose))\b",
+    r"how (much|many)\b.{0,40}(take|mg|dose)|"
+    # Everyday safety/usage questions about a medicine. Found Oct 16: 9 of 12
+    # of these got the child-or-adult clarifying question (or a dry-or-wet
+    # one) instead of an answer, because only the topics above counted as
+    # info questions. Phrases, not bare words, so that describing symptoms
+    # ("I have a fever and can't drink") is never mistaken for one.
+    r"pregnan\w*|breast-?\s?feed\w*|nursing mother|lactat\w*|"
+    r"alcohol|"
+    r"(with|without|after|before)\s+(food|meals?|milk)|empty stomach|"
+    r"drows\w*|sedat\w*|(can|could|should) i (drive|driv\w*)|driving|"
+    r"asthma|diabet\w*|kidney|liver|high blood pressure|hypertension|heart (condition|disease|problems?)|ulcers?|"
+    r"how (long|quickly|fast)\b.{0,30}(work|last|take effect|kick in)|"
+    r"(missed|miss|forgot)\s+(a\s+|my\s+)?dose|forgot to take|"
+    r"used for|what does \w+ do|"
+    r"suitable|safe (for|to|during|with|in|when)|"
+    r"stor(e|age)\b|expir\w+|shelf life|"
+    r"(can|could|should) (children|kids|a child|babies|toddlers|infants|the elderly) (take|have|use)|"
+    r"give (it |this )?to (my )?(child|baby|kid|toddler)|"
+    r"how many (tablets|pills|capsules)|(tablets|pills|capsules) (in|per) (a |each |the )?(pack|box|bottle)|"
+    r"contraindicat\w*|allergic to|allergy to)\b",
     re.IGNORECASE,
 )
 
