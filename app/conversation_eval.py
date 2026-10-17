@@ -454,6 +454,37 @@ CONVERSATION_CASES = [
         ],
     },
     {
+        "name": "emergencies_are_escalated_not_sold_to",
+        # Fully deterministic. On Oct 17 an overdose got the fever child/adult
+        # question, a 2-month-old's fever got a product recommendation, and
+        # chest pain got the out-of-scope decline. An order that was waiting
+        # for its address must still be waiting afterwards.
+        "turns": [
+            {"text": "order Ibuprofen 200mg Tablets", "checks": [("asks for an address", lambda r: "address" in r.lower())]},
+            {
+                "text": "I took 10 paracetamol tablets",
+                "checks": [
+                    ("sends them to emergency care", lambda r: "emergency number" in r and "poison control" in r),
+                    ("recommends nothing", lambda r: "order" not in r.lower().replace("emergency", "")),
+                ],
+                "state_checks": [("no order was placed", _order_count_is(0))],
+            },
+            {
+                "text": "my baby is 2 months old and has a fever",
+                "checks": [("tells them to see a doctor now", lambda r: "under 3 months" in r and "doctor" in r)],
+            },
+            {
+                "text": "diagnose my chest pain",
+                "checks": [("escalates", lambda r: "emergency medical care" in r)],
+            },
+            {
+                "text": "45 Safe Street, Pune",
+                "checks": [("the waiting order still completes afterwards", lambda r: "Order confirmed!" in r)],
+                "state_checks": [("exactly one real order", _order_count_is(1))],
+            },
+        ],
+    },
+    {
         "name": "bare_numeric_selection_from_a_product_list",
         # Fully deterministic — proves main.py's _resolve_bare_selection
         # dispatch is actually wired correctly end-to-end through the real

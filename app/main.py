@@ -6,7 +6,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 
-from app import guardrails, store, tools
+from app import guardrails, red_flags, store, tools
 from app.agent import (
     INFO_QUESTION_RE,
     ORDER_INTENT_RE,
@@ -855,7 +855,15 @@ def chat(req: ChatRequest):
         last_recommended_product_id = store.get_last_recommended_product(req.session_id)
         selected_product = _resolve_bare_selection(text, last_products) if text else None
 
-        if pending_clarification and text:
+        if text and (red_flag_reply := red_flags.check(text)):
+            # An emergency (overdose, a baby under 3 months with a fever, chest
+            # pain, ...) is answered before any other branch and never reaches
+            # the model. Pending state is left alone: nothing here ordered,
+            # cleared or recommended anything.
+            reply = red_flag_reply
+            messages.append({"role": "user", "content": text})
+            messages.append({"role": "assistant", "content": reply})
+        elif pending_clarification and text:
             # Same reasoning as the deterministic question itself (see
             # agent.run_turn): the model fabricated an answer to this
             # question once already rather than admitting it needed to ask,
