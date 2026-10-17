@@ -6,7 +6,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 
-from app import guardrails, red_flags, store, tools
+from app import guardrails, hinglish, red_flags, store, tools
 from app.agent import (
     INFO_QUESTION_RE,
     ORDER_INTENT_RE,
@@ -842,6 +842,11 @@ def chat(req: ChatRequest):
     # then hallucinated a symptom lookup out of nothing). Strip first.
     if not (req.text and req.text.strip()) and not req.image_b64:
         raise HTTPException(status_code=400, detail="Provide text or an image.")
+
+    if req.text:
+        # Romanised Hindi symptom words get their English meaning appended so
+        # every branch below (and the model) understands them — see hinglish.py.
+        req.text = hinglish.gloss(req.text)
 
     messages = store.get_session_messages(req.session_id)
     text = req.text.strip() if req.text else ""

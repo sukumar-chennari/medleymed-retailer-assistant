@@ -485,6 +485,22 @@ CONVERSATION_CASES = [
         ],
     },
     {
+        "name": "hinglish_symptoms_are_understood",
+        # Fully deterministic. "mujhe bukhar hai" / "mera bachha ko khansi hai"
+        # were declined as out of scope before Oct 17.
+        "turns": [
+            {"text": "mujhe bukhar hai", "checks": [("asks child or adult", lambda r: "child, or for an adult" in r)]},
+            {"text": "khud ke liye", "checks": [("recommends an adult fever product", lambda r: "Paracetamol 500mg Tablets" in r and "Children's" not in r)]},
+        ],
+    },
+    {
+        "name": "hinglish_childs_cough_asks_dry_or_wet",
+        "turns": [
+            {"text": "mera bachha ko khansi hai", "checks": [("asks dry or wet", lambda r: "dry" in r.lower() and "mucus" in r.lower())]},
+            {"text": "sukhi khansi hai", "checks": [("recommends the children's product", lambda r: "Children's Cold & Cough Syrup" in r)]},
+        ],
+    },
+    {
         "name": "bare_numeric_selection_from_a_product_list",
         # Fully deterministic — proves main.py's _resolve_bare_selection
         # dispatch is actually wired correctly end-to-end through the real
