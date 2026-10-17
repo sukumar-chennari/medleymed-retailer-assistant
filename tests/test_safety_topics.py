@@ -39,6 +39,11 @@ class TestTopicsAsked:
         ("how should I store cough syrup", "storage"),
         ("is ibuprofen suitable for people with asthma", "asthma"),
         ("what happens if I miss a dose of paracetamol", "missed doses"),
+        ("how many tablets in a pack of paracetamol", "pack size"),
+        ("how many tablets are in a box", "pack size"),
+        ("how many ml in the bottle", "pack size"),
+        ("how long does paracetamol take to work", "how quickly it works"),
+        ("how quickly does ibuprofen start working", "how quickly it works"),
     ])
     def test_each_topic_is_recognised(self, question, topic):
         assert topic in safety_topics.topics_asked(question)
@@ -46,6 +51,9 @@ class TestTopicsAsked:
     @pytest.mark.parametrize("question", [
         "I have a fever and a headache", "dosage for paracetamol 500mg", "side effects of cetirizine",
         "order Ibuprofen 200mg Tablets", "my throat hurts and I can't sleep",
+        # dosage wording must not be mistaken for pack size or onset
+        "how many tablets can I take per day", "how many tablets should I take", "how much paracetamol per dose",
+        "how long can I take ibuprofen for", "how long should I wait between doses", "how long does a cold last",
     ])
     def test_ordinary_messages_ask_no_safety_topic(self, question):
         assert safety_topics.topics_asked(question) == []
@@ -118,3 +126,27 @@ class TestAfterAgentGrounding:
         request = SimpleNamespace(tool_call={"name": "lookup_medicine_info", "args": {"query": "q"}, "id": "c1"})
         mw.wrap_tool_call(request, handler)
         assert turn_state["kb_results"] == [{"text": "x"}]
+
+
+class TestProductFactsTheKnowledgeBaseLacks:
+    """The knowledge base has no text on pack size or onset, so any answer
+    to those was invented: "usually around 20-30 tablets per pack"."""
+
+    def test_a_dosage_chunk_is_not_mistaken_for_pack_size_coverage(self):
+        results = [{"text": "Adults typically take 1-2 tablets every 4-6 hours as needed."}]
+        assert guardrails.uncovered_safety_topics("how many tablets in a pack of paracetamol", results) == ["pack size"]
+
+    def test_real_pack_text_would_count_as_covered(self):
+        results = [{"text": "Each pack contains 24 tablets."}]
+        assert guardrails.uncovered_safety_topics("how many tablets in a pack", results) == []
+
+    def test_real_onset_text_would_count_as_covered(self):
+        results = [{"text": "Relief usually begins within 30 minutes."}]
+        assert guardrails.uncovered_safety_topics("how long does it take to work", results) == []
+
+    def test_the_real_knowledge_base_has_neither(self):
+        from app import retrieval
+
+        for question, label in [("how many tablets in a pack of paracetamol", "pack size"),
+                                ("how long does paracetamol take to work", "how quickly it works")]:
+            assert guardrails.uncovered_safety_topics(question, retrieval.search(question)) == [label]

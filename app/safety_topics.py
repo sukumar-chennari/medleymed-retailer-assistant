@@ -26,6 +26,19 @@ _SAFETY_TOPICS = (
     ("liver problems", r"\bliver\b|hepat", r"liver|hepat"),
     ("blood pressure", r"blood pressure|hypertens", r"blood pressure|hypertens"),
     ("stomach ulcers", r"\bulcers?\b", r"ulcer"),
+    # Product facts the knowledge base has no text for at all. Found Oct 17:
+    # "how many tablets in a pack of paracetamol" got "usually around 20-30
+    # tablets per pack" and "how long does paracetamol take to work" got
+    # "30 minutes to an hour ... according to our knowledge base" — both
+    # invented, both attributed to us. The "covered" patterns avoid bare
+    # "N tablets", which every dosage chunk contains.
+    ("pack size",
+     r"pack\s+size|per\s+(?:pack|box|bottle|strip)|(?:tablets|pills|capsules|ml)\s+(?:in|per|come\s+in)\s+(?:a\s+|each\s+|the\s+|one\s+)?(?:pack|box|bottle|strip)"
+     r"|how\s+many\s+\w+\s+(?:are\s+)?(?:in|come\s+in)\s+(?:a|each|the|one)\s+(?:pack|box|bottle|strip)|(?:pack|box|bottle)\s+(?:size|contain\w*)|how\s+big\s+is\s+(?:a|the)\s+(?:pack|bottle)",
+     r"\bpacks?\b|\bpackage\b|per\s+(?:box|bottle|strip)|bottle\s+(?:size|contains?)|contains?\s+\d+\s+(?:tablets|capsules|ml)|\d+\s?ml\s+(?:bottle|pack)"),
+    ("how quickly it works",
+     r"how\s+(?:long|quickly|fast|soon)\b.{0,30}(?:work|take\s+effect|kick\s+in|start|begin|relief|feel\s+better)|\bonset\b|time\s+to\s+(?:work|take\s+effect)",
+     r"\bonset\b|takes?\s+effect|start(?:s)?\s+(?:to\s+)?work|within\s+\d+\s*(?:minutes?|mins?|hours?)|\d+\s*(?:minutes?|mins?)\s+(?:to|after)|kick"),
     ("missed doses", r"(?:missed|miss|forgot)\s+(?:a\s+|my\s+)?dose|forgot to take", r"miss|forgot|skip"),
 )
 
