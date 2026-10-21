@@ -183,11 +183,16 @@ INFO_QUESTION_RE = re.compile(
     # one) instead of an answer, because only the topics above counted as
     # info questions. Phrases, not bare words, so that describing symptoms
     # ("I have a fever and can't drink") is never mistaken for one.
-    r"pregnan\w*|breast-?\s?feed\w*|nursing mother|lactat\w*|"
-    r"alcohol|"
+    # Condition words count only inside a question ("is ... safe during
+    # pregnancy", "can I drink alcohol with ..."), never as a statement: "I
+    # have a fever and a stomach ulcer" is a customer describing themselves,
+    # and treating it as an info question skipped the whole recommendation
+    # flow (and the screening of products against that condition).
+    r"(?:^|[.!?]\s+)(?:can|could|should|may|is|are|does|do|will|what|how)\b[^.?!]{0,60}?"
+    r"\b(?:pregnan\w*|breast-?\s?feed\w*|nursing mother|lactat\w*|alcohol|asthma|diabet\w*|kidney|liver|"
+    r"high blood pressure|hypertension|heart (?:condition|disease|problems?)|ulcers?|allerg\w*)\b|"
     r"(with|without|after|before)\s+(food|meals?|milk)|empty stomach|"
     r"drows\w*|sedat\w*|(can|could|should) i (drive|driv\w*)|driving|"
-    r"asthma|diabet\w*|kidney|liver|high blood pressure|hypertension|heart (condition|disease|problems?)|ulcers?|"
     r"how (long|quickly|fast)\b.{0,30}(work|last|take effect|kick in)|"
     r"(missed|miss|forgot)\s+(a\s+|my\s+)?dose|forgot to take|"
     r"used for|what does \w+ do|"
@@ -196,7 +201,7 @@ INFO_QUESTION_RE = re.compile(
     r"(can|could|should) (children|kids|a child|babies|toddlers|infants|the elderly) (take|have|use)|"
     r"give (it |this )?to (my )?(child|baby|kid|toddler)|"
     r"how many (tablets|pills|capsules)|(tablets|pills|capsules) (in|per) (a |each |the )?(pack|box|bottle)|"
-    r"contraindicat\w*|allergic to|allergy to)\b",
+    r"contraindicat\w*)\b",
     re.IGNORECASE,
 )
 

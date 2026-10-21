@@ -59,6 +59,28 @@ class TestIntentRegexes:
     def test_symptom_statements_are_still_not_info_questions(self, text):
         assert not agent.INFO_QUESTION_RE.search(text), text
 
+    @pytest.mark.parametrize("text", [
+        "I have a fever and stomach ulcer", "I have asthma and a fever, for myself",
+        "I have high blood pressure and a stuffy nose", "I'm pregnant and have a fever",
+        "I drink alcohol regularly and have a fever", "my father has kidney disease and a fever",
+        "I have diabetes and a cold", "I'm breastfeeding and have a cold",
+        "I'm allergic to ibuprofen, I have a fever", "I have a paracetamol allergy and a fever",
+    ])
+    def test_a_condition_stated_as_a_fact_is_not_an_info_question(self, text):
+        # Regression from widening the regex on Oct 16: bare condition words
+        # made "I have a fever and stomach ulcer" an info question, which
+        # skipped the whole recommendation flow.
+        assert not agent.INFO_QUESTION_RE.search(text), text
+
+    @pytest.mark.parametrize("text", [
+        "is ibuprofen suitable for people with asthma", "does ibuprofen affect the kidney",
+        "can I take paracetamol with liver problems", "should I avoid ibuprofen with a stomach ulcer",
+        "can I take ibuprofen if I'm allergic to aspirin", "is it safe if I have an allergy to penicillin",
+        "is it okay with high blood pressure",
+    ])
+    def test_the_same_words_inside_a_question_still_are(self, text):
+        assert agent.INFO_QUESTION_RE.search(text), text
+
     def test_order_intent_re(self):
         for text in ["order fev-001", "I'd like to buy this", "get me one of those"]:
             assert agent.ORDER_INTENT_RE.search(text), text
