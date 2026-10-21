@@ -104,3 +104,56 @@ class TestRoute:
         assert self._chat("s1", "I can't breathe") == red_flags.EMERGENCY_REPLY
         assert store.get_pending_order("s1")["product_id"] == "fev-001"
         assert store.list_orders("demo_user") == []
+
+
+class TestDoctorNote:
+    """Real gap (Oct 17 probe): "I have fever 104 for 5 days" and "my fever has
+    lasted a week" got the usual adult list with no mention of seeing a doctor."""
+
+    @pytest.mark.parametrize("text", [
+        "I have fever 104 for 5 days", "my fever has lasted a week", "fever of 39.8 C", "temperature 103.5 F",
+        "fever since 4 days", "I've had a fever for two weeks", "fever for three days", "fever 104",
+        "temperature is 40 degrees celsius", "my fever has been going for 5 days",
+    ])
+    def test_a_high_or_long_fever_gets_the_note(self, text):
+        assert red_flags.doctor_note(text) == red_flags.DOCTOR_NOTE
+
+    @pytest.mark.parametrize("text", [
+        "I have a fever", "I have a fever for 2 days", "fever since yesterday", "I have a cold for 5 days",
+        "temperature 99 F", "fever 38.5 C", "fever 101", "I took 500 mg of paracetamol for my fever",
+        "fever for 1 day", "order fev-004", "my 3 year old has a fever", "I'm 40 and have a fever",
+        "I'm 45 with a fever", "", "fever at 7pm",
+    ])
+    def test_an_ordinary_fever_does_not(self, text):
+        assert red_flags.doctor_note(text) is None
+
+
+@pytest.mark.usefixtures("isolated_db")
+class TestDoctorNoteRoute:
+    @pytest.fixture(autouse=True)
+    def _setup(self, monkeypatch):
+        from app import agent
+
+        monkeypatch.setattr(config, "SMTP_CONFIGURED", False)
+        monkeypatch.setattr(agent, "create_agent", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no model")))
+
+    def _chat(self, sid, text):
+        res = client.post("/api/chat", json={"session_id": sid, "text": text})
+        res.raise_for_status()
+        return res.json()["reply"]
+
+    def test_the_note_is_added_to_the_recommendation_not_to_the_question(self):
+        question = self._chat("s1", "I have fever 104 for 5 days")
+        assert "child, or for an adult" in question and red_flags.DOCTOR_NOTE not in question
+        recommendation = self._chat("s1", "for myself")
+        assert "(fev-001)" in recommendation and recommendation.rstrip().endswith(red_flags.DOCTOR_NOTE)
+        assert recommendation.count(red_flags.DOCTOR_NOTE) == 1
+
+    def test_an_ordinary_fever_gets_no_note(self):
+        self._chat("s1", "I have a fever")
+        assert red_flags.DOCTOR_NOTE not in self._chat("s1", "for myself")
+
+    def test_the_stored_session_matches_what_was_shown(self):
+        self._chat("s1", "I have a fever for a week")
+        shown = self._chat("s1", "for myself")
+        assert store.get_session_messages("s1")[-1]["content"] == shown

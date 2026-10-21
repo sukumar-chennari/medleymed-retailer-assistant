@@ -524,6 +524,21 @@ CONVERSATION_CASES = [
         ],
     },
     {
+        "name": "high_or_long_fever_adds_a_see_a_doctor_note",
+        # Fully deterministic. "fever 104 for 5 days" used to get the ordinary
+        # adult list with no mention of seeing a doctor.
+        "turns": [
+            {"text": "I have fever 104 for 5 days", "checks": [("asks child or adult", lambda r: "child, or for an adult" in r)]},
+            {
+                "text": "for myself",
+                "checks": [
+                    ("still offers the products", lambda r: "(fev-001)" in r),
+                    ("tells them a doctor should check it", lambda r: "should be checked by a doctor soon" in r),
+                ],
+            },
+        ],
+    },
+    {
         "name": "bare_numeric_selection_from_a_product_list",
         # Fully deterministic — proves main.py's _resolve_bare_selection
         # dispatch is actually wired correctly end-to-end through the real

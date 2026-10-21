@@ -803,13 +803,18 @@ def _reply_for_receipt_request(session_id: str) -> str:
 
 
 def _screen_recommendation(session_id: str, reply: str, messages: list[dict]) -> str:
-    """Applies the customer's stated conditions to a recommendation (see
-    contraindications.py) and keeps the stored session consistent with what
-    was actually shown."""
+    """Applies what the customer has said about themselves to a recommendation
+    — their conditions (see contraindications.py) and a high or long-lasting
+    fever (red_flags.doctor_note) — and keeps the stored session consistent
+    with what was actually shown."""
     user_texts = [m["content"] for m in messages if m.get("role") == "user" and isinstance(m.get("content"), str)]
-    screened, excluded = contraindications.screen_reply(
-        reply, contraindications.stated_text(user_texts), store.get_catalog()
-    )
+    stated = contraindications.stated_text(user_texts)
+    screened, excluded = contraindications.screen_reply(reply, stated, store.get_catalog())
+
+    note = red_flags.doctor_note(stated)
+    if note and contraindications.is_recommendation(screened) and note not in screened:
+        screened = f"{screened.rstrip()}\n\n{note}"
+
     if screened == reply:
         return reply
     if messages and messages[-1].get("role") == "assistant" and messages[-1].get("content") == reply:

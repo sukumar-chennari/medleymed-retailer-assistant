@@ -172,6 +172,10 @@ _RECOMMENDING_RE = re.compile(
 _BULLET_RE = re.compile(r"^\s*[-*]\s+.*\((?:fev|col)-\d{3}\)")
 
 
+def is_recommendation(reply: str) -> bool:
+    return bool(_RECOMMENDING_RE.search(reply))
+
+
 def refusal_for(product: dict, user_text: str) -> str | None:
     """Why this product shouldn't be ordered for this customer, or None."""
     reasons = [r for mode, r in concerns(user_text).get(product["id"], []) if mode == "exclude"]

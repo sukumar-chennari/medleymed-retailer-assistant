@@ -154,3 +154,69 @@ def check(text: str) -> str | None:
     if is_emergency(text):
         return EMERGENCY_REPLY
     return None
+
+
+# A high or long-lasting fever is not an emergency on its own, but it is not
+# something to treat with a product list and nothing else either. Found Oct 17:
+# "I have fever 104 for 5 days" and "my fever has lasted a week" got the usual
+# adult list with no mention of seeing a doctor. The note is appended to a
+# recommendation (see main._add_fever_advice); it never blocks one.
+DOCTOR_NOTE = (
+    "Please note: a fever this high or this long should be checked by a doctor soon — over-the-counter medicine "
+    "alone isn't enough. If there is trouble breathing, confusion, a stiff neck, a rash that doesn't fade, or "
+    f"the fever keeps climbing, get emergency care ({EMERGENCY_NUMBERS})."
+)
+
+_HIGH_FEVER_F = 103.0
+_HIGH_FEVER_C = 39.4
+_TEMP_RE = re.compile(r"(?<![\d.])(\d{2,3}(?:\.\d)?)\s*(?:°|degrees?|deg)?\s*(f\b|c\b|fahrenheit|celsius)?", re.IGNORECASE)
+_NUMBER_WORDS = {"three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10}
+_DURATION_RE = re.compile(
+    r"\b(?:for|since|past|last(?:ed|ing)?|over|about|almost|nearly)\s+(?:the\s+)?(?:last\s+|past\s+)?"
+    r"(\d{1,2}|three|four|five|six|seven|eight|nine|ten|a|one|two|several|many)\s*(days?|weeks?|week)\b",
+    re.IGNORECASE,
+)
+_LASTED_A_WEEK_RE = re.compile(r"\b(?:a|one|1)\s+week\b|\bweeks?\b", re.IGNORECASE)
+_LONG_DAYS = 3
+
+
+def _high_temperature(text: str) -> bool:
+    """With a unit the range is unambiguous. Without one only values that can
+    not be an age or a count are used: a decimal 39.4-43 (Celsius) or a whole
+    103-110 (Fahrenheit) — "I'm 40" must not read as a 40 C fever."""
+    for match in _TEMP_RE.finditer(text):
+        value = float(match.group(1))
+        unit = (match.group(2) or "").lower()
+        if unit.startswith("c"):
+            if _HIGH_FEVER_C <= value <= 43:
+                return True
+        elif unit.startswith("f"):
+            if _HIGH_FEVER_F <= value <= 110:
+                return True
+        elif "." in match.group(1):
+            if _HIGH_FEVER_C <= value <= 43:
+                return True
+        elif _HIGH_FEVER_F <= value <= 110:
+            return True
+    return False
+
+
+def _long_fever(text: str) -> bool:
+    for match in _DURATION_RE.finditer(text):
+        raw, unit = match.group(1).lower(), match.group(2).lower()
+        if unit.startswith("week"):
+            return True  # any number of weeks is well past 3 days
+        number = int(raw) if raw.isdigit() else _NUMBER_WORDS.get(raw) or (_LONG_DAYS if raw in {"several", "many"} else None)
+        if number is not None and number >= _LONG_DAYS:
+            return True
+    return False
+
+
+def doctor_note(text: str) -> str | None:
+    """DOCTOR_NOTE when the text describes a fever at or above 103 F / 39.4 C
+    or one that has lasted 3 days or more (not negated), else None."""
+    if not text or not _FEVER_RE.search(text):
+        return None
+    if _high_temperature(text) or _long_fever(text):
+        return DOCTOR_NOTE
+    return None
