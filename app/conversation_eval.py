@@ -501,6 +501,29 @@ CONVERSATION_CASES = [
         ],
     },
     {
+        "name": "stated_conditions_screen_the_recommendations",
+        # Fully deterministic. On Oct 21 "I have a fever and stomach ulcer"
+        # and "I'm on warfarin" were both offered Ibuprofen, and "high blood
+        # pressure and a stuffy nose" was recommended Pseudoephedrine.
+        "turns": [
+            {"text": "I have a fever and stomach ulcer", "checks": [("asks child or adult", lambda r: "child, or for an adult" in r)]},
+            {
+                "text": "for myself",
+                "checks": [
+                    ("offers the paracetamol products", lambda r: "(fev-001)" in r and "(fev-002)" in r),
+                    ("does not offer ibuprofen", lambda r: "(fev-003)" not in r.split("Left out")[0]),
+                    ("says why it was left out", lambda r: "Left out because of what you told me" in r and "stomach ulcer" in r),
+                ],
+            },
+            {
+                "text": "order Ibuprofen 200mg Tablets",
+                "checks": [("refuses to order it", lambda r: "I can't set up an order for Ibuprofen" in r)],
+                "state_checks": [("no order exists", _order_count_is(0))],
+            },
+            {"text": "2", "checks": [("the safe product can still be picked by number", lambda r: "address" in r.lower())]},
+        ],
+    },
+    {
         "name": "bare_numeric_selection_from_a_product_list",
         # Fully deterministic — proves main.py's _resolve_bare_selection
         # dispatch is actually wired correctly end-to-end through the real

@@ -6,7 +6,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 
-from app import guardrails, hinglish, red_flags, store, tools
+from app import contraindications, guardrails, hinglish, red_flags, store, tools
 from app.agent import (
     INFO_QUESTION_RE,
     ORDER_INTENT_RE,
@@ -802,6 +802,26 @@ def _reply_for_receipt_request(session_id: str) -> str:
     return f"Sure — what email address should I send the confirmation for order {order['order_id']} to?"
 
 
+def _screen_recommendation(session_id: str, reply: str, messages: list[dict]) -> str:
+    """Applies the customer's stated conditions to a recommendation (see
+    contraindications.py) and keeps the stored session consistent with what
+    was actually shown."""
+    user_texts = [m["content"] for m in messages if m.get("role") == "user" and isinstance(m.get("content"), str)]
+    screened, excluded = contraindications.screen_reply(
+        reply, contraindications.stated_text(user_texts), store.get_catalog()
+    )
+    if screened == reply:
+        return reply
+    if messages and messages[-1].get("role") == "assistant" and messages[-1].get("content") == reply:
+        messages[-1] = {**messages[-1], "content": screened}
+    last_products = store.get_last_products(session_id)
+    if last_products and excluded:
+        store.set_last_products(session_id, [p for p in last_products if p["id"] not in excluded])
+    if excluded and store.get_last_recommended_product(session_id) in excluded:
+        store.clear_last_recommended_product(session_id)
+    return screened
+
+
 def _reply_for_start_order_result(order: dict) -> str:
     if "error" in order:
         return f"Sorry, {order['error']}"
@@ -847,6 +867,7 @@ def chat(req: ChatRequest):
         # Romanised Hindi symptom words get their English meaning appended so
         # every branch below (and the model) understands them — see hinglish.py.
         req.text = hinglish.gloss(req.text)
+    contraindications.set_current_text(req.text or "")
 
     messages = store.get_session_messages(req.session_id)
     text = req.text.strip() if req.text else ""
@@ -1071,6 +1092,7 @@ def chat(req: ChatRequest):
                 image_media_type=req.image_media_type,
             )
 
+        reply = _screen_recommendation(req.session_id, reply, messages)
         store.save_session_messages(req.session_id, messages)
     except Exception:
         # Last-resort safety net: whatever went wrong (model, tool, network,

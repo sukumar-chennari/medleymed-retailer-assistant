@@ -5,7 +5,7 @@ import smtplib
 from email.message import EmailMessage
 from email.utils import formataddr
 
-from app import config, retrieval, store
+from app import config, contraindications, retrieval, store
 
 FEVER_KEYWORDS = [
     "fever", "temperature", "chills", "body ache", "headache",
@@ -232,6 +232,17 @@ def start_order(product_id: str, session_id: str, quantity: int = 1) -> str:
         return json.dumps({
             "error": f"Unknown product_id '{product_id}' — not in the fever/cold catalog."
         })
+
+    # A product the customer's own stated conditions rule out is not ordered
+    # (see contraindications.py): the model recommended Ibuprofen to someone
+    # with a stomach ulcer, and a customer can simply say "yes, order it".
+    history = [
+        m["content"] for m in store.get_session_messages(session_id)
+        if m.get("role") == "user" and isinstance(m.get("content"), str)
+    ]
+    refusal = contraindications.refusal_for(product, contraindications.stated_text(history))
+    if refusal:
+        return json.dumps({"error": refusal})
 
     quantity, clamp_reason = _clamp_quantity(quantity)
     clamp_note = f" (Note: {clamp_reason} — mention this to the user.)" if clamp_reason else ""
