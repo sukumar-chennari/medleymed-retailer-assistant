@@ -555,6 +555,22 @@ CONVERSATION_CASES = [
         ],
     },
     {
+        "name": "combination_questions_use_the_product_warnings",
+        # Fully deterministic. The model used to answer "yes, together" from
+        # general knowledge; the knowledge base warns against doubling up on
+        # paracetamol and says nothing about ibuprofen + paracetamol.
+        "turns": [
+            {
+                "text": "can I take paracetamol and Cold & Flu Multi-Symptom Relief together",
+                "checks": [("says no and quotes the warning", lambda r: r.startswith("No —") and "accidental overdose" in r)],
+            },
+            {
+                "text": "can I take ibuprofen and paracetamol together",
+                "checks": [("does not improvise an answer", lambda r: "doesn't say whether" in r and "pharmacist" in r)],
+            },
+        ],
+    },
+    {
         "name": "bare_numeric_selection_from_a_product_list",
         # Fully deterministic — proves main.py's _resolve_bare_selection
         # dispatch is actually wired correctly end-to-end through the real

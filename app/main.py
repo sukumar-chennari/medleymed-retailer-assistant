@@ -6,7 +6,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 
-from app import brands, contraindications, guardrails, hinglish, red_flags, store, tools
+from app import brands, contraindications, guardrails, hinglish, interactions, red_flags, store, tools
 from app.agent import (
     ORDER_INTENT_RE,
     _has_cancel_intent,
@@ -1051,6 +1051,12 @@ def chat(req: ChatRequest):
             brand_reply := _brand_availability_reply(text, req.session_id)
         ):
             reply = brand_reply
+            messages.append({"role": "user", "content": text})
+            messages.append({"role": "assistant", "content": reply})
+        elif text and not pending_product_id and not pending_address_confirmation and (
+            combination_reply := interactions.combination_reply(text, store.get_catalog())
+        ):
+            reply = combination_reply
             messages.append({"role": "user", "content": text})
             messages.append({"role": "assistant", "content": reply})
         elif text and (price_reply := _price_reply(text)):
