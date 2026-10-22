@@ -8,11 +8,11 @@ from fastapi.staticfiles import StaticFiles
 
 from app import brands, contraindications, guardrails, hinglish, red_flags, store, tools
 from app.agent import (
-    INFO_QUESTION_RE,
     ORDER_INTENT_RE,
     _has_cancel_intent,
     _has_reorder_intent,
     _has_unnegated_intent,
+    is_info_question,
     resolve_clarification,
     run_turn,
 )
@@ -527,7 +527,7 @@ def _resolve_named_product_order(text: str) -> tuple[dict, int] | None:
     words = re.findall(r"[a-z']+", text.lower())
     if not words or len(words) > _MAX_NAMED_ORDER_WORDS or "@" in text:
         return None
-    if words[0] in _QUESTION_WORDS or INFO_QUESTION_RE.search(text):
+    if words[0] in _QUESTION_WORDS or is_info_question(text):
         return None
     if not _has_unnegated_intent(text, ORDER_INTENT_RE):
         return None

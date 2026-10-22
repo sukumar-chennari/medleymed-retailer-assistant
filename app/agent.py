@@ -205,6 +205,48 @@ INFO_QUESTION_RE = re.compile(
     re.IGNORECASE,
 )
 
+# A DESCRIPTIVE question about a medicine — "what is dextromethorphan", "tell
+# me about Cold & Flu Multi-Symptom Relief", "how does cetirizine work" — is an
+# info question even though no dosage/side-effect word appears. Found Oct 22:
+# both got the child-or-adult (or dry-or-wet) clarifying question instead of an
+# answer, because the drug names are themselves symptom keywords and nothing
+# marked the sentence as a question about them. Needs BOTH a question frame and
+# a drug named. Deliberately NOT included: comparisons and alternatives ("which
+# is better, paracetamol or ibuprofen", "an alternative to ibuprofen", "instead
+# of paracetamol syrup"). Tried and reverted the same day: the knowledge base
+# has no comparison text, so the model improvised ("gentler stomach-friendly
+# profile", "acetaminophen syrup, not paracetamol syrup" — the same drug).
+# Those keep the clarification route, which only ever offers catalog products.
+_DRUG_QUESTION_FRAME_RE = re.compile(
+    r"\b(?:what\s+is|what's|what\s+are|tell\s+me\s+about|explain|describe|"
+    r"how\s+does\s+.{1,40}\s+work|what\s+does\s+.{1,30}\s+(?:do|contain|treat))\b",
+    re.IGNORECASE,
+)
+
+
+def _names_a_drug(text: str) -> bool:
+    lower = " ".join(text.lower().replace("\u2019", "'").split())
+    tokens = set(re.findall(r"[a-z]+", lower))
+    for product in store.get_catalog():
+        if product["name"].lower() in lower:
+            return True
+        for word in re.findall(r"[a-z]+", product["active_ingredient"].lower()):
+            if len(word) >= 5 and word in tokens:
+                return True
+    return False
+
+
+def is_info_question(text: str) -> bool:
+    """True for a question about a medicine: INFO_QUESTION_RE's topics, or a
+    descriptive frame ("what is", "tell me about", "how does ... work") with a
+    drug named."""
+    if not text:
+        return False
+    if INFO_QUESTION_RE.search(text):
+        return True
+    return bool(_DRUG_QUESTION_FRAME_RE.search(text)) and _names_a_drug(text)
+
+
 # Found via conversation_eval.py, not a live report: the system prompt
 # instructs citing "(Source: fev-001.md § Dosage)" for every RAG-grounded
 # answer, but a real reply correctly used the retrieved dosage facts while
@@ -537,7 +579,7 @@ def _needs_clarification(source_text: str) -> tuple[str, str] | None:
     adult?" only makes sense when the user might be about to order a
     product; a factual dosage/side-effect/warning question isn't that,
     regardless of which symptom keywords happen to appear in it."""
-    if INFO_QUESTION_RE.search(source_text):
+    if is_info_question(source_text):
         return None
     s = source_text.lower()
     categories = set(tools.classify_categories(source_text))
@@ -715,7 +757,7 @@ def _resolve_prequalified_clarification(source_text: str, session_id: str) -> st
     same real bug as _needs_clarification ("my baby has a runny nose and a
     fever" plainly gives the age for BOTH categories at once; resolving on
     the first match alone used to silently drop the other one)."""
-    if INFO_QUESTION_RE.search(source_text):
+    if is_info_question(source_text):
         return None
     s = source_text.lower()
     if "cough" in s:
@@ -754,7 +796,7 @@ def _inject_catalog_hint(parts: list, source_text: str, session_id: str) -> None
     wrong for a factual question and steers it away from ever calling
     lookup_medicine_info. The system prompt's own MEDICINE INFO
     instructions are sufficient without this hint getting in the way."""
-    if INFO_QUESTION_RE.search(source_text):
+    if is_info_question(source_text):
         return
 
     clarification = _needs_clarification(source_text)
@@ -1013,7 +1055,7 @@ class _GuardrailMiddleware(AgentMiddleware):
                 return ToolMessage(content="declined — told the user this is out of scope", tool_call_id=call_id, name=name)
 
             if name == "lookup_symptom":
-                if user_text and INFO_QUESTION_RE.search(user_text):
+                if user_text and is_info_question(user_text):
                     _log_guard(session_id, "info_question_redirect", f"{user_text!r}")
                     result = tools.lookup_medicine_info(user_text)
                     self._track_retrieval(result)

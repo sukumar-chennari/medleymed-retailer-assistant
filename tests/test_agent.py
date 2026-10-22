@@ -366,3 +366,29 @@ class TestKnownLimitationCoughFeverColdTripleCollision:
         assert reply is not None
         assert "Children's Cold & Cough Syrup" in reply
         assert "Children's Paracetamol Syrup" not in reply  # fever product silently dropped
+
+
+class TestIsInfoQuestion:
+    """Descriptive questions about a medicine are info questions (Oct 22: "what
+    is dextromethorphan" and "tell me about Cold & Flu Multi-Symptom Relief" got
+    the child-or-adult question instead of an answer). Comparisons and
+    alternatives are deliberately excluded: the knowledge base has no comparison
+    text and the model improvised one."""
+
+    @pytest.mark.parametrize("text", [
+        "what is dextromethorphan", "tell me about Cold & Flu Multi-Symptom Relief", "how does cetirizine work",
+        "what does guaifenesin do", "what is Ibuprofen 200mg Tablets", "explain pseudoephedrine",
+        "dosage for paracetamol 500mg",  # the original regex topics still count
+    ])
+    def test_descriptive_questions_naming_a_drug(self, text):
+        assert agent.is_info_question(text)
+        assert agent._needs_clarification(text) is None
+
+    @pytest.mark.parametrize("text", [
+        "what's better for fever, Tylenol or Advil", "paracetamol vs ibuprofen which is better for fever",
+        "is there an alternative to ibuprofen", "what else can I give my child instead of paracetamol syrup",
+        "what is the strongest fever medicine you have", "what is a fever", "I have a fever", "",
+        "order Ibuprofen 200mg Tablets", "what is your name", "tell me about your shop",
+    ])
+    def test_comparisons_and_non_drug_questions_are_not(self, text):
+        assert not agent.is_info_question(text)
