@@ -640,3 +640,60 @@ class TestEmailRequestsOutsideThePendingPrompt:
         store.set_pending_email("s1", order["order_id"])
         reply = _chat("s1", "my email is a@b.com")
         assert "sent the confirmation" in reply and store.get_pending_email("s1") is None
+
+
+class TestBrandsWeDoNotStock:
+    """Real bug (Oct 22 probe): "do you have Advil", "I want Tylenol", "I need
+    Crocin" and "do you have Dolo 650" all got "This demo only handles fever and
+    cold OTC guidance — I can't help with that here". They are fever medicines,
+    and each brand is just an ingredient we do stock."""
+
+    @staticmethod
+    def _model_must_not_run(monkeypatch):
+        def _boom(*args, **kwargs):
+            raise AssertionError("the model must not be reached")
+
+        monkeypatch.setattr(main, "run_turn", _boom)
+
+    @pytest.mark.parametrize("text, expected, absent", [
+        ("do you have Advil", ["fev-003"], ["fev-001", "col-003"]),
+        ("I want Tylenol", ["fev-001", "fev-002", "fev-004"], ["fev-003", "col-003"]),
+        ("I need Crocin", ["fev-001", "fev-002", "fev-004"], ["col-003"]),
+        ("do you have Dolo 650", ["fev-001", "fev-002"], ["fev-003"]),
+        ("any Zyrtec?", ["col-001"], ["col-002"]),
+        ("do you have Sudafed", ["col-002"], ["col-003"]),
+        ("do you have acetaminophen", ["fev-001"], ["fev-003"]),
+    ])
+    def test_a_brand_gets_the_products_with_the_same_active_ingredient(self, monkeypatch, text, expected, absent):
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", text)
+        assert "can't help with that here" not in reply
+        for product_id in expected:
+            assert f"({product_id})" in reply
+        for product_id in absent:
+            assert f"({product_id})" not in reply
+
+    def test_the_equivalents_can_be_picked_by_number_and_the_brand_is_not_ordered(self, monkeypatch):
+        self._model_must_not_run(monkeypatch)
+        _chat("s1", "do you have Advil")
+        assert [p["id"] for p in store.get_last_products("s1")] == ["fev-003"]
+        _chat("s1", "3")
+        assert store.get_pending_order("s1")["product_id"] == "fev-003"
+
+    @pytest.mark.parametrize("text", ["do you sell aspirin", "any NyQuil?", "can I get amoxicillin", "do you have Benadryl"])
+    def test_a_medicine_with_no_equivalent_gets_an_honest_not_stocked(self, monkeypatch, text):
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", text)
+        assert reply.startswith("We don't carry") and "show me all your products" in reply
+
+    def test_questions_about_a_brand_are_left_to_the_model(self, monkeypatch):
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        for text in ["what's better for fever, Tylenol or Advil", "is Tylenol safe in pregnancy",
+                     "how much Tylenol can I take", "I took Tylenol"]:
+            assert _chat("s1", text) == "from the model", text
+
+    def test_a_stated_condition_still_screens_the_equivalents(self, monkeypatch):
+        self._model_must_not_run(monkeypatch)
+        store.save_session_messages("s1", [{"role": "user", "content": "I have a stomach ulcer"}])
+        reply = _chat("s1", "do you have Advil")
+        assert reply.startswith("I can't recommend Ibuprofen 200mg Tablets")

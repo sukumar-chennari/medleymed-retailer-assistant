@@ -539,6 +539,22 @@ CONVERSATION_CASES = [
         ],
     },
     {
+        "name": "brands_we_do_not_stock",
+        # Fully deterministic. "do you have Advil" / "I want Tylenol" used to
+        # get the out-of-scope decline.
+        "turns": [
+            {
+                "text": "do you have Advil",
+                "checks": [
+                    ("offers the same-ingredient product", lambda r: "Ibuprofen 200mg Tablets (fev-003)" in r),
+                    ("says the brand is not carried", lambda r: "We don't carry Advil" in r),
+                ],
+            },
+            {"text": "I want Tylenol", "checks": [("offers plain paracetamol products", lambda r: "(fev-001)" in r and "(col-003)" not in r)]},
+            {"text": "any NyQuil?", "checks": [("honest not-stocked reply", lambda r: r.startswith("We don't carry"))]},
+        ],
+    },
+    {
         "name": "bare_numeric_selection_from_a_product_list",
         # Fully deterministic — proves main.py's _resolve_bare_selection
         # dispatch is actually wired correctly end-to-end through the real

@@ -6,7 +6,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 
-from app import contraindications, guardrails, hinglish, red_flags, store, tools
+from app import brands, contraindications, guardrails, hinglish, red_flags, store, tools
 from app.agent import (
     INFO_QUESTION_RE,
     ORDER_INTENT_RE,
@@ -827,6 +827,55 @@ def _screen_recommendation(session_id: str, reply: str, messages: list[dict]) ->
     return screened
 
 
+def _brand_availability_reply(text: str, session_id: str) -> str | None:
+    """"Do you have Advil / Tylenol / Crocin?" — see brands.py. A brand whose
+    active ingredient we stock gets those products (and they are remembered, so
+    a bare "2" picks one); anything else we don't carry gets an honest "we
+    don't carry that" plus what we do."""
+    found = brands.classify(text)
+    if not found:
+        return None
+    named_brands, others = found
+    ingredients = []
+    for brand in named_brands:
+        ingredient = brands.BRAND_INGREDIENT[brand]
+        if ingredient not in ingredients:
+            ingredients.append(ingredient)
+    products = [
+        p for p in store.get_catalog()
+        # Single-ingredient products only: a combination product that merely
+        # contains paracetamol is not what someone asking for Crocin wants.
+        if p["active_ingredient"].lower() in {ing.lower() for ing in ingredients}
+    ]
+    asked = ", ".join(w.title() if w not in ("ors",) else w.upper() for w in [*named_brands, *others])
+    if not products:
+        return (
+            f"We don't carry {asked}. I can help with the fever and cold medicines we stock — "
+            "tell me what you're dealing with, or say \"show me all your products\"."
+        )
+    store.set_last_products(session_id, products)
+    lines = []
+    for brand in named_brands:
+        if brands.is_ingredient_itself(brand):
+            lines.append(f"{brand.title()} is another name for {brands.BRAND_INGREDIENT[brand].lower()}, which we carry:")
+        else:
+            lines.append(
+                f"We don't carry {brand.title()}, but its active ingredient is "
+                f"{brands.BRAND_INGREDIENT[brand].lower()}, which we do:"
+            )
+        break
+    if len(named_brands) > 1:
+        lines = [f"We don't carry {asked}, but we do carry products with the same active ingredient"
+                 f" ({', '.join(i.lower() for i in ingredients)}):"]
+    if others:
+        lines.append(f"(We also don't carry {', '.join(o.title() for o in others)}.)")
+    lines.append("")
+    for p in products:
+        lines.append(f"- {p['name']} ({p['id']}) — ${p['price_usd']:.2f}")
+    lines += ["", "Would you like to order one of these?"]
+    return "\n".join(lines)
+
+
 def _reply_for_start_order_result(order: dict) -> str:
     if "error" in order:
         return f"Sorry, {order['error']}"
@@ -996,6 +1045,12 @@ def chat(req: ChatRequest):
             messages.append({"role": "assistant", "content": reply})
         elif text and not pending_product_id and not pending_address_confirmation and _is_receipt_request(text):
             reply = _reply_for_receipt_request(req.session_id)
+            messages.append({"role": "user", "content": text})
+            messages.append({"role": "assistant", "content": reply})
+        elif text and not pending_product_id and not pending_address_confirmation and (
+            brand_reply := _brand_availability_reply(text, req.session_id)
+        ):
+            reply = brand_reply
             messages.append({"role": "user", "content": text})
             messages.append({"role": "assistant", "content": reply})
         elif text and (price_reply := _price_reply(text)):
