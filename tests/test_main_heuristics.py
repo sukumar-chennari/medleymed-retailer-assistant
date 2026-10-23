@@ -364,3 +364,26 @@ class TestParseQuantity:
     ])
     def test_ambiguous_cues_are_left_to_the_model(self, rest):
         assert main._parse_quantity(rest) is None
+
+
+class TestInstructionsAreNeverAddresses:
+    """Real bug (Oct 23 probe): with an order awaiting its address, "make it 2"
+    was accepted as the shipping address — the order was placed to "make it 2"
+    and that text was saved as the customer's address for every later order."""
+
+    @pytest.mark.parametrize("text", [
+        "make it 2", "actually just 1", "make that 2 please", "change it to 2", "one more", "x2", "2 please",
+        "actually give me paracetamol instead", "wait, I changed my mind", "never mind, forget it", "let's do 2",
+        "I want 2 of them", "i meant 2", "can you make it 2", "no wait, just one", "make it twice",
+    ])
+    def test_a_change_of_mind_or_quantity_is_not_an_address(self, text):
+        assert main._looks_like_an_address(text) is False
+        assert main._looks_like_a_first_time_address(text) is False
+
+    @pytest.mark.parametrize("text", [
+        "No. 12, MG Road, Hyderabad", "No 5 Park Street", "Flat 2, Rose Lane", "2 Just Street, Pune",
+        "123 Main Street, Springfield", "10 High St, Leeds", "hyderabad", "Plot 9, Cold Storage Road",
+        "H.No 4-5-6, Banjara Hills",
+    ])
+    def test_real_addresses_still_pass(self, text):
+        assert main._looks_like_a_first_time_address(text) is True

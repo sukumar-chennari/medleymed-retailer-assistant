@@ -174,6 +174,37 @@ def _names_a_catalog_product(text: str) -> bool:
     return False
 
 
+# Instructions and changes of mind are never an address. Found Oct 23: with an
+# order awaiting its address, "make it 2" passed the digit-and-length test and
+# was saved as the shipping address — the order was placed to "make it 2", and
+# every later order asked the customer to confirm that text. The generic
+# fallback for a bare place name is equally permissive, so anything made only
+# of conversational words and small numbers is refused as well.
+_INSTRUCTION_START_RE = re.compile(
+    r"^\s*(?:(?:oh|well|so|um|uh|hmm|sorry)[\s,.!]+)*"
+    r"(?:make\s+(?:it|that|this)|change\s+(?:it|that|this|the\s+(?:order|quantity))|actually\b|wait\b|instead\b|"
+    r"never\s*mind|forget\s+(?:it|that)|i\s+(?:want|would|need|meant|changed|think|said)\b|i'd\b|let'?s\b|"
+    r"can\s+you\b|could\s+you\b|no\s+wait\b|just\s+(?:\d|one|two|three|a\b))",
+    re.IGNORECASE,
+)
+_CONVERSATIONAL_WORDS = {
+    "make", "it", "that", "this", "just", "only", "actually", "i", "want", "no", "wait", "instead", "please", "x",
+    "of", "the", "same", "more", "another", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+    "ten", "twice", "double", "units", "unit", "boxes", "box", "packs", "pack", "tablets", "tablet", "them", "those",
+    "quantity", "qty", "to", "a", "an", "and", "or", "yes", "yeah", "ok", "okay", "sure", "thanks", "thank", "you",
+    "changed", "mind", "my", "me", "give", "lets", "let", "s", "do", "is", "be", "so", "then", "also", "too", "much",
+}
+
+
+def _is_not_an_address_phrase(text: str) -> bool:
+    if _INSTRUCTION_START_RE.match(text):
+        return True
+    tokens = re.findall(r"[a-z]+|\d+", text.lower().replace("'", " "))
+    if not tokens:
+        return False
+    return all(t in _CONVERSATIONAL_WORDS or (t.isdigit() and len(t) <= 2) for t in tokens)
+
+
 def _looks_like_an_address(text: str) -> bool:
     """A pending order treats the user's next message as their shipping address —
     but only if it plausibly is one. Without this, a reply like "thank you" or
@@ -183,7 +214,7 @@ def _looks_like_an_address(text: str) -> bool:
     basic check, but is clearly a product reference, not an address."""
     if guardrails.PRODUCT_ID_RE.search(text):
         return False
-    if _names_a_catalog_product(text) or _names_an_order_id(text):
+    if _names_a_catalog_product(text) or _names_an_order_id(text) or _is_not_an_address_phrase(text):
         return False
     if _is_bare_email(text):
         return False
@@ -212,7 +243,7 @@ def _looks_like_a_first_time_address(text: str) -> bool:
         return True
     if guardrails.PRODUCT_ID_RE.search(text):
         return False
-    if _names_a_catalog_product(text) or _names_an_order_id(text):
+    if _names_a_catalog_product(text) or _names_an_order_id(text) or _is_not_an_address_phrase(text):
         return False
     if _is_bare_email(text):
         return False

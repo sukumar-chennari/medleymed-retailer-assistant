@@ -697,3 +697,22 @@ class TestBrandsWeDoNotStock:
         store.save_session_messages("s1", [{"role": "user", "content": "I have a stomach ulcer"}])
         reply = _chat("s1", "do you have Advil")
         assert reply.startswith("I can't recommend Ibuprofen 200mg Tablets")
+
+
+class TestChangeOfMindIsNotSavedAsTheAddress:
+    def test_make_it_2_does_not_ship_the_order_to_make_it_2(self, monkeypatch):
+        store.set_pending_order("s1", "fev-003", 1)
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        assert _chat("s1", "make it 2") == "from the model"
+        assert store.list_orders("demo_user") == []
+        assert store.get_address("demo_user") in (None, "")
+        assert store.get_pending_order("s1")["product_id"] == "fev-003"
+        assert "Order confirmed!" in _chat("s1", "5 Mid Rd, Pune")
+
+    def test_the_same_holds_for_an_address_confirmation(self, monkeypatch):
+        store.save_address("demo_user", "10 High St, Leeds")
+        store.set_pending_address_confirmation("s1", "fev-003", 1)
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        assert _chat("s1", "make it 2") == "from the model"
+        assert store.get_address("demo_user") == "10 High St, Leeds"
+        assert store.list_orders("demo_user") == []
