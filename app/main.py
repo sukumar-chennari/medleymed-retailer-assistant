@@ -907,6 +907,40 @@ def _brand_availability_reply(text: str, session_id: str) -> str | None:
     return "\n".join(lines)
 
 
+# "make it 2" / "actually just 1" while an order waits for its address or its
+# address confirmation changes THAT order's quantity. Found Oct 23: it was taken
+# as the shipping address (fixed above), and once that was refused it fell to
+# the model, which ignored the pending order ("So you'd like to confirm
+# ordering 1 ...") and left the quantity unchanged. Re-using tools.start_order
+# keeps the clamp to the per-order limit, the ingredient/condition refusal and
+# the pending state all in one place.
+_QUANTITY_CHANGE_RE = re.compile(
+    r"^\s*(?:(?:actually|no|wait|ok|okay|oh|sorry|hmm)[\s,.!]+)*"
+    r"(?:make\s+(?:it|that|this)(?:\s+to)?|change\s+(?:it|that|this|the\s+quantity)\s+to|let'?s\s+do|just|only|"
+    r"i\s+(?:want|need|meant|would\s+like)|i'd\s+like|x)\s*(?:be\s+)?"
+    r"(?P<qty>\d{1,3}|one|two|three|four|five|six|seven|eight|nine|ten|twice|double)\b"
+    r"(?:\s+(?:of\s+(?:them|those|it)|please|instead|only|units?|boxes|packs|tablets))*[\s.!]*$",
+    re.IGNORECASE,
+)
+
+
+def _quantity_change(text: str) -> int | None:
+    match = _QUANTITY_CHANGE_RE.match(text)
+    if not match:
+        return None
+    raw = match.group("qty").lower()
+    return int(raw) if raw.isdigit() else _NUMBER_WORDS[raw]
+
+
+def _reply_for_quantity_change(session_id: str, product_id: str, quantity: int) -> str:
+    order = json.loads(tools.start_order(product_id, session_id, quantity))
+    reply = _reply_for_start_order_result(order)
+    if "error" in order:
+        return reply
+    product = store.find_product(product_id)
+    return f"Got it — {order.get('quantity', quantity)} x {product['name']}. {reply}"
+
+
 def _reply_for_start_order_result(order: dict) -> str:
     if "error" in order:
         return f"Sorry, {order['error']}"
@@ -972,6 +1006,13 @@ def chat(req: ChatRequest):
             # the model. Pending state is left alone: nothing here ordered,
             # cleared or recommended anything.
             reply = red_flag_reply
+            messages.append({"role": "user", "content": text})
+            messages.append({"role": "assistant", "content": reply})
+        elif text and (pending_product_id or pending_address_confirmation) and (
+            (new_quantity := _quantity_change(text)) is not None
+        ):
+            pending = pending_product_id or pending_address_confirmation
+            reply = _reply_for_quantity_change(req.session_id, pending["product_id"], new_quantity)
             messages.append({"role": "user", "content": text})
             messages.append({"role": "assistant", "content": reply})
         elif pending_clarification and text:

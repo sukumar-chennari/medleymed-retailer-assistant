@@ -571,6 +571,30 @@ CONVERSATION_CASES = [
         ],
     },
     {
+        "name": "quantity_change_while_an_order_waits",
+        # Fully deterministic. On Oct 23 "make it 2" was saved as the shipping
+        # address: the order was placed "Shipping to: make it 2".
+        "turns": [
+            {"text": "order Ibuprofen 200mg Tablets", "checks": [("asks for an address", lambda r: "address" in r.lower())]},
+            {
+                "text": "make it 2",
+                "checks": [("changes the waiting order", lambda r: r.startswith("Got it — 2 x Ibuprofen 200mg Tablets") and "address" in r.lower())],
+                "state_checks": [("nothing was placed", _order_count_is(0))],
+            },
+            {
+                "text": "9 Quantity Lane, Pune",
+                "checks": [
+                    ("the order has the new quantity", lambda r: "Quantity: 2" in r),
+                    ("ships to the real address", lambda r: "Shipping to: 9 Quantity Lane, Pune" in r),
+                ],
+                "state_checks": [
+                    ("one real order", _order_count_is(1)),
+                    ("the saved address is the real one", lambda sid: store.get_address("demo_user") == "9 Quantity Lane, Pune"),
+                ],
+            },
+        ],
+    },
+    {
         "name": "bare_numeric_selection_from_a_product_list",
         # Fully deterministic — proves main.py's _resolve_bare_selection
         # dispatch is actually wired correctly end-to-end through the real

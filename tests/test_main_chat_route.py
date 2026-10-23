@@ -700,19 +700,83 @@ class TestBrandsWeDoNotStock:
 
 
 class TestChangeOfMindIsNotSavedAsTheAddress:
-    def test_make_it_2_does_not_ship_the_order_to_make_it_2(self, monkeypatch):
+    @pytest.mark.parametrize("text", ["wait, I changed my mind about the colour", "let's do something else", "actually can you help me with something"])
+    def test_a_change_of_mind_is_never_the_shipping_address(self, monkeypatch, text):
         store.set_pending_order("s1", "fev-003", 1)
         monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
-        assert _chat("s1", "make it 2") == "from the model"
+        assert _chat("s1", text) == "from the model"
         assert store.list_orders("demo_user") == []
         assert store.get_address("demo_user") in (None, "")
         assert store.get_pending_order("s1")["product_id"] == "fev-003"
+
+    def test_the_real_address_afterwards_still_completes_the_order(self, monkeypatch):
+        store.set_pending_order("s1", "fev-003", 1)
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        _chat("s1", "wait, I changed my mind about the colour")
         assert "Order confirmed!" in _chat("s1", "5 Mid Rd, Pune")
 
     def test_the_same_holds_for_an_address_confirmation(self, monkeypatch):
         store.save_address("demo_user", "10 High St, Leeds")
         store.set_pending_address_confirmation("s1", "fev-003", 1)
         monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
-        assert _chat("s1", "make it 2") == "from the model"
+        _chat("s1", "wait, I changed my mind about the colour")
         assert store.get_address("demo_user") == "10 High St, Leeds"
         assert store.list_orders("demo_user") == []
+
+
+class TestQuantityChangeWhileAnOrderWaits:
+    """"make it 2" used to be saved as the address; once refused it reached the
+    model, which ignored the pending order. It now changes that order."""
+
+    @staticmethod
+    def _model_must_not_run(monkeypatch):
+        def _boom(*args, **kwargs):
+            raise AssertionError("the model must not be reached")
+
+        monkeypatch.setattr(main, "run_turn", _boom)
+
+    @pytest.mark.parametrize("text, quantity", [
+        ("make it 2", 2), ("actually just 1", 1), ("make that two please", 2), ("change it to 2", 2),
+        ("let's do 2", 2), ("I want 2 of them", 2), ("no wait, make it twice", 2),
+    ])
+    def test_the_waiting_order_changes_quantity(self, monkeypatch, text, quantity):
+        store.set_pending_order("s1", "fev-003", 1)
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", text)
+        assert reply.startswith(f"Got it — {quantity} x Ibuprofen 200mg Tablets.") and "address" in reply
+        assert store.get_pending_order("s1") == {"product_id": "fev-003", "quantity": quantity}
+        assert store.list_orders("demo_user") == []
+
+    def test_the_new_quantity_reaches_the_real_order(self, monkeypatch):
+        self._model_must_not_run(monkeypatch)
+        store.set_pending_order("s1", "fev-003", 1)
+        _chat("s1", "make it 2")
+        reply = _chat("s1", "5 Mid Rd, Pune")
+        assert "Quantity: 2" in reply and "5 Mid Rd, Pune" in reply
+
+    def test_over_the_limit_is_capped_and_the_customer_is_told(self, monkeypatch):
+        store.set_pending_order("s1", "fev-003", 1)
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", "make it 5")
+        assert "capped at our per-order limit" in reply
+        assert store.get_pending_order("s1")["quantity"] == 2
+
+    def test_it_works_on_an_address_confirmation_too(self, monkeypatch):
+        store.save_address("demo_user", "10 High St, Leeds")
+        store.set_pending_address_confirmation("s1", "fev-003", 1)
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", "make it 2")
+        assert "10 High St, Leeds" in reply and "Got it — 2 x Ibuprofen" in reply
+        assert store.get_pending_address_confirmation("s1") == {"product_id": "fev-003", "quantity": 2}
+        assert "Quantity: 2" in _chat("s1", "yes")
+
+    def test_with_nothing_waiting_it_is_left_to_the_model(self, monkeypatch):
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        assert _chat("s1", "make it 2") == "from the model"
+        assert store.get_pending_order("s1") is None
+
+    def test_a_condition_refusal_still_applies_on_a_quantity_change(self, monkeypatch):
+        store.save_session_messages("s1", [{"role": "user", "content": "I have a stomach ulcer"}])
+        store.set_pending_order("s1", "fev-003", 1)
+        self._model_must_not_run(monkeypatch)
+        assert "I can't set up an order" in _chat("s1", "make it 2")
