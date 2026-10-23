@@ -780,3 +780,59 @@ class TestQuantityChangeWhileAnOrderWaits:
         store.set_pending_order("s1", "fev-003", 1)
         self._model_must_not_run(monkeypatch)
         assert "I can't set up an order" in _chat("s1", "make it 2")
+
+
+class TestRepeatTheLastOrder:
+    """Real bug (Oct 23 probe): "one more of the same" after an order reached
+    the model, which asked "what symptom is this for?" — and the follow-up "yes"
+    was then declined as out of scope."""
+
+    @staticmethod
+    def _place_order(quantity=1):
+        store.save_address("demo_user", "10 High St, Leeds")
+        return store.create_order("demo_user", "fev-003", "10 High St, Leeds", quantity)
+
+    @staticmethod
+    def _model_must_not_run(monkeypatch):
+        def _boom(*args, **kwargs):
+            raise AssertionError("the model must not be reached")
+
+        monkeypatch.setattr(main, "run_turn", _boom)
+
+    @pytest.mark.parametrize("text, quantity", [
+        ("one more of the same", 1), ("same again", 1), ("ok one more please", 1), ("two more", 2),
+        ("the same again", 1), ("another one of that", 1), ("again please", 1),
+    ])
+    def test_it_reorders_the_last_product_with_the_quantity_asked(self, monkeypatch, text, quantity):
+        self._place_order()
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", text)
+        assert "10 High St, Leeds" in reply  # asks to confirm the address on file
+        assert store.get_pending_address_confirmation("s1") == {"product_id": "fev-003", "quantity": quantity}
+        assert len(store.list_orders("demo_user")) == 1
+
+    def test_it_works_right_after_an_order_with_the_email_prompt_pending(self, monkeypatch):
+        order = self._place_order()
+        store.set_pending_email("s1", order["order_id"])
+        self._model_must_not_run(monkeypatch)
+        _chat("s1", "one more of the same")
+        assert store.get_pending_address_confirmation("s1")["product_id"] == "fev-003"
+        assert store.get_pending_email("s1") == order["order_id"]
+
+    def test_confirming_places_the_second_order(self, monkeypatch):
+        self._place_order()
+        self._model_must_not_run(monkeypatch)
+        _chat("s1", "two more")
+        assert "Quantity: 2" in _chat("s1", "yes")
+        assert len(store.list_orders("demo_user")) == 2
+
+    def test_with_no_previous_order_it_is_left_to_the_model(self, monkeypatch):
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        assert _chat("s1", "one more of the same") == "from the model"
+
+    def test_ambiguous_wording_is_left_to_the_model(self, monkeypatch):
+        self._place_order()
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        for text in ["another one", "another", "same", "show me another", "one more paracetamol", "another symptom"]:
+            assert _chat("s1", text) == "from the model", text
+        assert store.get_pending_address_confirmation("s1") is None

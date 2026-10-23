@@ -941,6 +941,39 @@ def _reply_for_quantity_change(session_id: str, product_id: str, quantity: int) 
     return f"Got it — {order.get('quantity', quantity)} x {product['name']}. {reply}"
 
 
+# "One more of the same" / "same again" / "another one" after an order. Found
+# Oct 23: the plain-reorder branch deliberately skips anything with a quantity
+# word, so these reached the model, which asked "what symptom is this for?" and
+# then declined the follow-up "yes" as out of scope. The product is the most
+# recent order's (tools.reorder_last resolves it from real data); the quantity
+# is the one asked for, 1 by default.
+_REPEAT_FILLER = r"(?:(?:ok(?:ay)?|and|yes|yeah|please|then|also|actually|sure)[\s,.!]+)*"
+_REPEAT_RES = [
+    re.compile(
+        rf"^\s*{_REPEAT_FILLER}(?P<qty>one|two|1|2)\s+more(?:\s+(?:one|of\s+(?:the\s+)?(?:same|that|those|it)))?"
+        r"(?:\s+please)?[\s.!]*$",
+        re.IGNORECASE,
+    ),
+    # Only explicit wording: a bare "another" / "another one" / "same" after a
+    # product list means "show me a different one", not "reorder".
+    re.compile(
+        rf"^\s*{_REPEAT_FILLER}(?:(?:the\s+)?same(?:\s+(?:thing|one|order))?\s+again|again(?:\s+please)?"
+        r"|another(?:\s+one)?\s+of\s+(?:the\s+)?(?:same|that|those|it))(?:\s+please)?[\s.!]*$",
+        re.IGNORECASE,
+    ),
+]
+_REPEAT_QTY = {"one": 1, "1": 1, "two": 2, "2": 2}
+
+
+def _repeat_request_quantity(text: str) -> int | None:
+    for pattern in _REPEAT_RES:
+        match = pattern.match(text)
+        if match:
+            raw = (match.groupdict().get("qty") or "one").lower()
+            return _REPEAT_QTY.get(raw, 1)
+    return None
+
+
 def _reply_for_start_order_result(order: dict) -> str:
     if "error" in order:
         return f"Sorry, {order['error']}"
@@ -1084,6 +1117,13 @@ def chat(req: ChatRequest):
             # used to send this message to the model. pending_email stays set
             # (the customer can still give an email), same as before.
             order = json.loads(tools.reorder_last(req.session_id))
+            reply = _reply_for_start_order_result(order)
+            messages.append({"role": "user", "content": text})
+            messages.append({"role": "assistant", "content": reply})
+        elif text and not pending_product_id and not pending_address_confirmation and (
+            (repeat_quantity := _repeat_request_quantity(text)) is not None
+        ) and store.list_orders("demo_user"):
+            order = json.loads(tools.reorder_last(req.session_id, repeat_quantity))
             reply = _reply_for_start_order_result(order)
             messages.append({"role": "user", "content": text})
             messages.append({"role": "assistant", "content": reply})

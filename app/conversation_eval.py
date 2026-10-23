@@ -595,6 +595,29 @@ CONVERSATION_CASES = [
         ],
     },
     {
+        "name": "one_more_of_the_same_after_an_order",
+        # Fully deterministic. On Oct 23 "one more of the same" reached the
+        # model, which asked "what symptom is this for?".
+        "turns": [
+            {"text": "order Ibuprofen 200mg Tablets", "checks": [("asks for an address", lambda r: "address" in r.lower())]},
+            {
+                "text": "10 High St, Leeds",
+                "checks": [("order placed", lambda r: "Order confirmed!" in r)],
+                "state_checks": [("one real order", _order_count_is(1))],
+            },
+            {
+                "text": "two more of the same",
+                "checks": [("asks to confirm the address on file", _asks_to_confirm_address("10 High St, Leeds"))],
+                "state_checks": [("no second order yet", _order_count_is(1)), ("awaiting confirmation", _awaiting_address_confirmation)],
+            },
+            {
+                "text": "yes",
+                "checks": [("the second order has the quantity asked for", lambda r: "Order confirmed!" in r and "Quantity: 2" in r and "ord-0002" in r)],
+                "state_checks": [("two real orders", _order_count_is(2))],
+            },
+        ],
+    },
+    {
         "name": "bare_numeric_selection_from_a_product_list",
         # Fully deterministic — proves main.py's _resolve_bare_selection
         # dispatch is actually wired correctly end-to-end through the real
