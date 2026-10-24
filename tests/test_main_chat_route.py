@@ -931,3 +931,48 @@ class TestAStaleClarificationDoesNotSwallowTheAddress:
         store.set_pending_clarification("s1", "fever")
         monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
         assert _chat("s1", "hmm not sure") == "from the model"
+
+
+class TestAnAffirmativeWithNothingWaiting:
+    """Real bug (Oct 24): a bare "yes" / "place the order" / "confirm" with
+    nothing in progress reached the model, which invented a context ("I'll need
+    you to confirm your shipping address before we can proceed") and tripped a
+    tool-argument validation error behind the scenes."""
+
+    @pytest.mark.parametrize("text", [
+        "place the order", "confirm", "go ahead", "yes please order it", "ok order", "proceed", "do it",
+    ])
+    def test_it_says_there_is_nothing_to_confirm_without_the_model(self, monkeypatch, text):
+        def _boom(*args, **kwargs):
+            raise AssertionError("the model must not be reached")
+
+        monkeypatch.setattr(main, "run_turn", _boom)
+        assert _chat("s1", text) == main.NOTHING_TO_CONFIRM_REPLY
+        assert store.list_orders("demo_user") == []
+
+    @pytest.mark.parametrize("text", ["yes", "place the order", "confirm", "go ahead", "do it"])
+    def test_a_just_recommended_product_still_starts_its_order(self, monkeypatch, text):
+        store.set_last_recommended_product("s1", "fev-003")
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        reply = _chat("s1", text)
+        assert reply != main.NOTHING_TO_CONFIRM_REPLY and "address" in reply.lower()
+        assert store.get_pending_order("s1")["product_id"] == "fev-003"
+
+    def test_each_open_context_keeps_its_own_handling(self, monkeypatch):
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        store.set_pending_email("e1", "ord-0001")
+        assert _chat("e1", "yes") != main.NOTHING_TO_CONFIRM_REPLY
+        store.set_pending_clarification("c1", "fever")
+        assert _chat("c1", "yes") != main.NOTHING_TO_CONFIRM_REPLY
+        store.save_address("demo_user", "10 High St, Leeds")
+        store.set_pending_address_confirmation("a1", "fev-003", 1)
+        assert "Order confirmed!" in _chat("a1", "yes")
+
+    @pytest.mark.parametrize("text", ["yes", "ok", "sure", "yeah", "yes please"])
+    def test_a_bare_yes_is_left_alone_it_often_answers_anything_else(self, monkeypatch, text):
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        assert _chat("s1", text) == "from the model"
+
+    def test_a_non_affirmative_message_is_unaffected(self, monkeypatch):
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        assert _chat("s1", "who is the prime minister") == "from the model"

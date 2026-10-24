@@ -1030,6 +1030,21 @@ def _repeat_request_quantity(text: str) -> int | None:
     return None
 
 
+# "place the order" / "confirm" / "go ahead" / "yes please order it" with NOTHING
+# waiting (no pending order, no address confirmation, no open question, no
+# product just recommended). A bare "yes" / "ok" / "sure" is deliberately NOT
+# included: after a dosage answer it usually replies to "anything else?".
+# Found Oct 24: these reached the model, which invented a context
+# ("I'll need you to confirm your shipping address before we can proceed",
+# "start the order process for ...") and tripped a tool-argument validation
+# error behind the scenes. There is nothing to confirm, so say that.
+_CONFIRM_ACTION_WORDS = {"confirm", "place", "order", "proceed", "ahead", "do", "continue"}
+NOTHING_TO_CONFIRM_REPLY = (
+    "There's nothing waiting for me to confirm right now. Tell me what you're dealing with (fever or cold), "
+    "name the product you'd like to order, or say \"show me all your products\"."
+)
+
+
 def _reply_for_start_order_result(order: dict) -> str:
     if "error" in order:
         return f"Sorry, {order['error']}"
@@ -1332,6 +1347,19 @@ def chat(req: ChatRequest):
             store.clear_last_recommended_product(req.session_id)
             order = json.loads(tools.start_order(last_recommended_product_id, req.session_id))
             reply = _reply_for_start_order_result(order)
+            messages.append({"role": "user", "content": text})
+            messages.append({"role": "assistant", "content": reply})
+        elif (
+            text
+            and _is_affirmative(text)
+            and _CONFIRM_ACTION_WORDS & set(re.findall(r"[a-z']+", text.lower()))
+            and not pending_product_id
+            and not pending_address_confirmation
+            and not pending_email_order_id
+            and not pending_clarification
+            and not last_recommended_product_id
+        ):
+            reply = NOTHING_TO_CONFIRM_REPLY
             messages.append({"role": "user", "content": text})
             messages.append({"role": "assistant", "content": reply})
         else:

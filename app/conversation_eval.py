@@ -642,6 +642,27 @@ CONVERSATION_CASES = [
         ],
     },
     {
+        "name": "confirming_with_nothing_waiting",
+        # Fully deterministic. On Oct 24 "place the order" with nothing in
+        # progress reached the model, which invented a shipping-address flow.
+        "turns": [
+            {
+                "text": "place the order",
+                "checks": [("says there is nothing to confirm", lambda r: "nothing waiting for me to confirm" in r)],
+                "state_checks": [("no order exists", _order_count_is(0))],
+            },
+            {
+                "text": "order Ibuprofen 200mg Tablets",
+                "checks": [("a real order flow starts when one is named", lambda r: "address" in r.lower())],
+            },
+            {
+                "text": "5 Confirm Road, Pune",
+                "checks": [("and completes", lambda r: "Order confirmed!" in r)],
+                "state_checks": [("one real order", _order_count_is(1))],
+            },
+        ],
+    },
+    {
         "name": "bare_numeric_selection_from_a_product_list",
         # Fully deterministic — proves main.py's _resolve_bare_selection
         # dispatch is actually wired correctly end-to-end through the real
