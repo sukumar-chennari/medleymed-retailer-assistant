@@ -1089,6 +1089,19 @@ def chat(req: ChatRequest):
         last_recommended_product_id = store.get_last_recommended_product(req.session_id)
         selected_product = _resolve_bare_selection(text, last_products) if text else None
 
+        # A clarifying question can be open while an order waits for its address
+        # ("order ibuprofen 400mg" mid-order reaches the model, which asks
+        # child-or-adult). The customer's next message — the address — was then
+        # taken as the answer, fell through to the model, and the model invented
+        # "Ibuprofen 400mg Tablets" (found Oct 24). While an order waits, a
+        # reply that is not a recognised answer drops the stale question and is
+        # handled by the order branches below.
+        clarification_answer = None
+        if pending_clarification and text and (pending_product_id or pending_address_confirmation):
+            clarification_answer = resolve_clarification(pending_clarification, text, req.session_id)
+            store.clear_pending_clarification(req.session_id)
+            pending_clarification = None
+
         if text and (red_flag_reply := red_flags.check(text)):
             # An emergency (overdose, a baby under 3 months with a fever, chest
             # pain, ...) is answered before any other branch and never reaches
@@ -1102,6 +1115,10 @@ def chat(req: ChatRequest):
         ):
             pending = pending_product_id or pending_address_confirmation
             reply = _reply_for_quantity_change(req.session_id, pending["product_id"], new_quantity)
+            messages.append({"role": "user", "content": text})
+            messages.append({"role": "assistant", "content": reply})
+        elif clarification_answer:
+            reply = clarification_answer
             messages.append({"role": "user", "content": text})
             messages.append({"role": "assistant", "content": reply})
         elif pending_clarification and text:

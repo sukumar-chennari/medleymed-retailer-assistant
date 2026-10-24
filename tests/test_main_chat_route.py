@@ -887,3 +887,47 @@ class TestSwitchingProductWhileAnOrderWaits:
         monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
         _chat("s1", text)
         assert store.get_pending_order("s1")["product_id"] == "col-004", text
+
+
+class TestAStaleClarificationDoesNotSwallowTheAddress:
+    """Real bug (Oct 24): mid-order, "order ibuprofen 400mg" reached the model,
+    which asked child-or-adult. The customer's next message — the shipping
+    address — was taken as the answer, fell through to the model, and the model
+    invented "Ibuprofen 400mg Tablets"."""
+
+    @staticmethod
+    def _model_must_not_run(monkeypatch):
+        def _boom(*args, **kwargs):
+            raise AssertionError("the model must not be reached")
+
+        monkeypatch.setattr(main, "run_turn", _boom)
+
+    def test_the_address_completes_the_waiting_order(self, monkeypatch):
+        store.set_pending_order("s1", "fev-001", 1)
+        store.set_pending_clarification("s1", "fever")
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", "3 Switch Street, Pune")
+        assert "Order confirmed!" in reply and "Paracetamol 500mg Tablets" in reply
+        assert "3 Switch Street, Pune" in reply
+        assert store.get_pending_clarification("s1") is None
+
+    def test_a_real_answer_to_the_question_is_still_used(self, monkeypatch):
+        store.set_pending_order("s1", "fev-001", 1)
+        store.set_pending_clarification("s1", "fever")
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", "adult")
+        assert "(fev-001)" in reply and "Which one would you like to try?" in reply
+        assert store.get_pending_order("s1")["product_id"] == "fev-001"
+
+    def test_it_works_for_an_address_confirmation_too(self, monkeypatch):
+        store.save_address("demo_user", "10 High St, Leeds")
+        store.set_pending_address_confirmation("s1", "fev-001", 1)
+        store.set_pending_clarification("s1", "fever")
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", "yes")
+        assert "Order confirmed!" in reply and "10 High St, Leeds" in reply
+
+    def test_without_an_order_waiting_an_unrecognised_reply_still_reaches_the_model(self, monkeypatch):
+        store.set_pending_clarification("s1", "fever")
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        assert _chat("s1", "hmm not sure") == "from the model"
