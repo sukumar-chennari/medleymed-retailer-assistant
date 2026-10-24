@@ -12,6 +12,7 @@ from app.agent import (
     _has_cancel_intent,
     _has_reorder_intent,
     _has_unnegated_intent,
+    _names_a_drug,
     is_info_question,
     resolve_clarification,
     run_turn,
@@ -196,8 +197,21 @@ _CONVERSATIONAL_WORDS = {
 }
 
 
+# "order ibuprofen 400mg" (a strength we don't stock) names no catalog product,
+# so the product-name check let it through as an address: with an order waiting
+# it was saved as the shipping address and the waiting order was placed to it.
+# A sentence that starts like an order AND names a drug is an order, not an
+# address ("Order Street 5, Mumbai" names no drug and still passes).
+_STARTS_LIKE_AN_ORDER_RE = re.compile(
+    r"^\s*(?:(?:please|actually|no|wait|ok|okay)[\s,.!]+)*(?:order|buy|get\s+me|give\s+me|send\s+me|i\s+(?:want|need)|i'd\s+like|switch\s+to)\b",
+    re.IGNORECASE,
+)
+
+
 def _is_not_an_address_phrase(text: str) -> bool:
     if _INSTRUCTION_START_RE.match(text):
+        return True
+    if _STARTS_LIKE_AN_ORDER_RE.match(text) and (_names_a_drug(text) or _STRENGTH_RE.search(text)):
         return True
     tokens = re.findall(r"[a-z]+|\d+", text.lower().replace("'", " "))
     if not tokens:
@@ -554,30 +568,72 @@ def _parse_quantity(rest: str) -> int | None:
     return int(token) if token.isdigit() else _NUMBER_WORDS[token]
 
 
+# Verbs that order a product without saying "order": found Oct 23 — with an
+# order waiting, "actually give me paracetamol 500mg instead" got the
+# child-or-adult question and left the old order pending. Needs both these
+# verbs and partial names ("paracetamol 500mg", a unique ingredient).
+_NAMED_ORDER_VERB_RE = re.compile(
+    r"\b(?:give\s+me|send\s+me|i\s+want|i\s+need|i'd\s+like|i\s+would\s+like|switch\s+to|change\s+to|swap\s+to|"
+    r"go\s+(?:with|for)|let'?s\s+(?:do|go\s+with)|instead)\b",
+    re.IGNORECASE,
+)
+# "I want to KNOW about ibuprofen" is not an order.
+_NOT_AN_ORDER_RE = re.compile(
+    r"\b(?:know|learn|ask|asking|wonder|understand|find\s+out|whether|about|if|how|why|safe|safely|dosage|dose|side\s*effects?|"
+    r"price|cost|availab\w*|stock|compare|difference)\b",
+    re.IGNORECASE,
+)
+_STRENGTH_RE = re.compile(r"\b\d+\s?mg\b", re.IGNORECASE)
+_NAME_WITH_STRENGTH_RE = re.compile(r"^([a-z]+)(?:\s+extra\s+strength)?\s+(\d+mg)\b")
+
+
+def _product_aliases(product: dict, catalog: list[dict]) -> list[str]:
+    """Ways a customer names a product: the full name, "paracetamol 500mg", and
+    an active-ingredient word that belongs to this product alone ("ibuprofen" —
+    but not "paracetamol", which several products contain)."""
+    aliases = [product["name"].lower()]
+    strength = _NAME_WITH_STRENGTH_RE.match(aliases[0])
+    if strength:
+        aliases.append(f"{strength.group(1)} {strength.group(2)}")
+    for word in re.findall(r"[a-z]+", product["active_ingredient"].lower()):
+        if len(word) >= 5 and sum(1 for p in catalog if word in p["active_ingredient"].lower()) == 1:
+            aliases.append(word)
+    return sorted(set(aliases), key=len, reverse=True)
+
+
 def _resolve_named_product_order(text: str) -> tuple[dict, int] | None:
     words = re.findall(r"[a-z']+", text.lower())
     if not words or len(words) > _MAX_NAMED_ORDER_WORDS or "@" in text:
         return None
     if words[0] in _QUESTION_WORDS or is_info_question(text):
         return None
-    if not _has_unnegated_intent(text, ORDER_INTENT_RE):
+    ordering = _has_unnegated_intent(text, ORDER_INTENT_RE)
+    gives = _has_unnegated_intent(text, _NAMED_ORDER_VERB_RE) and not _NOT_AN_ORDER_RE.search(text)
+    if not (ordering or gives):
         return None
 
     normalized = " ".join(text.lower().replace("\u2019", "'").split())
+    catalog = store.get_catalog()
     named = {}
-    for product in store.get_catalog():
-        name = product["name"].lower()
-        if name in normalized:
-            named[product["id"]] = (product, name)
+    for product in catalog:
+        for alias in _product_aliases(product, catalog):
+            if re.search(rf"(?<![a-z]){re.escape(alias)}(?![a-z])", normalized):
+                named[product["id"]] = (product, alias)
+                break
     for product_id in {m.lower() for m in guardrails.PRODUCT_ID_RE.findall(text)}:
         product = store.find_product(product_id)
         if product:
-            named.setdefault(product["id"], (product, product["id"]))
+            named.setdefault(product["id"], (product, product_id))
     if len(named) != 1:
         return None
     product, matched = next(iter(named.values()))
 
-    quantity = _parse_quantity(normalized.replace(matched, " "))
+    rest = normalized.replace(matched, " ")
+    # A strength left over after the name ("ibuprofen 400mg") is a different
+    # product than the one we matched.
+    if _STRENGTH_RE.search(rest):
+        return None
+    quantity = _parse_quantity(rest)
     if quantity is None:
         return None
     return product, quantity

@@ -387,3 +387,24 @@ class TestInstructionsAreNeverAddresses:
     ])
     def test_real_addresses_still_pass(self, text):
         assert main._looks_like_a_first_time_address(text) is True
+
+
+class TestAnOrderSentenceNamingADrugIsNotAnAddress:
+    """Real bug (Oct 24): with an order waiting, "order ibuprofen 400mg" (a
+    strength we don't stock) matched no catalog product, so it was saved as the
+    shipping address and the waiting order was placed to that text."""
+
+    @pytest.mark.parametrize("text", [
+        "order ibuprofen 400mg", "buy paracetamol 1000mg", "I want ibuprofen 400mg", "give me cetirizine 20mg",
+        "please order Ibuprofen 400mg", "get me paracetamol 500mg x2",
+    ])
+    def test_it_is_refused(self, text):
+        assert main._looks_like_an_address(text) is False
+        assert main._looks_like_a_first_time_address(text) is False
+
+    @pytest.mark.parametrize("text", [
+        "Order Street 5, Mumbai", "Buy Lane 12, Delhi", "12 Order Road, Pune", "Flat 4, 10 Paracetamol Lane",
+        "Get Me Nagar 400001",
+    ])
+    def test_real_addresses_that_start_like_an_order_still_pass(self, text):
+        assert main._looks_like_a_first_time_address(text) is True

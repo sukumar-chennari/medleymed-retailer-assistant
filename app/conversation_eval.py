@@ -618,6 +618,30 @@ CONVERSATION_CASES = [
         ],
     },
     {
+        "name": "switch_the_waiting_order_to_another_product",
+        # Fully deterministic. On Oct 23 "actually give me paracetamol 500mg
+        # instead" got the child-or-adult question and left the old order
+        # pending; on Oct 24 "order ibuprofen 400mg" was saved as the address.
+        "turns": [
+            {"text": "order Ibuprofen 200mg Tablets", "checks": [("asks for an address", lambda r: "address" in r.lower())]},
+            {
+                "text": "actually give me paracetamol 500mg instead",
+                "checks": [("asks for an address again", lambda r: "address" in r.lower() and "child, or for an adult" not in r)],
+                "state_checks": [("nothing placed", _order_count_is(0))],
+            },
+            {
+                "text": "order ibuprofen 400mg",
+                "checks": [("is not taken as the address", lambda r: "Order confirmed!" not in r)],
+                "state_checks": [("still nothing placed", _order_count_is(0))],
+            },
+            {
+                "text": "3 Switch Street, Pune",
+                "checks": [("the switched product is what ships", lambda r: "Order confirmed!" in r and "Paracetamol 500mg Tablets" in r)],
+                "state_checks": [("one real order", _order_count_is(1))],
+            },
+        ],
+    },
+    {
         "name": "bare_numeric_selection_from_a_product_list",
         # Fully deterministic — proves main.py's _resolve_bare_selection
         # dispatch is actually wired correctly end-to-end through the real

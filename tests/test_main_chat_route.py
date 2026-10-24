@@ -344,7 +344,7 @@ class TestNamedProductOrder:
             "don't order Ibuprofen 200mg Tablets", "dosage of Ibuprofen 200mg Tablets",
             "what are the side effects of Ibuprofen 200mg Tablets before I order",
             "I'd like to order Ibuprofen 200mg Tablets or Cetirizine 10mg Antihistamine Tablets",
-            "Ibuprofen 200mg Tablets", "order ibuprofen",
+            "Ibuprofen 200mg Tablets", "order paracetamol",
             "order Ibuprofen 200mg Tablets and email me at a@b.com",
             "I would really like to order Ibuprofen 200mg Tablets for the whole entire family please today",
         ]:
@@ -366,10 +366,16 @@ class TestProductNameIsNotTakenAsAnAddress:
     def test_a_product_phrase_with_an_order_waiting_never_becomes_the_address(self, monkeypatch):
         store.set_pending_order("s1", "fev-001", 1)
         monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
-        for text in ["Ibuprofen 200mg Tablets", "I want Cetirizine 10mg", "paracetamol 500mg please"]:
+        for text in ["Ibuprofen 200mg Tablets", "paracetamol 500mg please"]:
             assert _chat("s1", text) == "from the model", text
             assert store.list_orders("demo_user") == [], text
             assert store.get_pending_order("s1")["product_id"] == "fev-001", text
+        # "I want Cetirizine 10mg" is a clear request for that product: it
+        # switches the waiting order (see TestSwitchingProductWhileAnOrderWaits)
+        # but is never taken as the address either.
+        _chat("s1", "I want Cetirizine 10mg")
+        assert store.list_orders("demo_user") == []
+        assert store.get_address("demo_user") in (None, "")
 
     def test_a_real_address_still_completes_the_order(self, monkeypatch):
         store.set_pending_order("s1", "fev-001", 1)
@@ -836,3 +842,48 @@ class TestRepeatTheLastOrder:
         for text in ["another one", "another", "same", "show me another", "one more paracetamol", "another symptom"]:
             assert _chat("s1", text) == "from the model", text
         assert store.get_pending_address_confirmation("s1") is None
+
+
+class TestSwitchingProductWhileAnOrderWaits:
+    """Real gap (Oct 23 probe): "actually give me paracetamol 500mg instead",
+    said while an order waited for its address, got the child-or-adult question
+    and left the old order pending. It needs natural verbs ("give me", "I want")
+    and partial names ("paracetamol 500mg", a unique ingredient)."""
+
+    @staticmethod
+    def _model_must_not_run(monkeypatch):
+        def _boom(*args, **kwargs):
+            raise AssertionError("the model must not be reached")
+
+        monkeypatch.setattr(main, "run_turn", _boom)
+
+    @pytest.mark.parametrize("text, product_id", [
+        ("actually give me paracetamol 500mg instead", "fev-001"), ("give me paracetamol 650mg", "fev-002"),
+        ("switch to Paracetamol Extra Strength 650mg", "fev-002"), ("I want cetirizine", "col-001"),
+        ("i'd like guaifenesin", "col-005"), ("send me pseudoephedrine please", "col-002"),
+        ("let's go with ibuprofen 200mg", "fev-003"), ("order ibuprofen", "fev-003"),
+    ])
+    def test_the_waiting_order_switches_to_the_named_product(self, monkeypatch, text, product_id):
+        store.set_pending_order("s1", "col-004", 1)
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", text)
+        assert "address" in reply.lower()
+        assert store.get_pending_order("s1")["product_id"] == product_id
+        assert store.list_orders("demo_user") == []
+
+    def test_a_quantity_is_carried_through_a_switch(self, monkeypatch):
+        store.set_pending_order("s1", "col-004", 1)
+        self._model_must_not_run(monkeypatch)
+        _chat("s1", "order 2 ibuprofen")
+        assert store.get_pending_order("s1") == {"product_id": "fev-003", "quantity": 2}
+
+    @pytest.mark.parametrize("text", [
+        "I want to know about ibuprofen", "give me paracetamol", "order dextromethorphan", "I need ibuprofen 400mg",
+        "order ibuprofen 400mg", "give me ibuprofen and cetirizine", "is ibuprofen safe", "I want ibuprofen dosage",
+        "do you have ibuprofen", "I wonder if ibuprofen works", "don't order ibuprofen",
+    ])
+    def test_ambiguous_questions_and_other_strengths_are_left_to_the_model(self, monkeypatch, text):
+        store.set_pending_order("s1", "col-004", 1)
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        _chat("s1", text)
+        assert store.get_pending_order("s1")["product_id"] == "col-004", text
