@@ -12,6 +12,8 @@ catalog is passed in."""
 
 import re
 
+from app import brands
+
 # active ingredient word -> the classes it belongs to
 _CLASSES = {
     "paracetamol": {"paracetamol"},
@@ -23,7 +25,12 @@ _CLASSES = {
     "dextromethorphan": {"cough_suppressant", "dextromethorphan"},
     "guaifenesin": {"expectorant"},
 }
+# Medicines we don't carry that are NSAIDs, like ibuprofen: the knowledge base
+# says ibuprofen must not be combined with "other NSAIDs". That aspirin and
+# naproxen ARE NSAIDs is general knowledge; the warning itself is the KB's.
+_NSAID_NAMES = {"aspirin", "naproxen", "diclofenac", "disprin"}
 _CLASS_LABEL = {
+    "nsaid": "an anti-inflammatory (NSAID)",
     "paracetamol": "paracetamol",
     "decongestant": "a decongestant",
     "dextromethorphan": "dextromethorphan",
@@ -33,6 +40,7 @@ _CLASS_LABEL = {
 
 # Each warning is the knowledge base's own wording for that product.
 _WARNINGS = {
+    "nsaid": "Avoid combining with other NSAIDs.",
     "paracetamol": "Do not combine with other products that also contain paracetamol/acetaminophen, as this can lead to accidental overdose.",
     "decongestant": "Avoid combining with other decongestants or stimulants.",
     "dextromethorphan": "Do not combine with other cough/cold products that also contain dextromethorphan.",
@@ -45,7 +53,7 @@ _TOGETHER_RE = re.compile(
     re.IGNORECASE,
 )
 _QUESTION_STARTS = {"can", "could", "should", "may", "is", "are", "will", "do", "does", "would", "what"}
-_NEEDS_PAIRING_RE = re.compile(r"\b(?:together|combine[ds]?|combining|same\s+time|along\s*with|alongside|mix(?:ing)?|both|with\s+each\s+other|in\s+combination)\b|\b(?:take|taking|use|using|give|giving|have)\b.{0,50}\b(?:and|with|plus)\b", re.IGNORECASE)
+_NEEDS_PAIRING_RE = re.compile(r"\b(?:together|combine[ds]?|combining|same\s+time|along\s*with|alongside|mix(?:ing)?|both|with\s+each\s+other|in\s+combination)\b|\b(?:take|taking|use|using|give|giving)\b.{0,50}\b(?:and|with|plus)\b", re.IGNORECASE)
 _NOT_THIS_RE = re.compile(r"\b(?:order|buy|price|cost|cheapest|dos(?:e|age)|side\s*effects?|how\s+much|how\s+many)\b", re.IGNORECASE)
 
 
@@ -74,6 +82,15 @@ def mentions(text: str, catalog: list[dict]) -> list[tuple[str, set[str], str | 
     for word, classes in _CLASSES.items():
         if word in tokens:
             found.append((word.title(), set(classes), None))
+    # Brand names resolve to their active ingredient (Tylenol -> paracetamol);
+    # medicines we don't carry have no classes, so a pair with one of them gets
+    # the honest "our information doesn't say".
+    for brand, ingredient in brands.BRAND_INGREDIENT.items():
+        if brand in tokens and brand != ingredient.lower():
+            found.append((f"{brand.title()} ({ingredient.lower()})", set(_CLASSES.get(ingredient.lower(), set())), None))
+    for name in brands.NOT_STOCKED:
+        if name in tokens:
+            found.append((name.title(), {"nsaid"} if name in _NSAID_NAMES else set(), None))
     # one entry per distinct label
     seen, unique = set(), []
     for item in found:
@@ -100,7 +117,7 @@ def combination_reply(text: str, catalog: list[dict]) -> str | None:
     for i in range(len(found)):
         for j in range(i + 1, len(found)):
             (a_label, a_classes, a_id), (b_label, b_classes, b_id) = found[i], found[j]
-            shared = [c for c in ("paracetamol", "decongestant", "dextromethorphan") if c in a_classes and c in b_classes]
+            shared = [c for c in ("paracetamol", "decongestant", "dextromethorphan", "nsaid") if c in a_classes and c in b_classes]
             if shared:
                 kind = shared[0]
                 return (

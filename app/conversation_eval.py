@@ -694,6 +694,18 @@ CONVERSATION_CASES = [
         ],
     },
     {
+        "name": "brand_names_in_combination_questions",
+        # Fully deterministic. "Tylenol with Cold & Flu" is paracetamol twice;
+        # aspirin and ibuprofen are both NSAIDs, which the knowledge base says
+        # ibuprofen must not be combined with; Tylenol + Advil is a pair the
+        # knowledge base is silent on.
+        "turns": [
+            {"text": "can I take Tylenol with Cold & Flu Multi-Symptom Relief", "checks": [("warns about doubling paracetamol", lambda r: r.startswith("No —") and "accidental overdose" in r)]},
+            {"text": "can I take aspirin and ibuprofen together", "checks": [("warns about two NSAIDs", lambda r: r.startswith("No —") and "other NSAIDs" in r)]},
+            {"text": "can I take Tylenol and Advil together", "checks": [("does not improvise", lambda r: "doesn't say whether" in r and "pharmacist" in r)]},
+        ],
+    },
+    {
         "name": "bare_numeric_selection_from_a_product_list",
         # Fully deterministic — proves main.py's _resolve_bare_selection
         # dispatch is actually wired correctly end-to-end through the real

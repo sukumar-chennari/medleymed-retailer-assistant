@@ -40,6 +40,40 @@ class TestWarnedCombinations:
         assert not reply.startswith(("Yes", "No"))
 
 
+class TestBrandNamesAndNsaids:
+    """Brand names resolve to their active ingredient, and aspirin/naproxen are
+    NSAIDs, which the knowledge base says ibuprofen must not be combined with."""
+
+    @pytest.mark.parametrize("text, both", [
+        ("can I take Tylenol with Cold & Flu Multi-Symptom Relief", "paracetamol"),
+        ("can I take Crocin and Dolo together", "paracetamol"),
+        ("can I take Tylenol and paracetamol together", "paracetamol"),
+        ("can I take Sudafed with Cold & Flu Multi-Symptom Relief", "a decongestant"),
+        ("can I take aspirin and ibuprofen together", "an anti-inflammatory (NSAID)"),
+        ("can I take Advil and aspirin together", "an anti-inflammatory (NSAID)"),
+        ("can I take naproxen with Ibuprofen 200mg Tablets", "an anti-inflammatory (NSAID)"),
+    ])
+    def test_a_shared_ingredient_behind_brand_names_gets_the_warning(self, text, both):
+        reply = it.combination_reply(text, CATALOG)
+        assert reply.startswith("No —") and f"both contain {both}" in reply and "warns:" in reply
+
+    @pytest.mark.parametrize("text", [
+        "can I take Tylenol and Advil together", "can I take Advil and Zyrtec together",
+        "can I take Tylenol and aspirin together", "can I take Tylenol and vitamin C together",
+    ])
+    def test_a_pair_with_no_shared_ingredient_gets_the_honest_not_covered(self, text):
+        reply = it.combination_reply(text, CATALOG)
+        assert "doesn't say whether" in reply and not reply.startswith(("Yes", "No"))
+
+    def test_the_brand_is_shown_with_its_ingredient(self):
+        reply = it.combination_reply("can I take Tylenol and Advil together", CATALOG)
+        assert "Tylenol (paracetamol)" in reply and "Advil (ibuprofen)" in reply
+
+    @pytest.mark.parametrize("text", ["can I take Tylenol", "what is Tylenol", "do you have Tylenol and Advil"])
+    def test_single_brand_and_availability_questions_are_left_alone(self, text):
+        assert it.combination_reply(text, CATALOG) is None
+
+
 class TestNotCombinationQuestions:
     @pytest.mark.parametrize("text", [
         "what is dextromethorphan", "can I take ibuprofen", "order paracetamol and ibuprofen",
@@ -76,3 +110,7 @@ class TestRoute:
         monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
         assert self._chat("s1", "can I take paracetamol and ibuprofen together") == "from the model"
         assert store.get_pending_order("s1")["product_id"] == "fev-001"
+
+    def test_brand_combination_questions_are_answered_without_the_model(self):
+        assert self._chat("s1", "can I take Tylenol with Cold & Flu Multi-Symptom Relief").startswith("No —")
+        assert "doesn't say whether" in self._chat("s2", "can I take Tylenol and Advil together")
