@@ -976,3 +976,64 @@ class TestAnAffirmativeWithNothingWaiting:
     def test_a_non_affirmative_message_is_unaffected(self, monkeypatch):
         monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
         assert _chat("s1", "who is the prime minister") == "from the model"
+
+
+class TestRepliesToTheReceiptEmailPrompt:
+    """Real bug (Oct 25 probe): "yes"/"sure"/"ok send it" got "Thank you! Your
+    address has been saved" (nothing like that happened), "later" got "You've
+    saved your address", "don't send" got "Is the address still correct?",
+    "not now" got the out-of-scope decline, and "send it to my email" got "what
+    symptom is this for?"."""
+
+    @staticmethod
+    def _place_an_order_through_the_prompt(monkeypatch, sid="s1"):
+        def _boom(*args, **kwargs):
+            raise AssertionError("the model must not be reached")
+
+        monkeypatch.setattr(main, "run_turn", _boom)
+        store.save_address("demo_user", "10 High St, Leeds")
+        _chat(sid, "order Ibuprofen 200mg Tablets")
+        reply = _chat(sid, "yes")
+        assert "reply with your email address" in reply
+        assert store.get_pending_email(sid) == "ord-0001"
+
+    @pytest.mark.parametrize("text", ["yes", "yes please", "sure", "ok send it", "send it to my email", "send me the receipt"])
+    def test_an_affirmative_asks_for_the_address_and_keeps_waiting(self, monkeypatch, text):
+        self._place_an_order_through_the_prompt(monkeypatch)
+        reply = _chat("s1", text)
+        assert "what email address should I send the confirmation for order ord-0001" in reply
+        assert store.get_pending_email("s1") == "ord-0001"
+
+    def test_the_email_that_follows_is_captured_and_sent(self, monkeypatch):
+        self._place_an_order_through_the_prompt(monkeypatch)
+        _chat("s1", "yes")
+        reply = _chat("s1", "a@b.com")
+        assert "sent the confirmation for order ord-0001 to a@b.com" in reply
+        assert store.get_email("demo_user") == "a@b.com" and store.get_pending_email("s1") is None
+
+    @pytest.mark.parametrize("text", ["later", "not now", "don't send", "skip it", "no need", "maybe later", "nah"])
+    def test_a_skip_closes_the_prompt(self, monkeypatch, text):
+        self._place_an_order_through_the_prompt(monkeypatch)
+        reply = _chat("s1", text)
+        assert "already confirmed without an email receipt" in reply
+        assert store.get_pending_email("s1") is None
+
+    def test_with_an_email_on_file_the_confirmation_is_sent_straight_away(self, monkeypatch):
+        self._place_an_order_through_the_prompt(monkeypatch)
+        store.save_email("demo_user", "x@y.com")
+        reply = _chat("s1", "yes")
+        assert "sent the confirmation for order ord-0001 to x@y.com" in reply
+        assert store.get_pending_email("s1") is None
+
+    def test_a_yes_to_something_else_is_left_to_the_model(self, monkeypatch):
+        self._place_an_order_through_the_prompt(monkeypatch)
+        def _answers(messages, **kwargs):
+            # like the real run_turn: the turn's user text and reply are appended
+            messages = [*messages, {"role": "user", "content": kwargs["user_text"]},
+                        {"role": "assistant", "content": "Anything else I can help with?"}]
+            return "Anything else I can help with?", messages
+
+        monkeypatch.setattr(main, "run_turn", _answers)
+        _chat("s1", "what are the side effects of ibuprofen")
+        assert _chat("s1", "yes") == "Anything else I can help with?"
+        assert store.get_pending_email("s1") == "ord-0001"

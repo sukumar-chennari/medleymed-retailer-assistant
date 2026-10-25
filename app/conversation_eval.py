@@ -663,6 +663,37 @@ CONVERSATION_CASES = [
         ],
     },
     {
+        "name": "replies_to_the_receipt_email_prompt",
+        # Fully deterministic (mail is forced to mock mode). Before Oct 25
+        # "yes" got "Your address has been saved" and "later" got "You've saved
+        # your address" -- neither happened.
+        "turns": [
+            {"text": "order Ibuprofen 200mg Tablets", "checks": [("asks for an address", lambda r: "address" in r.lower())]},
+            {"text": "10 High St, Leeds", "checks": [("order placed, email prompt shown", lambda r: "Order confirmed!" in r and "reply with your email address" in r)]},
+            {
+                "text": "yes please",
+                "checks": [("asks which email, claims nothing was saved", lambda r: "what email address should I send the confirmation for order ord-0001" in r and "saved" not in r.lower())],
+            },
+            {
+                "text": "a@b.com",
+                "checks": [("sends it", lambda r: "sent the confirmation for order ord-0001 to a@b.com" in r)],
+                "state_checks": [("email really saved", lambda sid: store.get_email("demo_user") == "a@b.com")],
+            },
+        ],
+    },
+    {
+        "name": "skipping_the_receipt_email_prompt",
+        "turns": [
+            {"text": "order Ibuprofen 200mg Tablets", "checks": [("asks for an address", lambda r: "address" in r.lower())]},
+            {"text": "10 High St, Leeds", "checks": [("email prompt shown", lambda r: "reply with your email address" in r)]},
+            {
+                "text": "not now",
+                "checks": [("closes the prompt without the out-of-scope decline", lambda r: "already confirmed without an email receipt" in r)],
+                "state_checks": [("the order is untouched", _order_count_is(1))],
+            },
+        ],
+    },
+    {
         "name": "bare_numeric_selection_from_a_product_list",
         # Fully deterministic — proves main.py's _resolve_bare_selection
         # dispatch is actually wired correctly end-to-end through the real

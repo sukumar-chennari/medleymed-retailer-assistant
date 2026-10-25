@@ -1045,6 +1045,52 @@ NOTHING_TO_CONFIRM_REPLY = (
 )
 
 
+# Replies to the "reply with your email address if you'd like a confirmation
+# sent" prompt that are not an email address. Found Oct 25: "yes", "sure" and
+# "ok send it" got "Thank you! Your address has been saved" (nothing like that
+# happened), "later" got "You've saved your address", "don't send" got "Is the
+# address still correct?", "not now" got the out-of-scope decline, and "send it
+# to my email" got "what symptom is this for?". Handled only when the bot's
+# last message really was that prompt, so a "yes" to "anything else?" later on
+# is untouched.
+_EMAIL_PROMPT_MARKER = "your email address"
+_EMAIL_SKIP_RE = re.compile(
+    r"\b(?:later|not\s+now|don'?t\s+(?:send|need|want)|do\s+not\s+(?:send|need|want)|no\s+need|nah|maybe\s+later|"
+    r"skip|pass|rather\s+not|without|not\s+needed|no\s+receipt)\b",
+    re.IGNORECASE,
+)
+_EMAIL_SEND_IT_RE = re.compile(r"\b(?:send|email|mail)\b.{0,25}\b(?:it|that|this|me|my\s+e-?mail|the\s+(?:receipt|confirmation))\b", re.IGNORECASE)
+
+
+def _last_message_was_the_email_prompt(messages: list[dict]) -> bool:
+    if not messages:
+        return False
+    last = messages[-1]
+    return (
+        last.get("role") == "assistant"
+        and isinstance(last.get("content"), str)
+        and _EMAIL_PROMPT_MARKER in last["content"].lower()
+    )
+
+
+def _email_prompt_reply(text: str, session_id: str, order_id: str, messages: list[dict]) -> str | None:
+    if not _last_message_was_the_email_prompt(messages) or "@" in text:
+        return None
+    words = re.findall(r"[a-z']+", text.lower())
+    if not words or len(words) > 10:
+        return None
+    if _EMAIL_SKIP_RE.search(text) and not _EMAIL_SEND_IT_RE.search(text):
+        store.clear_pending_email(session_id)
+        return "No problem — the order's already confirmed without an email receipt. Anything else I can help with?"
+    if _is_affirmative(text) or _EMAIL_SEND_IT_RE.search(text):
+        email = store.get_email("demo_user")
+        if email:
+            store.clear_pending_email(session_id)
+            return _complete_pending_email(email, order_id)
+        return f"Great — what email address should I send the confirmation for order {order_id} to?"
+    return None
+
+
 def _reply_for_start_order_result(order: dict) -> str:
     if "error" in order:
         return f"Sorry, {order['error']}"
@@ -1289,6 +1335,12 @@ def chat(req: ChatRequest):
         elif pending_email_order_id and text and _declines(text) and not _looks_like_order_cancellation(text):
             store.clear_pending_email(req.session_id)
             reply = "No problem — the order's already confirmed without an email receipt. Anything else I can help with?"
+            messages.append({"role": "user", "content": text})
+            messages.append({"role": "assistant", "content": reply})
+        elif pending_email_order_id and text and (
+            email_prompt_reply := _email_prompt_reply(text, req.session_id, pending_email_order_id, messages)
+        ):
+            reply = email_prompt_reply
             messages.append({"role": "user", "content": text})
             messages.append({"role": "assistant", "content": reply})
         elif pending_email_order_id and text:
