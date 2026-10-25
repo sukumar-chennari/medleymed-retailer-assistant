@@ -82,6 +82,83 @@ def uncovered_safety_topics(question: str, results: list[dict]) -> list[str]:
     return safety_topics.uncovered(question, results)
 
 
+# Dose figures ("3-4 tablets", "600-800mg", "every 4 hours", "7 days") must come
+# from the knowledge base. Found Oct 25: asked for the maximum daily dose of
+# ibuprofen the model gave the right 6 tablets / 1200 mg but added "3-4 tablets
+# (600-800 mg) every 4-6 hours" — the knowledge base says 1-2 tablets (200-400
+# mg) per dose, so the invented single dose was double the documented one.
+_DOSE_FIGURE_RE = re.compile(
+    r"(?<![\w.])(\d+(?:\.\d+)?(?:\s?(?:-|–|to)\s?\d+(?:\.\d+)?)?)\s?"
+    r"(?:mg|mcg|g|ml|tablets?|capsules?|teaspoons?|tsp|hours?|hrs?|days?)\b",
+    re.IGNORECASE,
+)
+_NUMBER_RE = re.compile(r"\d+(?:\.\d+)?")
+
+
+def _source_documents(results: list[dict]) -> list[str]:
+    """The FULL knowledge-base documents behind the retrieved chunks. Retrieval
+    returns the top few chunks, and the one holding the interval or maximum can
+    be missing ("wait 4-6 hours" is in the paracetamol document, but only its
+    Warnings chunk was returned), so a figure counts as supported when its
+    product document states it."""
+    from app import data_ingest
+
+    texts = []
+    for source in dict.fromkeys(str(r.get("source", "")) for r in results):
+        path = data_ingest.KB_DIR / source
+        if source and path.is_file():
+            texts.append(path.read_text(encoding="utf-8"))
+    return texts
+
+
+def ungrounded_dose_figures(reply_text: str, results: list[dict], user_text: str = "") -> list[str]:
+    """Dose figures in the reply whose numbers appear neither in the knowledge
+    base documents behind the retrieved results nor in the customer's own
+    message."""
+    corpus = " ".join([user_text, *(str(r.get("text", "")) for r in results), *_source_documents(results)])
+    known = set(_NUMBER_RE.findall(corpus))
+    # The strengths in our own product names ("Paracetamol 500mg Tablets") are
+    # not dose claims.
+    known |= {n for p in store.get_catalog() for n in _NUMBER_RE.findall(p["name"])}
+    bad = []
+    for match in _DOSE_FIGURE_RE.finditer(reply_text):
+        numbers = _NUMBER_RE.findall(match.group(1))
+        if numbers and not all(n in known for n in numbers):
+            bad.append(match.group(0).strip())
+    return bad
+
+
+def _dosage_section(source: str) -> str:
+    from app import data_ingest
+
+    path = data_ingest.KB_DIR / source
+    if not source or not path.is_file():
+        return ""
+    match = re.search(r"^##\s+Dosage\s*\n(.*?)(?=^##\s|\Z)", path.read_text(encoding="utf-8"), re.MULTILINE | re.DOTALL)
+    return match.group(1).strip() if match else ""
+
+
+def kb_quote_reply(results: list[dict]) -> str:
+    """The product information itself, quoted, when a reply could not be
+    trusted: the dosage chunk(s) if there are any, else the top chunk."""
+    chosen = [r for r in results if str(r.get("section", "")).lower() == "dosage"]
+    if not chosen and results:
+        dosage = _dosage_section(str(results[0].get("source", "")))
+        chosen = [{**results[0], "section": "Dosage", "text": dosage}] if dosage else results[:1]
+    blocks, sources = [], []
+    for r in chosen[:2]:
+        body = " ".join(re.sub(r"^\s*#+[^\n]*\n", "", str(r.get("text", "")).strip()).split())
+        blocks.append(f"{r.get('product', 'This product')}: {body}")
+        pair = f"(Source: {r.get('source')} § {r.get('section')})"
+        if pair not in sources:
+            sources.append(pair)
+    return (
+        "I want to be careful with numbers, so here is exactly what our product information says:\n\n"
+        + "\n\n".join(blocks)
+        + "\n\n" + " ".join(sources) + "\n\n" + DISCLAIMER
+    )
+
+
 def kb_gap_reply(topics: list[str]) -> str:
     listed = " and ".join(topics) if len(topics) < 3 else ", ".join(topics[:-1]) + " and " + topics[-1]
     return (

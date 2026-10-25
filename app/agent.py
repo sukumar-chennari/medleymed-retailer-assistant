@@ -173,6 +173,8 @@ without actually calling the tool first.
 # matching this pattern is an info QUESTION about a medicine, never a symptom
 # description, so a lookup_symptom call for it gets redirected to the correct
 # tool instead of trusting the model to pick the right one every time.
+_DOSE_PROBE_RE = re.compile(r"\d\s?(?:mg|mcg|ml|tablets?|capsules?|teaspoons?|tsp|hours?|hrs?|days?)\b", re.IGNORECASE)
+
 INFO_QUESTION_RE = re.compile(
     r"\b(side\s*effects?|dosage|dosing|dose|warnings?|interactions?|overdose|"
     r"ingredients?|what'?s in|what is in|composition|"
@@ -1283,6 +1285,28 @@ class _GuardrailMiddleware(AgentMiddleware):
         if sources:
             self.turn_state["retrieval_sources"] = sources
 
+    def _kb_results_for_turn(self) -> list[dict]:
+        results = self.turn_state.get("kb_results")
+        if results is None:
+            try:
+                results = retrieval.search(self.user_text or "")
+            except Exception as exc:  # embeddings unavailable: fail open
+                print(f"[KB LOOKUP ERROR] {exc}")
+                results = []
+            self.turn_state["kb_results"] = results
+        return results
+
+    def _ungrounded_dose_figures(self, reply_text: str) -> list[str]:
+        """Dose figures in the reply that the knowledge base does not support.
+        Empty when the reply has no figures (no search is made), when there is
+        no knowledge-base text to quote instead, or when the search fails."""
+        if not _DOSE_PROBE_RE.search(reply_text):
+            return []
+        results = self._kb_results_for_turn()
+        if not results:
+            return []
+        return guardrails.ungrounded_dose_figures(reply_text, results, self.user_text or "")
+
     def _uncovered_safety_topics(self) -> list[str]:
         """Safety topics the customer asked about that the knowledge base text
         retrieved this turn does not mention. When the model never looked
@@ -1355,6 +1379,11 @@ class _GuardrailMiddleware(AgentMiddleware):
             # attribute it to our knowledge base — see guardrails._SAFETY_TOPICS.
             _log_guard(session_id, "kb_gap_blocked", f"{gap_topics}: {reply_text!r}")
             final = guardrails.kb_gap_reply(gap_topics)
+        elif ungrounded := self._ungrounded_dose_figures(reply_text):
+            # A dose the knowledge base does not state is replaced by the
+            # knowledge base's own words — see guardrails.ungrounded_dose_figures.
+            _log_guard(session_id, "ungrounded_dose_blocked", f"{ungrounded}: {reply_text!r}")
+            final = guardrails.kb_quote_reply(self._kb_results_for_turn())
         elif self.turn_state.get("order_status"):
             # The orders are real data, so the report is rendered from it, not
             # from the model's retelling. Observed (Oct 14): asked to "show my
