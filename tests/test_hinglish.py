@@ -83,3 +83,44 @@ class TestRoute:
     def test_a_hinglish_emergency_phrase_in_english_still_escalates_first(self, monkeypatch):
         monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
         assert "emergency" in self._chat("s1", "mere bacche ko bukhar hai, he can't breathe").lower()
+
+
+@pytest.mark.usefixtures("isolated_db")
+class TestTheGlossNeverTouchesAnAddress:
+    """Real bug of my own (found Oct 26): the gloss ran on every message, so an
+    address containing such a word — "12 Khansi Road, Bachha Nagar" — was saved
+    as "12 Khansi Road, Bachha Nagar (cough; child)"."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, monkeypatch):
+        monkeypatch.setattr(config, "SMTP_CONFIGURED", False)
+        self.client = client
+
+    def _chat(self, sid, text):
+        res = self.client.post("/api/chat", json={"session_id": sid, "text": text})
+        res.raise_for_status()
+        return res.json()["reply"]
+
+    def test_a_first_time_address_is_saved_exactly_as_typed(self):
+        store.set_pending_order("s1", "fev-003", 1)
+        reply = self._chat("s1", "12 Khansi Road, Bachha Nagar, Hyderabad")
+        assert "Shipping to: 12 Khansi Road, Bachha Nagar, Hyderabad\n" in reply + "\n"
+        assert "(cough" not in reply and store.get_address("demo_user") == "12 Khansi Road, Bachha Nagar, Hyderabad"
+
+    def test_a_different_address_at_the_confirmation_step_is_saved_exactly_as_typed(self):
+        store.save_address("demo_user", "10 High St, Leeds")
+        store.set_pending_address_confirmation("s1", "fev-003", 1)
+        self._chat("s1", "7 Zukam Lane, Sardi Colony, Pune")
+        assert store.get_address("demo_user") == "7 Zukam Lane, Sardi Colony, Pune"
+
+    def test_an_email_is_never_glossed(self):
+        order = store.create_order("demo_user", "fev-003", "10 High St, Leeds", 1)
+        store.set_pending_email("s1", order["order_id"])
+        self._chat("s1", "sardi@example.com")
+        assert store.get_email("demo_user") == "sardi@example.com"
+
+    def test_a_hinglish_symptom_message_is_still_glossed(self, monkeypatch):
+        from app import agent
+
+        monkeypatch.setattr(agent, "create_agent", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no model")))
+        assert "child, or for an adult" in self._chat("s1", "mujhe bukhar hai")

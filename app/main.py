@@ -1132,12 +1132,6 @@ def chat(req: ChatRequest):
     if not (req.text and req.text.strip()) and not req.image_b64:
         raise HTTPException(status_code=400, detail="Provide text or an image.")
 
-    if req.text:
-        # Romanised Hindi symptom words get their English meaning appended so
-        # every branch below (and the model) understands them — see hinglish.py.
-        req.text = hinglish.gloss(req.text)
-    contraindications.set_current_text(req.text or "")
-
     messages = store.get_session_messages(req.session_id)
     text = req.text.strip() if req.text else ""
 
@@ -1146,6 +1140,18 @@ def chat(req: ChatRequest):
         pending_product_id = store.get_pending_order(req.session_id)
         pending_clarification = store.get_pending_clarification(req.session_id)
         pending_address_confirmation = store.get_pending_address_confirmation(req.session_id)
+
+        # Romanised Hindi symptom words get their English meaning appended so
+        # every branch below (and the model) understands them — see hinglish.py.
+        # NOT for a reply to "what's your shipping address?" / "ship to the
+        # address on file?" (or anything with an email address in it): a place
+        # name can contain such a word, and "12 Khansi Road, Bachha Nagar" was
+        # saved as "... (cough; child)" (found Oct 26, a bug of my own).
+        if req.text and not (pending_product_id or pending_address_confirmation) and "@" not in req.text:
+            req.text = hinglish.gloss(req.text)
+            text = req.text.strip()
+        contraindications.set_current_text(req.text or "")
+
         last_products = store.get_last_products(req.session_id)
         last_recommended_product_id = store.get_last_recommended_product(req.session_id)
         selected_product = _resolve_bare_selection(text, last_products) if text else None
