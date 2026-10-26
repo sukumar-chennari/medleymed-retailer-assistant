@@ -29,6 +29,7 @@ live testing, not just building a happy-path demo."*
 6. [Re-ranking / Hybrid Search](#6-re-ranking--hybrid-search)
 7. [LLM & Tool-Calling Architecture](#7-llm--tool-calling-architecture)
 8. [Guardrails](#8-guardrails)
+   - [8b. Safety Layers Added After the First Release](#8b-safety-layers-added-after-the-first-release)
 9. [Hallucinations — Real Bugs Found and Fixed](#9-hallucinations--real-bugs-found-and-fixed)
 10. [Evaluation](#10-evaluation)
 11. [Persistence / Data Layer](#11-persistence--data-layer)
@@ -570,9 +571,20 @@ answering off-topic requests itself. Second — and this is the layer that
 actually matters — every tool that could act on a symptom
 (`lookup_symptom`, `start_order`, `lookup_medicine_info`) only ever touches
 the fixed 10-item catalog; there is no code path by which the assistant could
-surface a product or answer that isn't in that catalog. The scope boundary
-is enforced by *what the tools are physically capable of doing*, not by the
-model's willingness to follow an instruction.
+surface a product from the tools that isn't in that catalog. The scope
+boundary for *actions* (recommending, ordering) is enforced by *what the
+tools are physically capable of doing*, not by the model's willingness to
+follow an instruction.
+
+*Honest caveat — say this before an examiner finds it:* that guarantee covers
+tool results, not the model's free-text prose. In live probing the model did
+write product names that aren't in the catalog ("Acetaminophen (Tylenol)",
+"Advil") when answering a free-form question. The mitigations are
+deterministic handlers for the common cases (a brand we don't stock gets "we
+don't carry Advil, but its active ingredient is ibuprofen, which we do" and
+the matching catalog products — `brands.py`), the condition screen, and the
+dose-figure check below; a general "every product name in the reply must be
+in the catalog" check does not exist yet.
 
 **Q: What's `symptom_lookup_grounded` and why does it exist?**
 A: A cross-check that runs before trusting any `lookup_symptom` tool call:
@@ -684,6 +696,90 @@ clamp is disclosed to the user *before* they confirm the order, not just
 buried in the final confirmation (a real bug found and fixed: the model
 received the clamp note in its tool result but silently omitted mentioning
 it).
+
+---
+
+## 8b. Safety Layers Added After the First Release
+
+*(Every one of these came from probing the live route with realistic customer
+messages and finding a wrong or dangerous reply — see the commit history for
+the exact before/after. All are deterministic code, run before or after the
+model, and each has route-level tests that fail on the code before the fix.)*
+
+**Q: What happens if someone describes an emergency — an overdose, a baby with
+a fever, chest pain?**
+A: `red_flags.py` is the **first branch of `chat()`**, ahead of every other
+handler and the model. It recognises overdose/ingestion ("I took 10
+paracetamol tablets", "took too many", "my toddler swallowed some tablets"),
+a fever in a baby under 3 months, and emergency symptoms (chest pain,
+trouble breathing, seizure, swollen lips/throat, coughing blood, stiff neck,
+suicidal statements). Each gets a **fixed reply** naming the emergency
+numbers (112 India, 911 US) and recommends or orders nothing. Before it
+existed, the overdose got "Is this fever for a child or an adult?" and the
+2-month-old got a syrup recommendation. It is biased toward escalating: a
+flag is dropped only when *every* mention is negated ("no chest pain, just a
+fever"). **Limit:** a keyword layer, not triage — it will miss unusual
+phrasings and knows only those two numbers.
+
+**Q: And a fever that is high or long-lasting but not an emergency?**
+A: `red_flags.doctor_note()` appends a "see a doctor" note to a recommendation
+when the fever is at or above 103 F / 39.4 C or has lasted 3+ days. It never
+blocks the list, and it doesn't misread "I'm 40 and have a fever" as 40 C.
+
+**Q: How do you stop the model improvising medical facts?**
+A: Three checks, all against the knowledge base's own text:
+- `safety_topics.py` — 14 topics (pregnancy, breastfeeding, driving,
+  alcohol, storage, asthma, diabetes, kidney/liver problems, blood pressure,
+  ulcers, pack size, how quickly it works, missed doses). If the customer
+  asks about one and *none* of the retrieved text mentions it, the reply is
+  replaced by a fixed "I don't have that — ask a pharmacist". The motivating
+  case: "is cetirizine safe during pregnancy" was answered "according to our
+  knowledge base (Source: col-001.md § Pregnancy)" — a section that doesn't
+  exist.
+- `guardrails.ungrounded_dose_figures` — every dose figure in a reply
+  (3-4 tablets, 600-800 mg, every 4-6 hours, 7 days) must have its numbers in
+  the product's knowledge-base document or in the customer's own message;
+  otherwise the reply becomes a verbatim quote of the Dosage section. The
+  case: the model gave the right daily maximum plus an invented "3-4 tablets
+  (600-800 mg)" single dose, double the documented one, with a citation.
+- `interactions.py` — "can I take X and Y together?" is answered from the
+  product warnings (two paracetamol products, two decongestants, two
+  dextromethorphan products, two NSAIDs, the children's syrup with an
+  antihistamine); a pair the knowledge base is silent on gets "our product
+  information doesn't say — ask a pharmacist", never an improvised "yes".
+**Limit:** these check numbers and listed topics, not meaning; anything else
+the model writes about a medicine is still unverified.
+
+**Q: What if the customer says they have an ulcer, high blood pressure, or an
+allergy?**
+A: `contraindications.py` holds 25 rules **taken from the knowledge base's own
+Warnings sections** (e.g. Ibuprofen "not recommended for people with a history
+of stomach ulcers, kidney problems, or certain heart conditions";
+Pseudoephedrine and Cold & Flu "not recommended for people with high blood
+pressure") plus stated-allergy exclusion by ingredient. It is applied to the
+*finished* reply, so it covers the deterministic lists and the model's prose:
+ruled-out products are removed with a "Left out because of what you told me"
+list, and `start_order` refuses them. Where the knowledge base is silent
+(blood thinners) it says so and sends the customer to a pharmacist rather than
+judging. **Limit:** hand-listed conditions; the refusal is hard.
+
+**Q: Does it understand the way real customers write?**
+A: Partly, by design. `hinglish.py` glosses romanised Hindi symptom words
+("mujhe bukhar hai" -> "(fever)") and `age_hints.py` reads who it's for
+("my 3 year old", "my wife", "I'm 25") so the existing flow runs unchanged;
+both are skipped for address replies (an early bug: an address containing
+such a word was altered). `brands.py` maps brand names to their ingredient
+("do you have Advil" -> the ibuprofen product). Replies stay in English, the
+word lists are hand-picked, and Devanagari is not handled.
+
+**Q: How do you know none of this regressed?**
+A: Over 1,000 pytest tests (CI, a few seconds on a quiet machine) and
+`python -m app.conversation_eval` — 34 scripted multi-turn conversations with
+real-state checks on an isolated database (not in CI; needs the local model).
+The harness forces mock email mode: on 2026-10-16 a new case sent real mail
+through the developer's SMTP account (to an `@example.com` address) before
+that guard existed — worth knowing, and a good example of why the harness is
+isolated.
 
 ---
 
@@ -859,7 +955,7 @@ implementation to Chroma, and again after this SECTION_BOOST fix.
 
 **Q: How do you evaluate the agent/conversation layer, as opposed to pure retrieval?**
 A: Two layers now, and the first one grew far more than originally
-planned. `pytest` (about 550 tests, runs in a few seconds, `.github/workflows/
+planned. `pytest` (over 1,000 tests, runs in a few seconds on a quiet machine, `.github/workflows/
 tests.yml` runs it on every push/PR) covers **99% of the app** by line —
 `guardrails.py`, `store.py`, `tools.py`, and `retrieval.py` are all at 100%;
 `main.py` and `agent.py` are at 99%. (Re-run `pytest --cov=app` before
