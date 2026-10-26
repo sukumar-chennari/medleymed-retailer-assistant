@@ -6,7 +6,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 
-from app import brands, contraindications, guardrails, hinglish, interactions, red_flags, store, tools
+from app import age_hints, brands, contraindications, guardrails, hinglish, interactions, red_flags, store, tools
 from app.agent import (
     ORDER_INTENT_RE,
     _has_cancel_intent,
@@ -1148,7 +1148,9 @@ def chat(req: ChatRequest):
         # name can contain such a word, and "12 Khansi Road, Bachha Nagar" was
         # saved as "... (cough; child)" (found Oct 26, a bug of my own).
         if req.text and not (pending_product_id or pending_address_confirmation) and "@" not in req.text:
-            req.text = hinglish.gloss(req.text)
+            # Who it is for, when the message already says ("my 3 year old",
+            # "my wife") — see age_hints.py.
+            req.text = age_hints.gloss(hinglish.gloss(req.text))
             text = req.text.strip()
         contraindications.set_current_text(req.text or "")
 

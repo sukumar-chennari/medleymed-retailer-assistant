@@ -706,6 +706,20 @@ CONVERSATION_CASES = [
         ],
     },
     {
+        "name": "who_it_is_for_is_taken_from_the_message",
+        # Fully deterministic. On Oct 26 "my 3 year old has a fever" and "my
+        # wife has a fever" were still asked "child or adult?", and "my 5 year
+        # old has a dry cough" never reached the children's product.
+        "turns": [
+            {"text": "my 3 year old has a fever", "checks": [
+                ("goes straight to the children's syrup", lambda r: "Children's Paracetamol Syrup" in r and "child, or for an adult" not in r),
+                ("never offers the adult products", lambda r: "fev-001" not in r and "Ibuprofen" not in r)]},
+            {"text": "my wife has a fever", "checks": [("goes straight to the adult list", lambda r: "(fev-001)" in r and "child, or for an adult" not in r)]},
+            {"text": "my 5 year old has a dry cough", "checks": [("reaches the children's cough product", lambda r: "Children's Cold & Cough Syrup" in r)]},
+            {"text": "my teenage son has a fever", "checks": [("a teenager is still asked", lambda r: "child, or for an adult" in r)]},
+        ],
+    },
+    {
         "name": "bare_numeric_selection_from_a_product_list",
         # Fully deterministic — proves main.py's _resolve_bare_selection
         # dispatch is actually wired correctly end-to-end through the real
