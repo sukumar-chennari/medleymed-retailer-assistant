@@ -720,6 +720,28 @@ CONVERSATION_CASES = [
         ],
     },
     {
+        "name": "cancel_last_and_cancel_all",
+        # Fully deterministic. On Oct 27 "cancel my last order" got "I don't
+        # have any information about an order with that ID", and "cancel all my
+        # orders" got the out-of-scope decline.
+        "turns": [
+            {"text": "order Ibuprofen 200mg Tablets", "checks": [("asks for an address", lambda r: "address" in r.lower())]},
+            {"text": "10 High St, Leeds", "checks": [("first order placed", lambda r: "ord-0001" in r)], "state_checks": [("one order", _order_count_is(1))]},
+            {"text": "order Cetirizine 10mg Antihistamine Tablets", "checks": [("asks to confirm the address", _asks_to_confirm_address("10 High St, Leeds"))]},
+            {"text": "yes", "checks": [("second order placed", lambda r: "ord-0002" in r)], "state_checks": [("two orders", _order_count_is(2))]},
+            {
+                "text": "cancel my last order",
+                "checks": [("cancels only the newest", lambda r: "ord-0002" in r and "has been cancelled" in r and "ord-0001" not in r)],
+                "state_checks": [("the first is untouched", _order_status_is("ord-0001", "placed")), ("the last is cancelled", _order_status_is("ord-0002", "cancelled"))],
+            },
+            {
+                "text": "cancel all my orders",
+                "checks": [("cancels the one still active", lambda r: "ord-0001" in r and "has been cancelled" in r)],
+                "state_checks": [("everything is cancelled", _order_status_is("ord-0001", "cancelled"))],
+            },
+        ],
+    },
+    {
         "name": "bare_numeric_selection_from_a_product_list",
         # Fully deterministic — proves main.py's _resolve_bare_selection
         # dispatch is actually wired correctly end-to-end through the real

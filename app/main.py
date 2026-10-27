@@ -1102,6 +1102,68 @@ def _email_prompt_reply(text: str, session_id: str, order_id: str, messages: lis
     return None
 
 
+# Cancellation requests the model gets wrong. Found Oct 27 with two orders on
+# file: "cancel my last order" -> "I don't have any information about an order
+# with that ID" (no ID was given), "cancel ord-0001 and ord-0002" and "cancel
+# all my orders" -> the out-of-scope decline. Handled from the real order rows,
+# with the same semantics as before: an explicit request cancels, a negated or
+# question-form one does not, and nothing is cancelled unless it was asked for.
+_SCOPE_ALL_RE = re.compile(r"\b(?:all|every|each|both|everything)\b", re.IGNORECASE)
+_SCOPE_LAST_RE = re.compile(r"\b(?:last|latest|recent|most\s+recent|previous|newest|final)\b", re.IGNORECASE)
+_MAX_CANCEL_WORDS = 16
+
+
+def _cancel_request(text: str) -> tuple[str, list[str]] | None:
+    """("ids"|"all"|"last"|"default", order ids named) for a clear request to
+    cancel an order, else None."""
+    words = re.findall(r"[a-z']+", text.lower())
+    if not words or len(words) > _MAX_CANCEL_WORDS or "@" in text:
+        return None
+    if words[0] in _QUESTION_WORDS or not _has_cancel_intent(text):
+        return None
+    ids = [m.lower() for m in _ORDER_ID_IN_TEXT_RE.findall(text)]
+    # "cancel order 2" / "cancel order #0002" name ord-0002 too.
+    ids += [f"ord-{int(n):04d}" for n in re.findall(r"\border\s*#?\s*(\d{1,4})\b(?!\s*(?:days?|weeks?|hours?|times?))", text, re.IGNORECASE)]
+    ids = list(dict.fromkeys(ids))
+    if ids:
+        return "ids", ids
+    if "order" not in words and "orders" not in words and "purchase" not in words:
+        return None
+    if _SCOPE_ALL_RE.search(text):
+        return "all", []
+    if _SCOPE_LAST_RE.search(text):
+        return "last", []
+    return "default", []
+
+
+def _cancel_one(order_id: str) -> str:
+    result = json.loads(tools.cancel_order(order_id))
+    if result.get("cancelled"):
+        return guardrails.build_cancellation_confirmation(result)
+    if "already cancelled" in result.get("error", ""):
+        return f"Order {order_id} was already cancelled."
+    return f"I couldn't find an order with the ID {order_id}."
+
+
+def _reply_for_cancel_request(kind: str, ids: list[str]) -> str:
+    if kind == "ids":
+        return "\n\n".join(_cancel_one(order_id) for order_id in ids)
+    active = sorted(
+        (o for o in store.list_orders("demo_user") if o["status"] != "cancelled"), key=lambda o: o["order_id"]
+    )
+    if not active:
+        return "You don't have any active orders to cancel."
+    if kind == "all":
+        return "\n\n".join(_cancel_one(o["order_id"]) for o in active)
+    if kind == "last" or len(active) == 1:
+        return _cancel_one(active[-1]["order_id"])
+    listing = "\n".join(f"- {o['order_id']}: {o['product_name']} (x{o['quantity']})" for o in active)
+    return (
+        f"You have {len(active)} active orders:\n{listing}\n\n"
+        "Which one would you like to cancel? Say the order id, \"the last one\", or \"all\"."
+    )
+
+
 def _reply_for_start_order_result(order: dict) -> str:
     if "error" in order:
         return f"Sorry, {order['error']}"
@@ -1263,6 +1325,14 @@ def chat(req: ChatRequest):
                 image_b64=req.image_b64,
                 image_media_type=req.image_media_type,
             )
+        elif text and not pending_product_id and not pending_address_confirmation and (
+            cancel_request := _cancel_request(text)
+        ):
+            # Before the pending-email branches: "cancel my last order" is
+            # usually said right after an order was placed with no email yet.
+            reply = _reply_for_cancel_request(*cancel_request)
+            messages.append({"role": "user", "content": text})
+            messages.append({"role": "assistant", "content": reply})
         elif text and not pending_product_id and _is_plain_reorder_request(text):
             # Placed before the pending-email branches on purpose: the usual
             # moment to say "reorder that" is right after an order was placed

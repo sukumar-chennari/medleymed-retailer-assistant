@@ -394,10 +394,17 @@ class TestNamingAnOrderIsNotADecline:
 
     @pytest.mark.parametrize("text", ["cancel ord-0001 please", "no, cancel ord-0001", "cancel ORD-0001"])
     def test_pending_email(self, monkeypatch, text):
-        store.set_pending_email("s1", "ord-0001")
+        # Handled in code since Oct 27 (TestCancelRequestsTheModelGotWrong):
+        # the invariant is unchanged — the message is NOT swallowed as "no, skip
+        # the email receipt" — and the order is now really cancelled.
+        store.save_address("demo_user", "10 High St, Leeds")
+        order = store.create_order("demo_user", "fev-003", "10 High St, Leeds", 1)
+        store.set_pending_email("s1", order["order_id"])
         self._model_reply(monkeypatch)
-        assert _chat("s1", text) == "from the model"
-        assert store.get_pending_email("s1") == "ord-0001"
+        reply = _chat("s1", text)
+        assert "without an email receipt" not in reply
+        assert "Order ord-0001" in reply and "has been cancelled" in reply
+        assert store.get_order("ord-0001")["status"] == "cancelled"
 
     @pytest.mark.parametrize("text", ["cancel ord-0001 please", "no, cancel ord-0001"])
     def test_pending_address_confirmation(self, monkeypatch, text):
@@ -1037,3 +1044,98 @@ class TestRepliesToTheReceiptEmailPrompt:
         _chat("s1", "what are the side effects of ibuprofen")
         assert _chat("s1", "yes") == "Anything else I can help with?"
         assert store.get_pending_email("s1") == "ord-0001"
+
+
+class TestCancelRequestsTheModelGotWrong:
+    """Real bugs (Oct 27 probe, two orders on file): "cancel my last order" ->
+    "I don't have any information about an order with that ID" (none was
+    given); "cancel ord-0001 and ord-0002" and "cancel all my orders" -> the
+    out-of-scope decline."""
+
+    @staticmethod
+    def _two_orders():
+        store.save_address("demo_user", "10 High St, Leeds")
+        store.create_order("demo_user", "fev-003", "10 High St, Leeds", 1)
+        store.create_order("demo_user", "col-001", "10 High St, Leeds", 1)
+
+    @staticmethod
+    def _statuses():
+        return {o["order_id"]: o["status"] for o in store.list_orders("demo_user")}
+
+    @staticmethod
+    def _model_must_not_run(monkeypatch):
+        def _boom(*args, **kwargs):
+            raise AssertionError("the model must not be reached")
+
+        monkeypatch.setattr(main, "run_turn", _boom)
+
+    @pytest.mark.parametrize("text", ["cancel my last order", "please cancel the latest order", "cancel my most recent order"])
+    def test_last_cancels_only_the_newest_active_order(self, monkeypatch, text):
+        self._two_orders()
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", text)
+        assert "Order ord-0002 (Cetirizine 10mg Antihistamine Tablets) has been cancelled." in reply
+        assert self._statuses() == {"ord-0001": "placed", "ord-0002": "cancelled"}
+
+    @pytest.mark.parametrize("text", ["cancel ord-0001 and ord-0002", "cancel all my orders", "I want to cancel both orders"])
+    def test_all_or_several_are_cancelled(self, monkeypatch, text):
+        self._two_orders()
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", text)
+        assert "ord-0001" in reply and "ord-0002" in reply and reply.count("has been cancelled.") == 2
+        assert set(self._statuses().values()) == {"cancelled"}
+
+    def test_a_numbered_reference_names_the_order(self, monkeypatch):
+        self._two_orders()
+        self._model_must_not_run(monkeypatch)
+        _chat("s1", "cancel order 1")
+        assert self._statuses() == {"ord-0001": "cancelled", "ord-0002": "placed"}
+
+    def test_a_plain_cancel_with_several_orders_asks_which(self, monkeypatch):
+        self._two_orders()
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", "cancel my order")
+        assert "You have 2 active orders" in reply and "ord-0001" in reply and "ord-0002" in reply
+        assert set(self._statuses().values()) == {"placed"}  # nothing cancelled until they choose
+
+    def test_a_plain_cancel_with_one_order_cancels_it(self, monkeypatch):
+        store.save_address("demo_user", "10 High St, Leeds")
+        store.create_order("demo_user", "fev-003", "10 High St, Leeds", 1)
+        self._model_must_not_run(monkeypatch)
+        assert "Order ord-0001" in _chat("s1", "cancel my order")
+
+    def test_unknown_and_already_cancelled_orders_are_reported_not_invented(self, monkeypatch):
+        self._two_orders()
+        store.cancel_order("ord-0002", "demo_user")
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", "cancel ord-9999 and ord-0002")
+        assert "couldn't find an order with the ID ord-9999" in reply and "Order ord-0002 was already cancelled." in reply
+        assert self._statuses()["ord-0001"] == "placed"
+
+    def test_with_nothing_to_cancel_it_says_so(self, monkeypatch):
+        self._model_must_not_run(monkeypatch)
+        assert "don't have any active orders to cancel" in _chat("s1", "cancel all my orders")
+
+    def test_it_works_with_the_email_prompt_pending(self, monkeypatch):
+        self._two_orders()
+        store.set_pending_email("s1", "ord-0002")
+        self._model_must_not_run(monkeypatch)
+        _chat("s1", "cancel my last order")
+        assert self._statuses()["ord-0002"] == "cancelled"
+
+    @pytest.mark.parametrize("text", [
+        "don't cancel my order", "can I cancel my order?", "cancel", "cancel that", "cancel my appointment",
+        "what happens if I cancel my order",
+    ])
+    def test_negated_questions_and_vague_messages_cancel_nothing(self, monkeypatch, text):
+        self._two_orders()
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        _chat("s1", text)
+        assert set(self._statuses().values()) == {"placed"}, text
+
+    def test_an_order_awaiting_its_address_keeps_its_own_handling(self, monkeypatch):
+        self._two_orders()
+        store.set_pending_order("s1", "fev-001", 1)
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        _chat("s1", "cancel my last order")
+        assert set(self._statuses().values()) == {"placed"}
