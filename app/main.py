@@ -785,11 +785,22 @@ _CATALOG_LISTING_STARTS = {
 _MAX_CATALOG_LISTING_WORDS = 12
 
 
+_NOT_A_LISTING_REQUEST_RE = re.compile(
+    r"\b(?:return|returns|refund|exchange|cancel|replace|replacement|take|taking|give|giving|dose|dosage|safe|expire\w*|"
+    r"pay|deliver\w*|arrive|track\w*)\b",
+    re.IGNORECASE,
+)
+
+
 def _catalog_listing_reply(text: str) -> str | None:
     words = re.findall(r"[a-z']+", text.lower())
     if not words or len(words) > _MAX_CATALOG_LISTING_WORDS or "@" in text:
         return None
     if words[0] not in _CATALOG_LISTING_STARTS or not _CATALOG_LISTING_RE.search(text):
+        return None
+    # "can I return the medicine" matched "the medicine" and listed the catalog
+    # (found Oct 27): these verbs mean the customer wants something else.
+    if _NOT_A_LISTING_REQUEST_RE.search(text):
         return None
     if tools.classify(text) is not None or _products_named_in(text) or _has_unnegated_intent(text, ORDER_INTENT_RE):
         return None
@@ -1164,6 +1175,88 @@ def _reply_for_cancel_request(kind: str, ids: list[str]) -> str:
     )
 
 
+# Shop policy and logistics the assistant has NO data for. Found Oct 27: "how
+# long does delivery take", "what is your refund policy", "how do I pay", "do I
+# need a prescription" got "This demo only handles fever and cold OTC guidance
+# — I can't help with that here" (the wrong message: it is a shop question, and
+# the honest answer is "I don't have that"); "is there a delivery charge" and
+# "when will my order arrive" just printed the order list; "can I return the
+# medicine" listed the whole catalog. A specific answer here would be invented,
+# so the reply says what is not known and offers what is.
+_POLICY_TOPICS = [
+    ("delivery times or tracking", re.compile(
+        r"\b(?:when|how\s+long|how\s+soon|how\s+many\s+days)\b.{0,30}\b(?:arrive|deliver\w*|ship\w*|reach|get\s+here)\b"
+        r"|\b(?:eta|tracking|track\s+my|where\s+is\s+my\s+(?:order|package|parcel)|delivery\s+(?:time|date|status)|estimated\s+delivery)\b",
+        re.IGNORECASE), True),
+    ("delivery or shipping charges", re.compile(
+        r"\b(?:delivery|shipping|postage)\s+(?:charge|charges|cost|costs|fee|fees|price)\b|\b(?:free\s+(?:delivery|shipping)|is\s+(?:delivery|shipping)\s+free)\b",
+        re.IGNORECASE), False),
+    ("refunds or returns", re.compile(r"\b(?:refunds?|returns?|returning|exchange|money\s+back|replacement)\b", re.IGNORECASE), False),
+    ("payment methods", re.compile(
+        r"\b(?:how\s+(?:do|can)\s+i\s+pay|payments?|credit\s+cards?|debit\s+cards?|upi|cash\s+on\s+delivery|net\s*banking|paypal|accept\s+cards?)\b",
+        re.IGNORECASE), False),
+    ("opening hours or contact details", re.compile(
+        r"\b(?:opening\s+hours|are\s+you\s+open|open\s+(?:on|today|now|late)|what\s+time\s+do\s+you\s+(?:open|close)|phone\s+number|"
+        r"contact\s+(?:number|details)|customer\s+(?:care|service|support)|store\s+location|where\s+are\s+you\s+located)\b",
+        re.IGNORECASE), False),
+]
+_PRESCRIPTION_RE = re.compile(r"\bprescription\w*\b", re.IGNORECASE)
+_MAX_POLICY_WORDS = 16
+
+
+def _policy_reply(text: str) -> str | None:
+    words = re.findall(r"[a-z']+", text.lower())
+    if not words or len(words) > _MAX_POLICY_WORDS or "@" in text:
+        return None
+    # "my order" is the subject of a delivery question, not an intent to order.
+    without_subject = re.sub(r"\b(?:my|the|that|this|your|last)\s+(?:last\s+)?(?:orders?|parcel|package)\b", " ", text, flags=re.IGNORECASE)
+    if is_info_question(text) or _has_unnegated_intent(without_subject, ORDER_INTENT_RE) or _has_cancel_intent(text):
+        return None
+    if _PRESCRIPTION_RE.search(text):
+        return (
+            "Every product in our catalog is listed as over-the-counter (OTC). I don't have information on "
+            "prescription rules where you live, so a pharmacist is the right person to confirm that."
+        )
+    for topic, pattern, wants_orders in _POLICY_TOPICS:
+        if not pattern.search(text):
+            continue
+        reply = (
+            f"I don't have information about {topic} — that's outside what this assistant covers, "
+            "and I'd rather not guess."
+        )
+        orders = store.list_orders("demo_user") if wants_orders else []
+        if orders:
+            reply += "\n\nWhat I can show you is your order status:\n\n" + guardrails.build_order_status_report(orders)
+        return reply
+    return None
+
+
+# Changing the address of an order that is already placed. Found Oct 27: "can I
+# change my delivery address for ord-0001" was answered with the saved address.
+# There is no tool that edits an order, so say what is possible instead.
+_ORDER_ADDRESS_CHANGE_RE = re.compile(
+    r"\b(?:change|update|edit|modify|correct|fix)\b.{0,25}\b(?:address|delivery|shipping)\b|"
+    r"\b(?:address|delivery|shipping)\b.{0,25}\b(?:change|update|edit|modify|correct)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_order_address_change(text: str) -> bool:
+    words = re.findall(r"[a-z']+", text.lower())
+    if not words or len(words) > 20 or "@" in text:
+        return False
+    return bool(_ORDER_ADDRESS_CHANGE_RE.search(text)) and (
+        _names_an_order_id(text) or bool(re.search(r"\b(?:my|the|that|this|last)\s+(?:last\s+)?order\b", text, re.IGNORECASE))
+    )
+
+
+ORDER_ADDRESS_CHANGE_REPLY = (
+    "I can't change the address on an order that's already placed. If you need it sent somewhere else you can "
+    "cancel it (say \"cancel ord-0001\") and order again with the new address, or I can save a new address for "
+    "future orders (say \"change my address to ...\")."
+)
+
+
 def _reply_for_start_order_result(order: dict) -> str:
     if "error" in order:
         return f"Sorry, {order['error']}"
@@ -1366,6 +1459,16 @@ def chat(req: ChatRequest):
             and (new_address := _extract_address_change(text))
         ):
             reply = _reply_for_address_change(new_address)
+            messages.append({"role": "user", "content": text})
+            messages.append({"role": "assistant", "content": reply})
+        elif text and not pending_product_id and not pending_address_confirmation and _is_order_address_change(text):
+            reply = ORDER_ADDRESS_CHANGE_REPLY
+            messages.append({"role": "user", "content": text})
+            messages.append({"role": "assistant", "content": reply})
+        elif text and not pending_product_id and not pending_address_confirmation and (
+            policy_reply := _policy_reply(text)
+        ):
+            reply = policy_reply
             messages.append({"role": "user", "content": text})
             messages.append({"role": "assistant", "content": reply})
         elif text and not pending_product_id and not pending_address_confirmation and (

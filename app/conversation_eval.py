@@ -742,6 +742,23 @@ CONVERSATION_CASES = [
         ],
     },
     {
+        "name": "shop_policy_questions_are_answered_honestly",
+        # Fully deterministic. There is no policy data, so any specific answer
+        # about delivery, refunds or payment would be invented; before Oct 27
+        # these got the out-of-scope decline, the order list, or the catalog.
+        "turns": [
+            {"text": "order Ibuprofen 200mg Tablets", "checks": [("asks for an address", lambda r: "address" in r.lower())]},
+            {"text": "10 High St, Leeds", "checks": [("order placed", lambda r: "ord-0001" in r)]},
+            {"text": "how long does delivery take", "checks": [
+                ("says it does not know", lambda r: "I don't have information about delivery times or tracking" in r),
+                ("still shows the real order status", lambda r: "Order ID: ord-0001" in r)]},
+            {"text": "what is your refund policy", "checks": [("says it does not know", lambda r: "I don't have information about refunds or returns" in r and "Order ID" not in r)]},
+            {"text": "can I return the medicine", "checks": [("does not list the catalog", lambda r: "Here's what we carry" not in r)]},
+            {"text": "can I change my delivery address for ord-0001", "checks": [("explains what is possible", lambda r: "can't change the address on an order that's already placed" in r)],
+             "state_checks": [("the order is untouched", _order_status_is("ord-0001", "placed"))]},
+        ],
+    },
+    {
         "name": "bare_numeric_selection_from_a_product_list",
         # Fully deterministic — proves main.py's _resolve_bare_selection
         # dispatch is actually wired correctly end-to-end through the real

@@ -1139,3 +1139,89 @@ class TestCancelRequestsTheModelGotWrong:
         monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
         _chat("s1", "cancel my last order")
         assert set(self._statuses().values()) == {"placed"}
+
+
+class TestShopPolicyQuestionsAreAnsweredHonestly:
+    """Real bugs (Oct 27 probe): "how long does delivery take", "what is your
+    refund policy", "how do I pay", "do I need a prescription" got "This demo
+    only handles fever and cold OTC guidance — I can't help with that here";
+    "is there a delivery charge" and "when will my order arrive" just printed the
+    order list; "can I return the medicine" listed the whole catalog; "can I
+    change my delivery address for ord-0001" was answered with the saved
+    address. There is no policy data, so a specific answer would be invented."""
+
+    @staticmethod
+    def _model_must_not_run(monkeypatch):
+        def _boom(*args, **kwargs):
+            raise AssertionError("the model must not be reached")
+
+        monkeypatch.setattr(main, "run_turn", _boom)
+
+    @staticmethod
+    def _an_order():
+        store.save_address("demo_user", "10 High St, Leeds")
+        store.create_order("demo_user", "fev-003", "10 High St, Leeds", 1)
+
+    @pytest.mark.parametrize("text, topic", [
+        ("how long does delivery take", "delivery times or tracking"), ("when will my order arrive", "delivery times or tracking"),
+        ("track my order", "delivery times or tracking"), ("where is my order", "delivery times or tracking"),
+        ("is there a delivery charge", "delivery or shipping charges"), ("is delivery free", "delivery or shipping charges"),
+        ("what is your refund policy", "refunds or returns"), ("can I return the medicine", "refunds or returns"),
+        ("how do I pay", "payment methods"), ("do you accept credit cards", "payment methods"),
+        ("what is your phone number", "opening hours or contact details"), ("are you open on sunday", "opening hours or contact details"),
+    ])
+    def test_a_policy_question_says_it_has_no_information(self, monkeypatch, text, topic):
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", text)
+        assert reply.startswith(f"I don't have information about {topic}") and "rather not guess" in reply
+        assert "can't help with that here" not in reply
+
+    def test_a_delivery_question_still_shows_the_real_order_status(self, monkeypatch):
+        self._an_order()
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", "when will my order arrive")
+        assert "delivery times or tracking" in reply and "Order ID: ord-0001" in reply and "Status: placed" in reply
+
+    def test_a_refund_question_does_not_dump_the_order_list(self, monkeypatch):
+        self._an_order()
+        self._model_must_not_run(monkeypatch)
+        assert "Order ID" not in _chat("s1", "what is your refund policy")
+
+    def test_prescriptions_are_answered_from_the_catalog_not_invented(self, monkeypatch):
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", "do I need a prescription")
+        assert "over-the-counter" in reply and "pharmacist" in reply
+
+    def test_returning_the_medicine_no_longer_lists_the_catalog(self, monkeypatch):
+        self._model_must_not_run(monkeypatch)
+        assert "Here's what we carry" not in _chat("s1", "can I return the medicine")
+
+    def test_a_real_catalog_listing_request_still_works(self, monkeypatch):
+        self._model_must_not_run(monkeypatch)
+        assert "Here's what we carry" in _chat("s1", "show me all your products")
+
+    def test_changing_the_address_of_a_placed_order_is_explained(self, monkeypatch):
+        self._an_order()
+        self._model_must_not_run(monkeypatch)
+        for text in ["can I change my delivery address for ord-0001", "update the shipping address on my last order"]:
+            assert _chat("s1", text) == main.ORDER_ADDRESS_CHANGE_REPLY
+        assert store.list_orders("demo_user")[0]["address"] == "10 High St, Leeds"
+
+    def test_changing_the_saved_address_still_works(self, monkeypatch):
+        self._model_must_not_run(monkeypatch)
+        assert "saved 99 New Rd, York" in _chat("s1", "change my shipping address to 99 New Rd, York")
+
+    @pytest.mark.parametrize("text", [
+        "order Ibuprofen 200mg Tablets", "cancel my order", "what is the price of ibuprofen", "I paid twice",
+        "what are the side effects of ibuprofen",
+    ])
+    def test_other_messages_are_not_taken_for_policy_questions(self, monkeypatch, text):
+        store.save_address("demo_user", "10 High St, Leeds")
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        reply = _chat("s1", text)
+        assert "rather not guess" not in reply
+
+    def test_an_order_awaiting_its_address_is_left_alone(self, monkeypatch):
+        store.set_pending_order("s1", "fev-003", 1)
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        assert "rather not guess" not in _chat("s1", "how do I pay")
