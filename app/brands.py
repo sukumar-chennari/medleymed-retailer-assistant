@@ -67,3 +67,31 @@ def classify(text: str) -> tuple[list[str], list[str]] | None:
 
 def is_ingredient_itself(brand: str) -> bool:
     return brand in _SAME_AS_INGREDIENT
+
+
+# A reply that RECOMMENDS a medicine we don't carry. Found Oct 22-26: the model's
+# free text said "I suggest taking Acetaminophen (Tylenol)", "ibuprofen (Advil,
+# Motrin)", "you might consider taking ... Benadryl" — products that are not in
+# the catalog, so they cannot be ordered and were never vetted against the
+# knowledge base. Mentioning a brand informationally ("Tylenol is a brand of
+# paracetamol") is fine; recommending one is not, unless the customer named it.
+_RECOMMEND_VERBS = (
+    r"(?:recommend(?:ed|ing)?|suggest(?:ed|ing)?|consider(?:ing)?|try(?:ing)?|take|taking|use|using|opt\s+for|go\s+with|"
+    r"best\s+(?:option|choice)\s+is|you\s+(?:can|could|might|may|should)\s+(?:take|try|use))"
+)
+_RECOMMENDABLE_OFF_CATALOG = sorted(
+    (n for n in {*BRAND_INGREDIENT, *NOT_STOCKED} if n not in {"acetaminophen", "ors"}), key=len, reverse=True
+)
+
+
+def recommended_off_catalog(reply: str, user_text: str = "") -> list[str]:
+    """Brand/medicine names the reply recommends that we don't stock and that
+    the customer did not name themselves."""
+    found = []
+    user_lower = user_text.lower()
+    for name in _RECOMMENDABLE_OFF_CATALOG:
+        if re.search(rf"\b{re.escape(name)}\b", user_lower):
+            continue
+        if re.search(rf"\b{_RECOMMEND_VERBS}\b[^.\n]{{0,80}}\b{re.escape(name)}\b", reply, re.IGNORECASE):
+            found.append(name)
+    return found

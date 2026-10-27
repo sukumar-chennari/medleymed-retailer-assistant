@@ -845,6 +845,28 @@ CONVERSATION_CASES = [
         ],
     },
     {
+        "name": "a_recommendation_never_names_a_medicine_we_do_not_carry",
+        # Needs the real LLM. On Oct 22-26 the model's free text recommended
+        # "Acetaminophen (Tylenol)", "ibuprofen (Advil, Motrin)" and
+        # "Benadryl". Whatever it writes, a recommendation of a brand we don't
+        # stock must come out as what we do carry. The questions below avoid
+        # naming the brand themselves, so any brand in the reply is the model's.
+        "turns": [
+            {
+                "text": "what can I take for a fever if I am allergic to paracetamol",
+                "checks": [
+                    ("no brand we don't carry is recommended", lambda r: not re.search(r"\b(?:take|try|use|consider|suggest|recommend)\w*\b[^.\n]{0,80}\b(?:tylenol|advil|motrin|nurofen|panadol|crocin|dolo|benadryl|aspirin)\b", r, re.IGNORECASE)),
+                ],
+            },
+            {
+                "text": "I have a cough and a runny nose, I am an adult, anything besides your usual list",
+                "checks": [
+                    ("no brand we don't carry is recommended", lambda r: not re.search(r"\b(?:take|try|use|consider|suggest|recommend)\w*\b[^.\n]{0,80}\b(?:nyquil|dayquil|benadryl|robitussin|mucinex|sudafed|zyrtec|vicks)\b", r, re.IGNORECASE)),
+                ],
+            },
+        ],
+    },
+    {
         "name": "out_of_scope_decline",
         # Needs the real LLM to decide to call decline_out_of_scope.
         "turns": [

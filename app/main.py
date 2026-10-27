@@ -896,6 +896,17 @@ def _screen_recommendation(session_id: str, reply: str, messages: list[dict]) ->
     with what was actually shown."""
     user_texts = [m["content"] for m in messages if m.get("role") == "user" and isinstance(m.get("content"), str)]
     stated = contraindications.stated_text(user_texts)
+
+    # A recommendation of a medicine we don't carry is replaced by what we DO
+    # carry with the same ingredient (see brands.recommended_off_catalog).
+    off_catalog = brands.recommended_off_catalog(reply, stated)
+    if off_catalog:
+        replacement = _brand_availability_reply(f"do you have {' and '.join(off_catalog)}", session_id)
+        if replacement:
+            if messages and messages[-1].get("role") == "assistant" and messages[-1].get("content") == reply:
+                messages[-1] = {**messages[-1], "content": replacement}
+            reply = replacement
+
     screened, excluded = contraindications.screen_reply(reply, stated, store.get_catalog())
 
     note = red_flags.doctor_note(stated)
