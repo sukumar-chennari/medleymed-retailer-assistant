@@ -759,6 +759,23 @@ CONVERSATION_CASES = [
         ],
     },
     {
+        "name": "cough_with_fever_and_cold_symptoms_is_planned_as_a_whole",
+        # Fully deterministic. Before Oct 28 "fever and a dry cough" got the
+        # cough product only, and after "dry or chesty?" the reply "for myself"
+        # was declined as out of scope.
+        "turns": [
+            {"text": "I'm an adult with a fever and a dry cough", "checks": [
+                ("recommends the fever products", lambda r: "For the fever:" in r and "(fev-001)" in r),
+                ("and the dry-cough product", lambda r: "For the dry cough:" in r and "(col-004)" in r)]},
+            {"text": "I have a fever, cough, and runny nose", "checks": [("asks what is missing in one question", lambda r: r.startswith("Two quick questions"))]},
+            {"text": "for myself", "checks": [("asks only about the cough now", lambda r: "dry" in r.lower() and "Two quick" not in r and "can't help with that" not in r)]},
+            {"text": "chesty", "checks": [
+                ("all three symptom groups", lambda r: "For the fever:" in r and "chesty (productive) cough" in r and "For the cold symptoms" in r),
+                ("the paracetamol combination product is left out", lambda r: "(col-003)" not in r)]},
+            {"text": "my 4 year old has a fever, dry cough and runny nose", "checks": [("only children's products", lambda r: "(fev-004)" in r and "(col-006)" in r and "(fev-001)" not in r)]},
+        ],
+    },
+    {
         "name": "bare_numeric_selection_from_a_product_list",
         # Fully deterministic — proves main.py's _resolve_bare_selection
         # dispatch is actually wired correctly end-to-end through the real

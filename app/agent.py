@@ -26,7 +26,7 @@ from langchain_core.tools import tool
 from langchain_ollama import ChatOllama
 from langgraph.errors import GraphRecursionError
 
-from app import config, guardrails, retrieval, store, tools
+from app import config, guardrails, retrieval, store, symptom_plan, tools
 
 MAX_TOOL_ROUNDS = 6
 
@@ -724,6 +724,8 @@ def resolve_clarification(trigger: str, answer_text: str, session_id: str) -> st
     actually asking for. trigger == "fever+cold" is the combined-category
     case (see _needs_clarification/_resolve_fever_and_cold), not a real
     CLARIFYING_QUESTIONS key."""
+    if symptom_plan.is_plan_trigger(trigger):
+        return symptom_plan.resume(trigger, answer_text, session_id)
     if trigger == "fever+cold":
         return _resolve_fever_and_cold(answer_text, session_id)
     base_trigger, suffix = _split_trigger(trigger)
@@ -1476,6 +1478,15 @@ def run_turn(
         # Asking the question is now deterministic and bypasses the LLM
         # entirely for this turn, the same way pleasantries do above —
         # there's no chance to skip or hallucinate around it.
+        # A cough together with a fever and/or cold symptoms is planned as a
+        # whole (see symptom_plan.py) — it used to recommend the cough product
+        # alone and drop the rest.
+        plan_reply = None if is_info_question(user_text) else symptom_plan.start(user_text, session_id)
+        if plan_reply:
+            messages.append({"role": "user", "content": user_text})
+            messages.append({"role": "assistant", "content": plan_reply})
+            return plan_reply, messages
+
         clarification = _needs_clarification(user_text)
         if clarification:
             trigger, question = clarification
