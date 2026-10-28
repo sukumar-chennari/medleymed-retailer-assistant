@@ -776,6 +776,34 @@ CONVERSATION_CASES = [
         ],
     },
     {
+        "name": "picking_from_a_list_by_name_number_and_several",
+        # Fully deterministic. On Oct 28, after a list: "the one with ibuprofen"
+        # got the child-or-adult question, "number 2 please" a made-up "confirm
+        # your address", "the second one and the third one" an order for TWO of
+        # the second product, and "which one is cheapest" the whole-catalog
+        # cheapest.
+        "turns": [
+            {"text": "I have a fever", "checks": [("asks child or adult", lambda r: "child, or for an adult" in r)]},
+            {"text": "for myself", "checks": [("shows the adult fever list", lambda r: "(fev-001)" in r and "(fev-003)" in r)]},
+            {"text": "which one is cheapest", "checks": [("answers for the list", lambda r: "Of the products I just showed you" in r and "$4.99" in r)]},
+            {
+                "text": "the second one and the third one",
+                "checks": [("asks which first", lambda r: r.startswith("I can start one order at a time"))],
+                "state_checks": [("no order, nothing pending", lambda sid: store.get_pending_order(sid) is None)],
+            },
+            {
+                "text": "the one with ibuprofen",
+                "checks": [("starts the ibuprofen order", lambda r: "address" in r.lower() and "child, or for an adult" not in r)],
+                "state_checks": [("pending is ibuprofen", lambda sid: (store.get_pending_order(sid) or {}).get("product_id") == "fev-003")],
+            },
+            {
+                "text": "2 Pick Street, Pune",
+                "checks": [("ships the picked product", lambda r: "Order confirmed!" in r and "Ibuprofen 200mg Tablets" in r)],
+                "state_checks": [("one real order", _order_count_is(1))],
+            },
+        ],
+    },
+    {
         "name": "bare_numeric_selection_from_a_product_list",
         # Fully deterministic — proves main.py's _resolve_bare_selection
         # dispatch is actually wired correctly end-to-end through the real

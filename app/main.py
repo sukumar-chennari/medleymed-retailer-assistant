@@ -735,13 +735,24 @@ def _products_named_in(text: str) -> list[dict]:
     ]
 
 
-def _price_reply(text: str) -> str | None:
+_ABOUT_THE_SHOWN_LIST_RE = re.compile(r"\b(?:which\s+(?:one|of)|of\s+(?:these|those|them)|the\s+cheapest\s+one|these|those)\b", re.IGNORECASE)
+
+
+def _price_reply(text: str, shown_products: list[dict] | None = None) -> str | None:
     words = re.findall(r"[a-z']+", text.lower())
     if not words or len(words) > _MAX_PRICE_QUESTION_WORDS or "@" in text:
         return None
     if _PRICE_NOT_DOSE_RE.search(text):
         return None
     catalog = store.get_catalog()
+
+    # "which one is cheapest" right after a list means THAT list. It used to
+    # answer with the cheapest product in the whole catalog (found Oct 28:
+    # after a cold list, "Paracetamol 500mg Tablets", which was not on screen).
+    if shown_products and len(shown_products) > 1 and _CHEAPEST_RE.search(text) and _ABOUT_THE_SHOWN_LIST_RE.search(text):
+        cheapest = min(p["price_usd"] for p in shown_products)
+        winners = " and ".join(p["name"] for p in shown_products if p["price_usd"] == cheapest)
+        return f"Of the products I just showed you, the lowest-priced is {winners} at ${cheapest:.2f}."
 
     if _CHEAPEST_RE.search(text):
         if set(words) & {"fever"} and not set(words) & _COLD_CATEGORY_WORDS:
@@ -1257,6 +1268,82 @@ ORDER_ADDRESS_CHANGE_REPLY = (
 )
 
 
+# Picking from a list in ways the exact-phrase resolver above does not cover.
+# Found Oct 28, after a list was shown:
+# - "the one with ibuprofen" / "the ibuprofen one" -> the child-or-adult question
+#   (the name was not recognised as picking the listed ibuprofen product);
+# - "number 2 please" -> the model said "before we proceed, confirm your
+#   address" although no order had been started;
+# - "the second one and the third one" -> an order for TWO of the second
+#   product (the two references were read as a quantity);
+# - "both of them" -> the model's own prose, nothing selected.
+# Resolved against the list that was actually shown, never the catalog.
+_NUMBERED_REF_RE = re.compile(r"(?:\b(?:number|no\.?|option|item|choice)|#)\s*(\d{1,2})\b", re.IGNORECASE)
+_MANY_REF_RE = re.compile(r"\b(?:both(?:\s+of\s+(?:them|these|those))?|all\s+of\s+(?:them|these|those)|the\s+first\s+two|the\s+last\s+two|two\s+of\s+them)\b", re.IGNORECASE)
+_NOT_A_SELECTION_RE = re.compile(
+    r"\b(?:what|how|why|which|tell|about|more|explain|difference|compare|vs|better|safe|side|dose|dosage|price|cost|cheap\w*|"
+    r"info|information|details?|ingredients?)\b",
+    re.IGNORECASE,
+)
+_MAX_LIST_REFERENCE_WORDS = 10
+
+
+def _resolve_list_reference(text: str, shown: list[dict] | None) -> tuple[str, list[dict]] | None:
+    """("one", [product]) or ("many", [products]) for a message that picks from
+    the list just shown, else None."""
+    if not shown or len(shown) < 2:
+        return None
+    words = re.findall(r"[a-z0-9']+", text.lower())
+    if not words or len(words) > _MAX_LIST_REFERENCE_WORDS or "@" in text or _NOT_A_SELECTION_RE.search(text):
+        return None
+    # "both my kids have a fever" describes symptoms; "the ibuprofen one" names a
+    # drug (a fever keyword itself) and is a selection.
+    if tools.classify(text) is not None and not _names_a_drug(text):
+        return None
+
+    positions: list[int] = []
+    for word in words:
+        if word in _ORDINAL_TO_INDEX:
+            positions.append(_ORDINAL_TO_INDEX[word])
+        elif word == "last":
+            positions.append(len(shown))
+    positions += [int(n) for n in _NUMBERED_REF_RE.findall(text)]
+    positions = list(dict.fromkeys(positions))
+    if any(not 1 <= n <= len(shown) for n in positions):
+        return None
+    if len(positions) >= 2:
+        return "many", [shown[n - 1] for n in positions]
+    if _MANY_REF_RE.search(text):
+        return "many", list(shown)
+    if len(positions) == 1:
+        return "one", [shown[positions[0] - 1]]
+
+    # By name: a distinctive word (>= 5 letters) in the product's name or
+    # ingredient that belongs to exactly one listed product.
+    tokens = set(words)
+    named = []
+    for product in shown:
+        own = set(re.findall(r"[a-z']+", f"{product['name']} {product['active_ingredient']}".lower()))
+        others = set()
+        for other in shown:
+            if other is not product:
+                others |= set(re.findall(r"[a-z']+", f"{other['name']} {other['active_ingredient']}".lower()))
+        distinctive = {w for w in own - others if len(w) >= 5}
+        if tokens & distinctive:
+            named.append(product)
+    if len(named) == 1 and len(words) <= 6:
+        return "one", named
+    return None
+
+
+def _reply_for_many_references(products: list[dict]) -> str:
+    listing = "\n".join(f"- {p['name']} ({p['id']})" for p in products)
+    return (
+        "I can start one order at a time. Which would you like first?\n" + listing +
+        "\n\nSay the name, its number in the list, or \"the first one\"."
+    )
+
+
 def _reply_for_start_order_result(order: dict) -> str:
     if "error" in order:
         return f"Sorry, {order['error']}"
@@ -1497,7 +1584,7 @@ def chat(req: ChatRequest):
             reply = combination_reply
             messages.append({"role": "user", "content": text})
             messages.append({"role": "assistant", "content": reply})
-        elif text and (price_reply := _price_reply(text)):
+        elif text and (price_reply := _price_reply(text, last_products)):
             # Answered without touching any pending state, so a price question
             # asked mid-order leaves the order waiting for its address.
             reply = price_reply
@@ -1576,6 +1663,18 @@ def chat(req: ChatRequest):
                 image_b64=req.image_b64,
                 image_media_type=req.image_media_type,
             )
+        elif (
+            not selected_product and not pending_product_id and not pending_address_confirmation and last_products
+            and (list_reference := _resolve_list_reference(text, last_products))
+        ):
+            kind, products = list_reference
+            if kind == "many":
+                reply = _reply_for_many_references(products)
+            else:
+                order = json.loads(tools.start_order(products[0]["id"], req.session_id))
+                reply = _reply_for_start_order_result(order)
+            messages.append({"role": "user", "content": text})
+            messages.append({"role": "assistant", "content": reply})
         elif selected_product and not pending_product_id:
             order = json.loads(tools.start_order(selected_product["id"], req.session_id))
             reply = _reply_for_start_order_result(order)

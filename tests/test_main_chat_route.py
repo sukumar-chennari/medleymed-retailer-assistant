@@ -1225,3 +1225,81 @@ class TestShopPolicyQuestionsAreAnsweredHonestly:
         store.set_pending_order("s1", "fev-003", 1)
         monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
         assert "rather not guess" not in _chat("s1", "how do I pay")
+
+
+class TestPickingFromTheListThatWasShown:
+    """Real bugs (Oct 28 probe, after a list): "the one with ibuprofen" -> the
+    child-or-adult question; "number 2 please" -> the model claimed "before we
+    proceed, confirm your address" with no order started; "the second one and
+    the third one" -> an order for TWO of the second product; "which one is
+    cheapest" -> the cheapest product in the whole catalog, not the list."""
+
+    @staticmethod
+    def _shown(*ids):
+        store.set_last_products("s1", [store.find_product(i) for i in ids])
+
+    @staticmethod
+    def _model_must_not_run(monkeypatch):
+        def _boom(*args, **kwargs):
+            raise AssertionError("the model must not be reached")
+
+        monkeypatch.setattr(main, "run_turn", _boom)
+
+    @pytest.mark.parametrize("text, product_id", [
+        ("the ibuprofen one", "fev-003"), ("the one with ibuprofen", "fev-003"), ("ibuprofen please", "fev-003"),
+        ("number 2 please", "fev-002"), ("number 3", "fev-003"), ("option 1", "fev-001"), ("#2", "fev-002"),
+        ("i'll take the first", "fev-001"), ("the second one please", "fev-002"), ("the last one", "fev-003"),
+        ("the extra strength one", "fev-002"),
+    ])
+    def test_the_named_or_numbered_product_starts_its_order(self, monkeypatch, text, product_id):
+        self._shown("fev-001", "fev-002", "fev-003")
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", text)
+        assert "address" in reply.lower()
+        assert store.get_pending_order("s1") == {"product_id": product_id, "quantity": 1}
+
+    @pytest.mark.parametrize("text", [
+        "both of them", "the second one and the third one", "can I get the first two", "number 1 and number 3",
+    ])
+    def test_several_references_ask_which_first_and_order_nothing(self, monkeypatch, text):
+        self._shown("fev-001", "fev-002", "fev-003")
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", text)
+        assert reply.startswith("I can start one order at a time. Which would you like first?")
+        assert store.get_pending_order("s1") is None and store.list_orders("demo_user") == []
+
+    @pytest.mark.parametrize("text", ["which one is cheapest", "the cheapest one", "which of these is the cheapest"])
+    def test_cheapest_means_the_list_on_screen(self, monkeypatch, text):
+        self._shown("col-001", "col-002", "col-004")   # $5.99, $6.99, $6.29: the cheapest is col-001
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", text)
+        assert reply == "Of the products I just showed you, the lowest-priced is Cetirizine 10mg Antihistamine Tablets at $5.99."
+
+    @pytest.mark.parametrize("text", [
+        "tell me more about the first one", "what is the difference between the first two", "which one is safest",
+        "how much is the second one", "what are the side effects of the third one",
+    ])
+    def test_questions_about_the_list_are_left_to_the_model(self, monkeypatch, text):
+        self._shown("fev-001", "fev-002", "fev-003")
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        assert _chat("s1", text) == "from the model"
+        assert store.get_pending_order("s1") is None
+
+    def test_symptom_sentences_are_not_selections(self, monkeypatch):
+        self._shown("fev-001", "fev-002", "fev-003")
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        for text in ["both my kids have a fever", "I have all the symptoms", "my second child has a cough"]:
+            assert main._resolve_list_reference(text, store.get_last_products("s1")) is None, text
+
+    def test_without_a_list_on_screen_nothing_is_selected(self):
+        assert main._resolve_list_reference("number 2 please", None) is None
+        assert main._resolve_list_reference("number 2 please", [store.find_product("fev-001")]) is None
+
+    def test_a_reference_outside_the_list_is_not_guessed(self):
+        shown = [store.find_product("fev-001"), store.find_product("fev-002")]
+        assert main._resolve_list_reference("number 5", shown) is None
+
+    def test_the_catalog_wide_cheapest_still_works_with_no_list_reference(self, monkeypatch):
+        self._shown("col-001", "col-002", "col-004")
+        self._model_must_not_run(monkeypatch)
+        assert "Paracetamol 500mg Tablets at $4.99" in _chat("s1", "what is your cheapest fever medicine")
