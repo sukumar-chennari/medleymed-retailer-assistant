@@ -804,6 +804,21 @@ CONVERSATION_CASES = [
         ],
     },
     {
+        "name": "cold_and_fever_lists_only_contain_relevant_products",
+        # Fully deterministic. On Oct 28 an adult with a fever and a stuffy nose
+        # was shown all 8 products: both cough syrups (no cough) and Cold & Flu
+        # next to the paracetamol tablets (the knowledge base warns against
+        # doubling up on paracetamol).
+        "turns": [
+            {"text": "I'm an adult with a headache and a stuffy nose", "checks": [
+                ("offers the fever products", lambda r: "(fev-001)" in r),
+                ("and the antihistamine and decongestant", lambda r: "(col-001)" in r and "(col-002)" in r),
+                ("no cough syrups, no paracetamol combination", lambda r: "(col-004)" not in r and "(col-005)" not in r and "(col-003)" not in r)]},
+            {"text": "I'm an adult with a sore throat", "checks": [
+                ("cold products only, without cough syrups", lambda r: "(col-001)" in r and "(col-003)" in r and "(col-004)" not in r and "(fev-001)" not in r)]},
+        ],
+    },
+    {
         "name": "bare_numeric_selection_from_a_product_list",
         # Fully deterministic — proves main.py's _resolve_bare_selection
         # dispatch is actually wired correctly end-to-end through the real

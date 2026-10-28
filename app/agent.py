@@ -516,6 +516,9 @@ FEVER_AND_COLD_COMBINED_QUESTION = (
 # cold sub-symptom, not itself a classify_categories() category.
 _CATEGORY_TRIGGERS = {"fever", "cold"}
 
+# The two adult cough syrups: the dry-cough suppressant and the expectorant.
+_COUGH_PRODUCT_IDS = {"col-004", "col-005"}
+
 # Cough's own qualifiers (dry/wet/...) don't overlap with age at all, but
 # every product a cough answer can resolve to is ALSO split by age (col-004/
 # col-005 are adult, col-006 is the pediatric cough+cold combo). A message
@@ -706,6 +709,13 @@ def _resolve_fever_and_cold(answer_text: str, session_id: str) -> str | None:
                 break
     if not product_ids:
         return None
+    # An adult with a fever AND cold symptoms (no cough: that goes through
+    # symptom_plan) was shown all 8 products — both cough syrups, and Cold & Flu
+    # next to the paracetamol fever tablets, which the knowledge base says not
+    # to double up on (found Oct 28). Keep the fever list and the cold products
+    # that match: the antihistamine and the decongestant.
+    if all(pid in product_ids for pid in ("fev-001", "col-001")):
+        product_ids = [pid for pid in product_ids if pid not in _COUGH_PRODUCT_IDS and pid != "col-003"]
     products = [p for p in (store.find_product(pid) for pid in product_ids) if p]
     return _render_products(products, session_id)
 
@@ -739,7 +749,13 @@ def resolve_clarification(trigger: str, answer_text: str, session_id: str) -> st
                 return _resolve_child_cough(branch, session_id)
             if base_trigger == "cold" and suffix.startswith("cough_"):
                 return _resolve_cold_with_known_cough_type(branch, suffix.removeprefix("cough_"), session_id)
-            products = [p for p in (store.find_product(pid) for pid in branch["product_ids"]) if p]
+            product_ids = list(branch["product_ids"])
+            if base_trigger == "cold" and not suffix:
+                # A plain cold trigger means no cough was mentioned (a cough
+                # goes through the cough / symptom_plan paths), so the two
+                # cough syrups are not relevant to an adult's sore throat.
+                product_ids = [pid for pid in product_ids if pid not in _COUGH_PRODUCT_IDS]
+            products = [p for p in (store.find_product(pid) for pid in product_ids) if p]
             return _render_products(products, session_id)
     return None
 
