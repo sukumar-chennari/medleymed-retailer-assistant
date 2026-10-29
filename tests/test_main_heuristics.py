@@ -408,3 +408,21 @@ class TestAnOrderSentenceNamingADrugIsNotAnAddress:
     ])
     def test_real_addresses_that_start_like_an_order_still_pass(self, text):
         assert main._looks_like_a_first_time_address(text) is True
+
+
+class TestNonLatinAddressesAreAddresses:
+    """Real bug (Oct 29): the "conversational words" check tokenised Latin letters
+    only, so "7 బాగ్ లింగంపల్లి, హైదరాబాద్" reduced to the token "7" and was refused
+    as "just a small number" — no Telugu or Devanagari address with a short house
+    number could ever be accepted."""
+
+    @pytest.mark.parametrize("text", [
+        "7 బాగ్ లింగంపల్లి, హైదరాబాద్", "12 गांधी नगर, दिल्ली", "5 முதல் தெரு, சென்னை", "3 Café Straße, München",
+    ])
+    def test_a_non_latin_address_with_a_short_number_passes(self, text):
+        assert main._looks_like_a_first_time_address(text) is True
+        assert main._is_not_an_address_phrase(text) is False
+
+    @pytest.mark.parametrize("text", ["make it 2", "one more", "2 please", "x2", "actually just 1"])
+    def test_the_conversational_phrases_are_still_refused(self, text):
+        assert main._is_not_an_address_phrase(text) is True

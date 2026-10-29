@@ -819,6 +819,46 @@ CONVERSATION_CASES = [
         ],
     },
     {
+        "name": "hindi_script_is_understood",
+        # Fully deterministic. On Oct 29 these were declined as out of scope.
+        "turns": [
+            {"text": "मुझे बुखार है", "checks": [("asks child or adult", lambda r: "child, or for an adult" in r)]},
+        ],
+    },
+    {
+        "name": "telugu_script_is_understood",
+        "turns": [
+            {"text": "నాకు జ్వరం ఉంది", "checks": [("asks child or adult", lambda r: "child, or for an adult" in r)]},
+        ],
+    },
+    {
+        "name": "romanised_telugu_is_understood",
+        "turns": [
+            {"text": "naaku jvaram undi", "checks": [("asks child or adult", lambda r: "child, or for an adult" in r)]},
+        ],
+    },
+    {
+        "name": "romanised_telugu_childs_dry_cough",
+        # A fresh session: in the case above an earlier question is still open,
+        # so a later message is (correctly) taken as its answer.
+        "turns": [
+            {"text": "naa pillaki podi daggu undi", "checks": [("reaches the children's syrup", lambda r: "Children's Cold & Cough Syrup" in r)]},
+        ],
+    },
+    {
+        "name": "a_telugu_script_address_is_accepted",
+        # A Telugu-script address with a short house number was refused as an
+        # address (the "conversational words" check only tokenised Latin letters).
+        "turns": [
+            {"text": "order Ibuprofen 200mg Tablets", "checks": [("asks for an address", lambda r: "address" in r.lower())]},
+            {
+                "text": "7 బాగ్ లింగంపల్లి, హైదరాబాద్",
+                "checks": [("a Telugu-script address is accepted exactly as typed", lambda r: "Order confirmed!" in r and "Shipping to: 7 బాగ్ లింగంపల్లి, హైదరాబాద్" in r)],
+                "state_checks": [("one real order", _order_count_is(1))],
+            },
+        ],
+    },
+    {
         "name": "bare_numeric_selection_from_a_product_list",
         # Fully deterministic — proves main.py's _resolve_bare_selection
         # dispatch is actually wired correctly end-to-end through the real

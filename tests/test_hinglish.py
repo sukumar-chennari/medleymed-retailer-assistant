@@ -124,3 +124,72 @@ class TestTheGlossNeverTouchesAnAddress:
 
         monkeypatch.setattr(agent, "create_agent", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no model")))
         assert "child, or for an adult" in self._chat("s1", "mujhe bukhar hai")
+
+
+class TestDevanagariTeluguAndRomanisedTelugu:
+    """Real gap (Oct 29 probe): "मुझे बुखार है", "నాకు జ్వరం ఉంది", "naaku jvaram undi"
+    and "naa pillaki daggu undi" were all declined as out of scope. The shop is in
+    Hyderabad; Hindi script, Telugu script and romanised Telugu are all realistic."""
+
+    @pytest.mark.parametrize("text, expected", [
+        ("मुझे बुखार है", "मुझे बुखार है (fever)"),
+        ("मेरे बच्चे को खांसी है", "मेरे बच्चे को खांसी है (cough; child)"),
+        ("नाक बह रही है और छींक आ रही है", "नाक बह रही है और छींक आ रही है (sneezing; runny nose)"),
+        ("बलगम वाली खांसी", "बलगम वाली खांसी (wet cough with phlegm; cough)"),
+        ("నాకు జ్వరం ఉంది", "నాకు జ్వరం ఉంది (fever)"),
+        ("నాకు జలుబు మరియు దగ్గు ఉంది", "నాకు జలుబు మరియు దగ్గు ఉంది (cough; cold)"),
+        ("నాకు తలనొప్పి మరియు గొంతు నొప్పి", "నాకు తలనొప్పి మరియు గొంతు నొప్పి (headache; sore throat)"),
+        ("పొడి దగ్గు ఉంది", "పొడి దగ్గు ఉంది (dry; cough)"),
+        ("నా పిల్లలకు జ్వరం", "నా పిల్లలకు జ్వరం (fever; child)"),
+        ("naaku jvaram undi", "naaku jvaram undi (fever)"),
+        ("naa pillaki daggu undi", "naa pillaki daggu undi (cough; child)"),
+        ("podi daggu undi", "podi daggu undi (dry; cough)"),
+        ("talanoppi undi", "talanoppi undi (headache)"),
+        ("gontu noppi", "gontu noppi (sore throat)"),
+    ])
+    def test_the_words_are_glossed(self, text, expected):
+        assert hinglish.gloss(text) == expected
+
+    @pytest.mark.parametrize("text", ["my daughter has a cough", "I have a fever", "order Ibuprofen 200mg Tablets", "नमस्ते", "నమస్కారం", "hello"])
+    def test_text_with_no_known_word_is_unchanged(self, text):
+        assert hinglish.gloss(text) == text
+
+
+@pytest.mark.usefixtures("isolated_db")
+class TestRouteInOtherScripts:
+    @pytest.fixture(autouse=True)
+    def _no_llm(self, monkeypatch):
+        from app import agent
+
+        monkeypatch.setattr(config, "SMTP_CONFIGURED", False)
+        monkeypatch.setattr(agent, "create_agent", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no model")))
+
+    def _chat(self, sid, text):
+        res = client.post("/api/chat", json={"session_id": sid, "text": text})
+        res.raise_for_status()
+        return res.json()["reply"]
+
+    @pytest.mark.parametrize("text", ["मुझे बुखार है", "నాకు జ్వరం ఉంది", "naaku jvaram undi"])
+    def test_a_fever_gets_the_clarifying_question_not_the_decline(self, text):
+        reply = self._chat("s1", text)
+        assert "child, or for an adult" in reply and "can't help with that" not in reply
+
+    @pytest.mark.parametrize("text, name", [
+        ("मेरे बच्चे को सूखी खांसी है", "Children's Cold & Cough Syrup"),
+        ("naa pillaki podi daggu undi", "Children's Cold & Cough Syrup"),
+    ])
+    def test_a_childs_dry_cough_reaches_the_childrens_syrup(self, text, name):
+        assert name in self._chat("s1", text)
+
+    def test_a_telugu_cough_and_cold_with_a_fever_is_planned_as_a_whole(self):
+        first = self._chat("s1", "నాకు జ్వరం, జలుబు మరియు దగ్గు ఉంది")
+        assert "child" in first and "dry" in first          # the combined question
+        final = self._chat("s1", "adult dry")
+        assert "For the fever:" in final and "For the dry cough:" in final
+
+    @pytest.mark.parametrize("address", ["12 Jwara Road, Pune", "Pilla Nagar 4, Hyderabad", "7 బాగ్ లింగంపల్లి, హైదరాబాద్"])
+    def test_an_address_is_never_altered(self, address):
+        store.set_pending_order("s1", "fev-003", 1)
+        reply = self._chat("s1", address)
+        assert f"Shipping to: {address}\n" in reply + "\n"
+        assert store.get_address("demo_user") == address

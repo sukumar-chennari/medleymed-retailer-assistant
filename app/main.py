@@ -213,7 +213,10 @@ def _is_not_an_address_phrase(text: str) -> bool:
         return True
     if _STARTS_LIKE_AN_ORDER_RE.match(text) and (_names_a_drug(text) or _STRENGTH_RE.search(text)):
         return True
-    tokens = re.findall(r"[a-z]+|\d+", text.lower().replace("'", " "))
+    # Unicode-aware on purpose: with [a-z] only, a Telugu or Devanagari address
+    # such as "7 బాగ్ లింగంపల్లి, హైదరాబాద్" reduced to the single token "7" and
+    # was refused as "just a small number" (found Oct 29).
+    tokens = re.findall(r"\d+|[^\W\d_]+", text.lower().replace("'", " "))
     if not tokens:
         return False
     return all(t in _CONVERSATIONAL_WORDS or (t.isdigit() and len(t) <= 2) for t in tokens)
