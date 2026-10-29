@@ -1303,3 +1303,40 @@ class TestPickingFromTheListThatWasShown:
         self._shown("col-001", "col-002", "col-004")
         self._model_must_not_run(monkeypatch)
         assert "Paracetamol 500mg Tablets at $4.99" in _chat("s1", "what is your cheapest fever medicine")
+
+
+class TestAnEmailTypedWhereAnAddressIsExpected:
+    """Real weakness (Oct 29, a flaky harness check): a bare email typed while an
+    order waited for its address went to the model, which sometimes asked "is your
+    shipping address still sukumar123@example.com?"."""
+
+    @staticmethod
+    def _model_must_not_run(monkeypatch):
+        def _boom(*args, **kwargs):
+            raise AssertionError("the model must not be reached")
+
+        monkeypatch.setattr(main, "run_turn", _boom)
+
+    def test_awaiting_an_address_the_email_is_saved_and_the_address_asked_again(self, monkeypatch):
+        store.set_pending_order("s1", "fev-003", 1)
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", "sukumar123@example.com")
+        assert reply == "Thanks — I've saved sukumar123@example.com for your order confirmation. What's your shipping address so I can send that out?"
+        assert store.get_email("demo_user") == "sukumar123@example.com"
+        assert store.get_address("demo_user") in (None, "") and store.get_pending_order("s1")["product_id"] == "fev-003"
+        assert "Order confirmed!" in _chat("s1", "5 Mid Rd, Pune")
+
+    def test_at_an_address_confirmation_the_question_is_asked_again(self, monkeypatch):
+        store.save_address("demo_user", "10 High St, Leeds")
+        store.set_pending_address_confirmation("s1", "fev-003", 1)
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", "a@b.com")
+        assert "saved a@b.com" in reply and "We have this address on file: 10 High St, Leeds" in reply
+        assert store.get_address("demo_user") == "10 High St, Leeds"
+        assert store.get_pending_address_confirmation("s1") is not None
+        assert "Order confirmed!" in _chat("s1", "yes")
+
+    def test_an_address_with_an_email_alongside_is_still_an_address(self, monkeypatch):
+        store.set_pending_order("s1", "fev-003", 1)
+        reply = _chat("s1", "5 Mid Rd, Pune, a@b.com")
+        assert "Order confirmed!" in reply and "5 Mid Rd, Pune" in reply

@@ -1465,6 +1465,23 @@ def chat(req: ChatRequest):
                     image_b64=req.image_b64,
                     image_media_type=req.image_media_type,
                 )
+        elif (pending_product_id or pending_address_confirmation) and text and _is_bare_email(text):
+            # An email typed where an address was expected. It used to reach the
+            # model, which sometimes asked "is your shipping address still
+            # sukumar123@example.com?" (a flaky harness check, found Oct 29): the
+            # email is saved for the order confirmation and the address is asked
+            # for again, with no model involved.
+            email_given, _ = _extract_email(text)
+            store.save_email("demo_user", email_given)
+            if pending_product_id:
+                question = "What's your shipping address so I can send that out?"
+            else:
+                question = guardrails.reply_for_deferred_order(
+                    {"needs_address_confirmation": True, "address_on_file": store.get_address("demo_user")}
+                )
+            reply = f"Thanks — I've saved {email_given} for your order confirmation. {question}"
+            messages.append({"role": "user", "content": text})
+            messages.append({"role": "assistant", "content": reply})
         elif pending_address_confirmation and text and _is_affirmative(text):
             store.clear_pending_address_confirmation(req.session_id)
             reply = _complete_confirmed_order(req.session_id, pending_address_confirmation)

@@ -859,6 +859,21 @@ CONVERSATION_CASES = [
         ],
     },
     {
+        "name": "an_email_typed_where_an_address_is_expected",
+        # Fully deterministic. The model used to answer this, and sometimes asked
+        # "is your shipping address still <the email>?".
+        "turns": [
+            {"text": "order Ibuprofen 200mg Tablets", "checks": [("asks for an address", lambda r: "address" in r.lower())]},
+            {
+                "text": "sukumar123@example.com",
+                "checks": [("saves the email and asks for the address again", lambda r: "saved sukumar123@example.com" in r and "shipping address" in r),
+                           ("never treats the email as the address", lambda r: "Shipping to" not in r and "still sukumar123" not in r)],
+                "state_checks": [("no order placed", _order_count_is(0)), ("the email is saved", lambda sid: store.get_email("demo_user") == "sukumar123@example.com")],
+            },
+            {"text": "6 Email Lane, Pune", "checks": [("the order completes with the real address", lambda r: "Order confirmed!" in r and "Shipping to: 6 Email Lane, Pune" in r)]},
+        ],
+    },
+    {
         "name": "bare_numeric_selection_from_a_product_list",
         # Fully deterministic — proves main.py's _resolve_bare_selection
         # dispatch is actually wired correctly end-to-end through the real
@@ -938,7 +953,7 @@ CONVERSATION_CASES = [
             {
                 "text": "sukumar123@example.com",
                 "checks": [
-                    ("never confirms an order to the bare email as the address", lambda r: "sukumar123@example.com" not in r),
+                    ("never treats the bare email as the address", lambda r: "Shipping to" not in r and "still sukumar123" not in r),
                     ("never claims the order is placed", lambda r: "Order confirmed!" not in r),
                 ],
             },
