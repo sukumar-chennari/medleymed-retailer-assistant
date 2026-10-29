@@ -1427,6 +1427,20 @@ def chat(req: ChatRequest):
             store.clear_pending_clarification(req.session_id)
             pending_clarification = None
 
+        # An explicit command while a clarifying question is open ("order X",
+        # "cancel my last order", "reorder that") must not be swallowed as a
+        # (non-)answer to that question — found Oct 29: after "I have a fever" the
+        # message "order Ibuprofen 200mg Tablets" got the same child-or-adult
+        # question again. The open question is dropped; the command runs.
+        if pending_clarification and text and not (pending_product_id or pending_address_confirmation) and (
+            _resolve_named_product_order(text)
+            or _cancel_request(text)
+            or _is_plain_reorder_request(text)
+            or _repeat_request_quantity(text) is not None
+        ):
+            store.clear_pending_clarification(req.session_id)
+            pending_clarification = None
+
         if text and (red_flag_reply := red_flags.check(text)):
             # An emergency (overdose, a baby under 3 months with a fever, chest
             # pain, ...) is answered before any other branch and never reaches

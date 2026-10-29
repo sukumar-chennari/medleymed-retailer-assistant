@@ -1340,3 +1340,49 @@ class TestAnEmailTypedWhereAnAddressIsExpected:
         store.set_pending_order("s1", "fev-003", 1)
         reply = _chat("s1", "5 Mid Rd, Pune, a@b.com")
         assert "Order confirmed!" in reply and "5 Mid Rd, Pune" in reply
+
+
+class TestAnOpenQuestionDoesNotBlockAnExplicitCommand:
+    """Real bug (Oct 29): after "I have a fever" (child-or-adult question open),
+    "order Ibuprofen 200mg Tablets" got the same question again instead of
+    starting the order."""
+
+    @staticmethod
+    def _model_must_not_run(monkeypatch):
+        def _boom(*args, **kwargs):
+            raise AssertionError("the model must not be reached")
+
+        monkeypatch.setattr(main, "run_turn", _boom)
+
+    def test_an_explicit_order_starts_and_the_stale_question_is_dropped(self, monkeypatch):
+        store.set_pending_clarification("s1", "fever")
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", "order Ibuprofen 200mg Tablets")
+        assert "address" in reply.lower() and "child, or for an adult" not in reply
+        assert store.get_pending_order("s1")["product_id"] == "fev-003"
+        assert store.get_pending_clarification("s1") is None
+
+    def test_a_cancel_request_runs(self, monkeypatch):
+        store.save_address("demo_user", "10 High St, Leeds")
+        store.create_order("demo_user", "fev-003", "10 High St, Leeds", 1)
+        store.set_pending_clarification("s1", "fever")
+        self._model_must_not_run(monkeypatch)
+        assert "has been cancelled" in _chat("s1", "cancel my last order")
+
+    def test_a_plain_reorder_runs(self, monkeypatch):
+        store.save_address("demo_user", "10 High St, Leeds")
+        store.create_order("demo_user", "fev-003", "10 High St, Leeds", 1)
+        store.set_pending_clarification("s1", "fever")
+        self._model_must_not_run(monkeypatch)
+        _chat("s1", "reorder that")
+        assert store.get_pending_address_confirmation("s1")["product_id"] == "fev-003"
+
+    def test_a_real_answer_to_the_question_is_still_used(self, monkeypatch):
+        store.set_pending_clarification("s1", "fever")
+        self._model_must_not_run(monkeypatch)
+        assert "(fev-001)" in _chat("s1", "adult")
+
+    def test_an_unrelated_message_still_goes_through_the_normal_path(self, monkeypatch):
+        store.set_pending_clarification("s1", "fever")
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        assert _chat("s1", "hmm not sure") == "from the model"

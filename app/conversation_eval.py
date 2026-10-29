@@ -874,6 +874,20 @@ CONVERSATION_CASES = [
         ],
     },
     {
+        "name": "an_open_question_does_not_block_an_explicit_order",
+        # A Telugu-script address with a short house number was refused as an
+        # address (the "conversational words" check only tokenised Latin letters).
+        "turns": [
+            {"text": "naaku jvaram undi", "checks": [("asks child or adult", lambda r: "child, or for an adult" in r)]},
+            {"text": "order Ibuprofen 200mg Tablets", "checks": [("an open question does not block an explicit order", lambda r: "address" in r.lower() and "child, or for an adult" not in r)]},
+            {
+                "text": "7 బాగ్ లింగంపల్లి, హైదరాబాద్",
+                "checks": [("a Telugu-script address is accepted exactly as typed", lambda r: "Order confirmed!" in r and "Shipping to: 7 బాగ్ లింగంపల్లి, హైదరాబాద్" in r)],
+                "state_checks": [("one real order", _order_count_is(1))],
+            },
+        ],
+    },
+    {
         "name": "bare_numeric_selection_from_a_product_list",
         # Fully deterministic — proves main.py's _resolve_bare_selection
         # dispatch is actually wired correctly end-to-end through the real
