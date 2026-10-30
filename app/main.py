@@ -608,6 +608,10 @@ def _resolve_named_product_order(text: str) -> tuple[dict, int] | None:
     words = re.findall(r"[a-z']+", text.lower())
     if not words or len(words) > _MAX_NAMED_ORDER_WORDS or "@" in text:
         return None
+    # "... ship to 9 Oak Ave": the 9 belongs to an address, not a quantity (the
+    # complete version of this message is handled by _parse_compound_order).
+    if _SHIP_TO_RE.search(text) or _BARE_TO_ADDRESS_RE.search(text):
+        return None
     if words[0] in _QUESTION_WORDS or is_info_question(text):
         return None
     ordering = _has_unnegated_intent(text, ORDER_INTENT_RE)
@@ -1347,6 +1351,70 @@ def _reply_for_many_references(products: list[dict]) -> str:
     )
 
 
+# One-message orders: "order Ibuprofen 200mg Tablets and ship it to 5 Mid Rd,
+# Pune", "order 2 Cetirizine ... to 12 High St, Leeds", "I want Guaifenesin ...,
+# deliver to Flat 4, Rose Lane, Delhi and email me at a@b.com". Found Oct 30:
+# - the "5" in "5 Mid Rd" was read as the QUANTITY (5, capped to 2) and the
+#   address dropped, so the address was asked for again;
+# - the others were bounced into the child-or-adult question, or the model
+#   saved the address silently, placed no order and ignored the email.
+# The customer gave everything, so the order is placed with it — through
+# start_order first, so the quantity limit and the condition/allergy refusal
+# still apply — and nothing is placed unless product, quantity and a plausible
+# address were all clearly given.
+_SHIP_TO_RE = re.compile(
+    r"\b(?:ship(?:ped)?|send|deliver(?:ed)?|post|courier)(?:\s+(?:it|them|this|that))?\s+to\s+(?P<addr>.+)$", re.IGNORECASE
+)
+_BARE_TO_ADDRESS_RE = re.compile(r"\bto\s+(?P<addr>\d[\w\s,./#-]+)$", re.IGNORECASE)
+_EMAIL_LEAD_IN_RE = re.compile(
+    r"[,;\s]*(?:and\s+)?(?:(?:send|email|e-mail|mail)\s+(?:me\s+|it\s+)?(?:a\s+)?(?:the\s+)?(?:confirmation\s+)?(?:at|on|to)?"
+    r"|(?:my\s+)?e-?mail(?:\s+is)?|confirmation\s+(?:to|at))\s*$",
+    re.IGNORECASE,
+)
+
+
+def _parse_compound_order(text: str) -> dict | None:
+    if "@" not in text and not (_SHIP_TO_RE.search(text) or _BARE_TO_ADDRESS_RE.search(text)):
+        return None
+    email = None
+    working = text
+    match = EMAIL_RE.search(text)
+    if match:
+        email = match.group(0)
+        head = _EMAIL_LEAD_IN_RE.sub("", text[: match.start()])
+        working = (head + " " + text[match.end():]).strip()
+    tail = _SHIP_TO_RE.search(working) or _BARE_TO_ADDRESS_RE.search(working)
+    if not tail:
+        return None
+    address = tail.group("addr").strip(" ,.;")
+    # Stricter than a reply to "what's your address?": here nothing else says it
+    # is an address, so it needs a house number and some length ("ship to home"
+    # must not place an order to "home").
+    if not _looks_like_an_address(address):
+        return None
+    resolved = _resolve_named_product_order(working[: tail.start()].strip(" ,.;"))
+    if not resolved:
+        return None
+    product, quantity = resolved
+    return {"product": product, "quantity": quantity, "address": address, "email": email}
+
+
+def _place_compound_order(session_id: str, parsed: dict) -> str:
+    started = json.loads(tools.start_order(parsed["product"]["id"], session_id, parsed["quantity"]))
+    if "error" in started:
+        return _reply_for_start_order_result(started)
+    store.clear_pending_order(session_id)
+    store.clear_pending_address_confirmation(session_id)
+    if parsed["email"]:
+        store.save_email("demo_user", parsed["email"])
+    quantity = started.get("quantity", parsed["quantity"])
+    confirmation = _complete_pending_order(
+        session_id, {"product_id": parsed["product"]["id"], "quantity": quantity}, parsed["address"]
+    )
+    note = started.get("quantity_clamped")
+    return f"(Note: {note}.)\n\n{confirmation}" if note else confirmation
+
+
 def _reply_for_start_order_result(order: dict) -> str:
     if "error" in order:
         return f"Sorry, {order['error']}"
@@ -1434,6 +1502,7 @@ def chat(req: ChatRequest):
         # question again. The open question is dropped; the command runs.
         if pending_clarification and text and not (pending_product_id or pending_address_confirmation) and (
             _resolve_named_product_order(text)
+            or _parse_compound_order(text)
             or _cancel_request(text)
             or _is_plain_reorder_request(text)
             or _repeat_request_quantity(text) is not None
@@ -1562,6 +1631,15 @@ def chat(req: ChatRequest):
         ) and store.list_orders("demo_user"):
             order = json.loads(tools.reorder_last(req.session_id, repeat_quantity))
             reply = _reply_for_start_order_result(order)
+            messages.append({"role": "user", "content": text})
+            messages.append({"role": "assistant", "content": reply})
+        elif (
+            text
+            and not pending_product_id
+            and not pending_address_confirmation
+            and (compound_order := _parse_compound_order(text))
+        ):
+            reply = _place_compound_order(req.session_id, compound_order)
             messages.append({"role": "user", "content": text})
             messages.append({"role": "assistant", "content": reply})
         elif text and (named_order := _resolve_named_product_order(text)):

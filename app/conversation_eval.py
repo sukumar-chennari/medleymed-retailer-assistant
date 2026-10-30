@@ -905,6 +905,34 @@ CONVERSATION_CASES = [
         ],
     },
     {
+        "name": "one_message_orders_with_the_address_and_email",
+        # Fully deterministic (mail is forced to mock mode). On Oct 30 the 5 in
+        # "ship it to 5 Mid Rd" was read as the quantity, and the versions with
+        # an email were bounced into the child-or-adult question or prose.
+        "turns": [
+            {
+                "text": "order Ibuprofen 200mg Tablets and ship it to 5 Mid Rd, Pune",
+                "checks": [("orders one, to the real address", lambda r: "Order confirmed!" in r and "Quantity: 1" in r and "Shipping to: 5 Mid Rd, Pune" in r)],
+                "state_checks": [("one real order", _order_count_is(1))],
+            },
+            {
+                "text": "I want Guaifenesin Expectorant Syrup, deliver to Flat 4, Rose Lane, Delhi and email me at a@b.com",
+                "checks": [("orders it and sends the confirmation", lambda r: "Order confirmed!" in r and "A confirmation email has been sent." in r and "Flat 4, Rose Lane, Delhi" in r)],
+                "state_checks": [("two real orders", _order_count_is(2)), ("the email is saved", lambda sid: store.get_email("demo_user") == "a@b.com")],
+            },
+            {
+                "text": "order 5 Cetirizine 10mg Antihistamine Tablets ship to 9 Oak Ave",
+                "checks": [("the per-order limit is announced", lambda r: "capped at our per-order limit of 2" in r and "Quantity: 2" in r)],
+                "state_checks": [("three real orders", _order_count_is(3))],
+            },
+            {
+                "text": "order Ibuprofen 200mg Tablets ship to home",
+                "checks": [("a non-address places nothing", lambda r: "Order confirmed!" not in r)],
+                "state_checks": [("still three orders", _order_count_is(3))],
+            },
+        ],
+    },
+    {
         "name": "bare_numeric_selection_from_a_product_list",
         # Fully deterministic — proves main.py's _resolve_bare_selection
         # dispatch is actually wired correctly end-to-end through the real

@@ -1386,3 +1386,84 @@ class TestAnOpenQuestionDoesNotBlockAnExplicitCommand:
         store.set_pending_clarification("s1", "fever")
         monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
         assert _chat("s1", "hmm not sure") == "from the model"
+
+
+class TestOneMessageOrders:
+    """Real bugs (Oct 30 probe): "order Ibuprofen 200mg Tablets and ship it to 5 Mid
+    Rd, Pune" read the 5 in the address as the QUANTITY (5, capped to 2) and
+    dropped the address; "order 2 Cetirizine ... to 12 High St, Leeds" and the
+    versions with an email were bounced into the child-or-adult question or
+    model-written prose (address saved silently, no order, email ignored)."""
+
+    @staticmethod
+    def _model_must_not_run(monkeypatch):
+        def _boom(*args, **kwargs):
+            raise AssertionError("the model must not be reached")
+
+        monkeypatch.setattr(main, "run_turn", _boom)
+
+    @staticmethod
+    def _orders():
+        return [(o["product_id"], o["quantity"], o["address"]) for o in store.list_orders("demo_user")]
+
+    @pytest.mark.parametrize("text, expected", [
+        ("order Ibuprofen 200mg Tablets and ship it to 5 Mid Rd, Pune", ("fev-003", 1, "5 Mid Rd, Pune")),
+        ("order 2 Cetirizine 10mg Antihistamine Tablets to 12 High St, Leeds", ("col-001", 2, "12 High St, Leeds")),
+        ("buy Paracetamol 500mg Tablets, deliver to 9 Oak Ave", ("fev-001", 1, "9 Oak Ave")),
+        ("please order col-005 send to Flat 4, Rose Lane, Delhi", ("col-005", 1, "Flat 4, Rose Lane, Delhi")),
+    ])
+    def test_product_quantity_and_address_in_one_message(self, monkeypatch, text, expected):
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", text)
+        assert "Order confirmed!" in reply and f"Shipping to: {expected[2]}" in reply
+        assert self._orders() == [expected] and store.get_address("demo_user") == expected[2]
+
+    def test_the_number_in_the_address_is_never_the_quantity(self, monkeypatch):
+        self._model_must_not_run(monkeypatch)
+        _chat("s1", "order Ibuprofen 200mg Tablets and ship it to 5 Mid Rd, Pune")
+        assert self._orders()[0][1] == 1
+
+    def test_an_email_in_the_same_message_is_saved_and_the_confirmation_sent(self, monkeypatch):
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", "I want Guaifenesin Expectorant Syrup, deliver to Flat 4, Rose Lane, Delhi and email me at a@b.com")
+        assert "Order confirmed!" in reply and "A confirmation email has been sent." in reply
+        assert store.get_email("demo_user") == "a@b.com" and store.get_pending_email("s1") is None
+        assert self._orders() == [("col-005", 1, "Flat 4, Rose Lane, Delhi")]
+
+    def test_the_per_order_quantity_limit_still_applies_and_is_announced(self, monkeypatch):
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", "order 5 Ibuprofen 200mg Tablets ship to 9 Oak Ave")
+        assert "capped at our per-order limit of 2" in reply and self._orders() == [("fev-003", 2, "9 Oak Ave")]
+
+    def test_a_stated_condition_still_refuses_the_product_and_places_nothing(self, monkeypatch):
+        store.save_session_messages("s1", [{"role": "user", "content": "I have a stomach ulcer"}])
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", "order Ibuprofen 200mg Tablets ship to 9 Oak Ave")
+        assert "I can't set up an order" in reply and self._orders() == []
+        assert store.get_address("demo_user") in (None, "")
+
+    @pytest.mark.parametrize("text", [
+        "order Ibuprofen 200mg Tablets ship to home", "order ibuprofen 400mg ship to 9 Oak Ave",
+        "ship to 9 Oak Ave", "order something ship to 9 Oak Ave", "order Ibuprofen 200mg Tablets and Cetirizine 10mg Antihistamine Tablets to 9 Oak Ave",
+        "can I order Ibuprofen 200mg Tablets and ship to 9 Oak Ave?", "don't order Ibuprofen 200mg Tablets ship to 9 Oak Ave",
+    ])
+    def test_anything_incomplete_or_unclear_places_nothing(self, monkeypatch, text):
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        _chat("s1", text)
+        assert self._orders() == [], text
+
+    def test_a_message_without_an_address_keeps_the_normal_flow(self, monkeypatch):
+        self._model_must_not_run(monkeypatch)
+        assert "address" in _chat("s1", "order Ibuprofen 200mg Tablets").lower() and self._orders() == []
+
+    def test_an_order_awaiting_its_address_is_left_alone(self, monkeypatch):
+        store.set_pending_order("s1", "col-004", 1)
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        _chat("s1", "order Ibuprofen 200mg Tablets ship to 9 Oak Ave")
+        assert self._orders() == []
+        assert store.get_pending_order("s1")["product_id"] == "col-004"
+
+    def test_an_open_question_does_not_block_it(self, monkeypatch):
+        store.set_pending_clarification("s1", "fever")
+        self._model_must_not_run(monkeypatch)
+        assert "Order confirmed!" in _chat("s1", "order Ibuprofen 200mg Tablets ship to 9 Oak Ave")
