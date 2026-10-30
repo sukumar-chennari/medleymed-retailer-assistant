@@ -1467,3 +1467,83 @@ class TestOneMessageOrders:
         store.set_pending_clarification("s1", "fever")
         self._model_must_not_run(monkeypatch)
         assert "Order confirmed!" in _chat("s1", "order Ibuprofen 200mg Tablets ship to 9 Oak Ave")
+
+
+class TestAboutTheAssistant:
+    """Real gaps (Oct 30 probe): "who are you", "what can you do", "help", "I need
+    help", "menu" got the out-of-scope decline; so did "are you a doctor", "can you
+    diagnose me", "can you speak telugu" and "sorry"; "start over" / "reset" did
+    nothing."""
+
+    @staticmethod
+    def _model_must_not_run(monkeypatch):
+        def _boom(*args, **kwargs):
+            raise AssertionError("the model must not be reached")
+
+        monkeypatch.setattr(main, "run_turn", _boom)
+
+    @pytest.mark.parametrize("text", [
+        "who are you", "what can you do", "help", "I need help", "menu", "what do you do", "how does this work",
+        "hi, what can you do?", "can you help me", "what is this",
+    ])
+    def test_the_capabilities_reply(self, monkeypatch, text):
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", text)
+        assert reply == main.CAPABILITIES_REPLY and "can't help with that here" not in reply
+        assert "not a doctor or pharmacist" in reply and "112" in reply
+
+    def test_the_capabilities_are_true_of_the_assistant(self, monkeypatch):
+        # every capability it advertises is something that works without the model
+        self._model_must_not_run(monkeypatch)
+        assert "Here's what we carry" in _chat("s1", "show me all your products")
+        assert "address" in _chat("s2", "order Ibuprofen 200mg Tablets").lower()
+        assert "don't have any active orders" in _chat("s3", "cancel my last order")
+
+    @pytest.mark.parametrize("text", ["are you a doctor", "are you a real person", "can you diagnose me", "are you a bot", "are you a pharmacist"])
+    def test_who_it_is_and_what_it_is_not(self, monkeypatch, text):
+        self._model_must_not_run(monkeypatch)
+        assert _chat("s1", text) == main.ABOUT_REPLY
+
+    @pytest.mark.parametrize("text", ["can you speak telugu", "do you understand hindi", "can you talk in tamil"])
+    def test_language_questions(self, monkeypatch, text):
+        self._model_must_not_run(monkeypatch)
+        assert _chat("s1", text) == main.LANGUAGE_REPLY
+
+    @pytest.mark.parametrize("text", ["sorry", "my bad", "oops", "so sorry"])
+    def test_an_apology(self, monkeypatch, text):
+        self._model_must_not_run(monkeypatch)
+        assert _chat("s1", text) == main.SORRY_REPLY
+
+    @pytest.mark.parametrize("text", ["start over", "reset", "restart", "new chat", "please start over"])
+    def test_start_over_really_clears_what_was_pending(self, monkeypatch, text):
+        store.set_pending_order("s1", "fev-003", 1)
+        store.set_pending_clarification("s1", "fever")
+        store.set_last_products("s1", [store.find_product("fev-001"), store.find_product("fev-002")])
+        store.save_address("demo_user", "10 High St, Leeds")
+        order = store.create_order("demo_user", "fev-001", "10 High St, Leeds", 1)
+        self._model_must_not_run(monkeypatch)
+        assert _chat("s1", text) == main.RESTART_REPLY
+        assert store.get_pending_order("s1") is None and store.get_pending_clarification("s1") is None
+        assert not store.get_last_products("s1")
+        assert store.get_order(order["order_id"])["status"] == "placed"      # real orders are untouched
+        assert store.get_address("demo_user") == "10 High St, Leeds"
+
+    def test_with_an_order_waiting_help_is_not_saved_as_the_address(self, monkeypatch):
+        store.set_pending_order("s1", "fev-003", 1)
+        self._model_must_not_run(monkeypatch)
+        assert _chat("s1", "help") == main.CAPABILITIES_REPLY
+        assert store.get_address("demo_user") in (None, "") and store.get_pending_order("s1")["product_id"] == "fev-003"
+
+    def test_with_a_question_open_help_still_answers(self, monkeypatch):
+        store.set_pending_clarification("s1", "fever")
+        self._model_must_not_run(monkeypatch)
+        assert _chat("s1", "what can you do") == main.CAPABILITIES_REPLY
+
+    @pytest.mark.parametrize("text", [
+        "can you help me with my cough", "help me, I have a fever", "who is the prime minister", "what is paracetamol used for",
+        "I am sorry to say my fever is back", "reset my password", "Help Street 5, Pune",
+    ])
+    def test_real_requests_are_left_alone(self, monkeypatch, text):
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        reply = _chat("s1", text)
+        assert reply not in {main.CAPABILITIES_REPLY, main.ABOUT_REPLY, main.LANGUAGE_REPLY, main.RESTART_REPLY, main.SORRY_REPLY}

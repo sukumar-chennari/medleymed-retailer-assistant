@@ -933,6 +933,30 @@ CONVERSATION_CASES = [
         ],
     },
     {
+        "name": "who_are_you_help_and_start_over",
+        # Fully deterministic. On Oct 30 "who are you", "what can you do", "help",
+        # "are you a doctor" and "can you speak telugu" all got "This demo only
+        # handles fever and cold OTC guidance -- I can't help with that here",
+        # and "start over" reset nothing.
+        "turns": [
+            {"text": "who are you", "checks": [("explains what it can do", lambda r: "Here's what I can do" in r and "not a doctor or pharmacist" in r)]},
+            {"text": "help", "checks": [("same capabilities reply", lambda r: "Place, check and cancel orders" in r)]},
+            {"text": "are you a doctor", "checks": [("says plainly it is not", lambda r: "not a doctor or a pharmacist" in r and "can't diagnose" in r)]},
+            {"text": "can you speak telugu", "checks": [("explains what languages it reads", lambda r: "Hindi and Telugu" in r and "reply in English" in r)]},
+            {"text": "order Ibuprofen 200mg Tablets", "checks": [("asks for an address", lambda r: "address" in r.lower())]},
+            {
+                "text": "start over",
+                "checks": [("confirms a fresh start", lambda r: "starting fresh" in r)],
+                "state_checks": [("the waiting order is cleared", lambda sid: store.get_pending_order(sid) is None)],
+            },
+            {
+                "text": "10 Restart Road, Pune",
+                "checks": [("an address now starts nothing", lambda r: "Order confirmed!" not in r)],
+                "state_checks": [("no order exists", _order_count_is(0))],
+            },
+        ],
+    },
+    {
         "name": "bare_numeric_selection_from_a_product_list",
         # Fully deterministic — proves main.py's _resolve_bare_selection
         # dispatch is actually wired correctly end-to-end through the real

@@ -1415,6 +1415,83 @@ def _place_compound_order(session_id: str, parsed: dict) -> str:
     return f"(Note: {note}.)\n\n{confirmation}" if note else confirmation
 
 
+# The questions every first-time user asks. Found Oct 30: "who are you", "what
+# can you do", "help", "I need help", "menu" -> "This demo only handles fever and
+# cold OTC guidance -- I can't help with that here" (the worst first impression
+# there is); "are you a doctor", "can you diagnose me" -> the same decline; "can
+# you speak telugu" -> the same; "start over" / "reset" -> the same, and nothing
+# was reset; "sorry" -> the decline. All answered in code, accurately.
+CAPABILITIES_REPLY = (
+    "I'm the MedleyMed assistant, an AI helper for fever and cold medicines. Here's what I can do:\n"
+    "- Recommend a product when you describe your symptoms (fever, cough, cold, sore throat, ...)\n"
+    "- Answer questions about our medicines: dosage, side effects, warnings (from our product information)\n"
+    "- Show our products and prices: say \"show me all your products\"\n"
+    "- Place, check and cancel orders: \"order Ibuprofen 200mg Tablets\", \"show my orders\", \"cancel my last order\"\n\n"
+    "I'm not a doctor or pharmacist and I can't diagnose. In an emergency call "
+    f"{red_flags.EMERGENCY_NUMBERS}.\n\nWhat's going on?"
+)
+ABOUT_REPLY = (
+    "I'm an AI assistant for this shop, not a doctor or a pharmacist, and I can't diagnose. I can suggest "
+    "over-the-counter products from our catalog for fever and cold symptoms and share what our product "
+    f"information says. For anything serious please see a doctor; in an emergency call {red_flags.EMERGENCY_NUMBERS}."
+)
+LANGUAGE_REPLY = (
+    "I can read common Hindi and Telugu symptom words (in either script, or typed in English letters), but I "
+    "reply in English. Tell me how you're feeling and I'll take it from there."
+)
+RESTART_REPLY = (
+    "Okay, starting fresh. Nothing is waiting any more. Your placed orders and saved address are unchanged. "
+    "What's going on?"
+)
+SORRY_REPLY = "No problem at all! What can I help you with?"
+_CAPABILITIES_RE = re.compile(
+    r"^\s*(?:(?:hi|hello|hey)[\s,!.]+)?(?:"
+    r"(?:who|what)\s+(?:are|r)\s+(?:you|u)|what\s+(?:can|do)\s+you\s+(?:do|offer|help\s+with)|what\s+do\s+you\s+do|"
+    r"how\s+(?:does\s+this\s+work|do\s+i\s+use\s+(?:this|you))|what\s+can\s+i\s+(?:ask|do)|what\s+is\s+this|"
+    r"(?:i\s+need\s+|can\s+you\s+|please\s+)?help(?:\s+me)?|menu|options|commands)[\s?!.]*$",
+    re.IGNORECASE,
+)
+_ABOUT_RE = re.compile(
+    r"\b(?:are\s+you\s+(?:a\s+|an\s+|the\s+)?(?:real|human|person|bot|robot|ai|doctor|pharmacist|nurse|chatbot|qualified)|"
+    r"can\s+you\s+diagnose|do\s+you\s+diagnose)\b",
+    re.IGNORECASE,
+)
+_LANGUAGE_RE = re.compile(
+    r"\b(?:(?:do|can)\s+you\s+(?:speak|understand|talk|reply|respond|write)\s+(?:in\s+)?"
+    r"(?:hindi|telugu|tamil|english|hinglish|urdu|spanish|french|kannada|marathi|bengali|malayalam|gujarati)|"
+    r"in\s+(?:hindi|telugu|tamil)\s+please)\b",
+    re.IGNORECASE,
+)
+_RESTART_RE = re.compile(r"^\s*(?:please\s+)?(?:start\s+over|restart|reset|new\s+chat|clear\s+(?:the\s+)?chat|begin\s+again)[\s.!]*$", re.IGNORECASE)
+_SORRY_RE = re.compile(r"^\s*(?:sorry|my\s+bad|oops|apologies|so\s+sorry)[\s.!]*$", re.IGNORECASE)
+
+
+def _about_the_assistant_reply(text: str) -> str | None:
+    words = re.findall(r"[a-z']+", text.lower())
+    if not words or len(words) > 10 or "@" in text:
+        return None
+    if _RESTART_RE.match(text):
+        return RESTART_REPLY
+    if _SORRY_RE.match(text):
+        return SORRY_REPLY
+    if _ABOUT_RE.search(text):
+        return ABOUT_REPLY
+    if _LANGUAGE_RE.search(text):
+        return LANGUAGE_REPLY
+    if _CAPABILITIES_RE.match(text) and tools.classify(text) is None:
+        return CAPABILITIES_REPLY
+    return None
+
+
+def _clear_conversation_state(session_id: str) -> None:
+    store.clear_pending_order(session_id)
+    store.clear_pending_clarification(session_id)
+    store.clear_pending_email(session_id)
+    store.clear_pending_address_confirmation(session_id)
+    store.clear_last_recommended_product(session_id)
+    store.set_last_products(session_id, [])
+
+
 def _reply_for_start_order_result(order: dict) -> str:
     if "error" in order:
         return f"Sorry, {order['error']}"
@@ -1503,6 +1580,7 @@ def chat(req: ChatRequest):
         if pending_clarification and text and not (pending_product_id or pending_address_confirmation) and (
             _resolve_named_product_order(text)
             or _parse_compound_order(text)
+            or _about_the_assistant_reply(text)
             or _cancel_request(text)
             or _is_plain_reorder_request(text)
             or _repeat_request_quantity(text) is not None
@@ -1658,6 +1736,14 @@ def chat(req: ChatRequest):
             and (new_address := _extract_address_change(text))
         ):
             reply = _reply_for_address_change(new_address)
+            messages.append({"role": "user", "content": text})
+            messages.append({"role": "assistant", "content": reply})
+        elif text and (about_reply := _about_the_assistant_reply(text)):
+            # Whatever is pending, these are about the assistant itself, never
+            # an answer to a question — except "start over", which clears it.
+            if about_reply == RESTART_REPLY:
+                _clear_conversation_state(req.session_id)
+            reply = about_reply
             messages.append({"role": "user", "content": text})
             messages.append({"role": "assistant", "content": reply})
         elif text and not pending_product_id and not pending_address_confirmation and _is_order_address_change(text):
