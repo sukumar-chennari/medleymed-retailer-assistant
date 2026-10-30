@@ -6,7 +6,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 
-from app import age_hints, brands, contraindications, guardrails, hinglish, interactions, red_flags, store, tools
+from app import age_hints, brands, comparison, contraindications, guardrails, hinglish, interactions, red_flags, store, tools
 from app.agent import (
     ORDER_INTENT_RE,
     _has_cancel_intent,
@@ -1610,6 +1610,16 @@ def chat(req: ChatRequest):
             brand_reply := _brand_availability_reply(text, req.session_id)
         ):
             reply = brand_reply
+            messages.append({"role": "user", "content": text})
+            messages.append({"role": "assistant", "content": reply})
+        elif (
+            text
+            and not pending_product_id
+            and not pending_address_confirmation
+            and comparison.is_comparison_request(text)
+            and (compared := comparison.targets(text, store.get_catalog(), last_products))
+        ):
+            reply = comparison.comparison_reply(compared[0], compared[1], guardrails.DISCLAIMER)
             messages.append({"role": "user", "content": text})
             messages.append({"role": "assistant", "content": reply})
         elif text and not pending_product_id and not pending_address_confirmation and (

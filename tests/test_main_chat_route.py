@@ -1276,7 +1276,7 @@ class TestPickingFromTheListThatWasShown:
         assert reply == "Of the products I just showed you, the lowest-priced is Cetirizine 10mg Antihistamine Tablets at $5.99."
 
     @pytest.mark.parametrize("text", [
-        "tell me more about the first one", "what is the difference between the first two", "which one is safest",
+        "tell me more about the first one", "which one is safest",
         "how much is the second one", "what are the side effects of the third one",
     ])
     def test_questions_about_the_list_are_left_to_the_model(self, monkeypatch, text):

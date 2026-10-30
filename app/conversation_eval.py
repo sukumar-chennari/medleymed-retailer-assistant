@@ -888,6 +888,23 @@ CONVERSATION_CASES = [
         ],
     },
     {
+        "name": "comparisons_quote_the_product_information",
+        # Fully deterministic. The knowledge base has no comparison text, so a
+        # model-written "which is better" is improvisation; the reply now quotes
+        # each product's own Overview, Dosage and Warnings.
+        "turns": [
+            {"text": "what is the difference between paracetamol and ibuprofen", "checks": [
+                ("quotes both products' own text", lambda r: "gentler on the stomach than NSAIDs" in r and "nonsteroidal anti-inflammatory drug" in r),
+                ("quotes the dosage of both", lambda r: "not exceeding 8 tablets (4000mg)" in r and "not exceeding 6 tablets (1200mg)" in r),
+                ("does not pick a winner", lambda r: "I can't say one is \"better\"" in r)]},
+            {"text": "I have a fever", "checks": [("asks child or adult", lambda r: "child, or for an adult" in r)]},
+            {"text": "adult", "checks": [("shows the adult list", lambda r: "(fev-001)" in r and "(fev-002)" in r and "(fev-003)" in r)]},
+            {"text": "what's the difference between the first two", "checks": [
+                ("compares the first two of that list", lambda r: "(fev-001)" in r and "(fev-002)" in r and "(fev-003)" not in r and "Active ingredient: Paracetamol" in r)]},
+            {"text": "compare Tylenol and Advil", "checks": [("says it does not carry the brands and compares what it does", lambda r: "We don't carry Tylenol" in r and "We don't carry Advil" in r and "(fev-003)" in r)]},
+        ],
+    },
+    {
         "name": "bare_numeric_selection_from_a_product_list",
         # Fully deterministic — proves main.py's _resolve_bare_selection
         # dispatch is actually wired correctly end-to-end through the real
