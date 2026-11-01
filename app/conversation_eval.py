@@ -957,6 +957,23 @@ CONVERSATION_CASES = [
         ],
     },
     {
+        "name": "typos_in_medicine_names_and_commands",
+        # Fully deterministic. On Oct 31/Nov 1 "how much is ibuprofin" got the
+        # child-or-adult question, "ordr Ibuprofen 200mg Tablets" and "200 mg"
+        # were not recognised, and "ibuprofen and paracetmol together" got the
+        # model's improvised "Yes".
+        "turns": [
+            {"text": "how much is ibuprofin", "checks": [("states the catalog price", lambda r: r == "Ibuprofen 200mg Tablets costs $5.29.")]},
+            {"text": "can i take ibuprofen and paracetmol together", "checks": [("does not improvise a yes", lambda r: "doesn't say whether" in r and not r.startswith("Yes"))]},
+            {"text": "ordr Ibuprofen 200 mg Tablets", "checks": [("starts the order", lambda r: "address" in r.lower() and "child, or for an adult" not in r)]},
+            {
+                "text": "12 Ibuprofin Road, Pune",
+                "checks": [("the address is saved exactly as typed", lambda r: "Order confirmed!" in r and "Shipping to: 12 Ibuprofin Road, Pune" in r)],
+                "state_checks": [("one real order", _order_count_is(1))],
+            },
+        ],
+    },
+    {
         "name": "bare_numeric_selection_from_a_product_list",
         # Fully deterministic — proves main.py's _resolve_bare_selection
         # dispatch is actually wired correctly end-to-end through the real

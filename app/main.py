@@ -6,7 +6,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 
-from app import age_hints, brands, comparison, contraindications, guardrails, hinglish, interactions, red_flags, store, tools
+from app import age_hints, brands, comparison, contraindications, guardrails, hinglish, interactions, red_flags, spellfix, store, tools
 from app.agent import (
     ORDER_INTENT_RE,
     _has_cancel_intent,
@@ -1551,7 +1551,7 @@ def chat(req: ChatRequest):
         if req.text and not (pending_product_id or pending_address_confirmation) and "@" not in req.text:
             # Who it is for, when the message already says ("my 3 year old",
             # "my wife") — see age_hints.py.
-            req.text = age_hints.gloss(hinglish.gloss(req.text))
+            req.text = age_hints.gloss(hinglish.gloss(spellfix.correct(req.text)))
             text = req.text.strip()
         contraindications.set_current_text(req.text or "")
 
