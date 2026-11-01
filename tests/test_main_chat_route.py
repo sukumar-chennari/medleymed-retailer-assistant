@@ -1547,3 +1547,77 @@ class TestAboutTheAssistant:
         monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
         reply = _chat("s1", text)
         assert reply not in {main.CAPABILITIES_REPLY, main.ABOUT_REPLY, main.LANGUAGE_REPLY, main.RESTART_REPLY, main.SORRY_REPLY}
+
+
+class TestDoYouHaveAProductWeCarry:
+    """Real gaps (Nov 1 probe): "do you have ibuprofen", "is cetirizine available"
+    got the child-or-adult question; "do you carry anything with guaifenesin" the
+    out-of-scope decline; "is col-005 in stock" the model's invention that "Col-005
+    is not currently available for ordering, as there are no orders to check on"."""
+
+    @staticmethod
+    def _model_must_not_run(monkeypatch):
+        def _boom(*args, **kwargs):
+            raise AssertionError("the model must not be reached")
+
+        monkeypatch.setattr(main, "run_turn", _boom)
+
+    @pytest.mark.parametrize("text, name, price", [
+        ("do you have ibuprofen", "Ibuprofen 200mg Tablets", "$5.29"),
+        ("do you sell Paracetamol 500mg Tablets", "Paracetamol 500mg Tablets", "$4.99"),
+        ("do you carry anything with guaifenesin", "Guaifenesin Expectorant Syrup", "$6.79"),
+        ("have you got Cetirizine 10mg Antihistamine Tablets", "Cetirizine 10mg Antihistamine Tablets", "$5.99"),
+    ])
+    def test_a_stocked_product_is_confirmed_with_its_price(self, monkeypatch, text, name, price):
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", text)
+        assert reply.startswith(f"Yes, {name} is in our catalog at {price}.") and reply.endswith("Would you like to order it?")
+
+    @pytest.mark.parametrize("text", ["is col-005 in stock", "is cetirizine available"])
+    def test_a_stock_question_says_honestly_that_levels_are_not_tracked(self, monkeypatch, text):
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", text)
+        assert "I don't track live stock levels" in reply and "not currently available" not in reply
+
+    def test_an_ingredient_in_several_products_lists_them_all(self, monkeypatch):
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", "do you stock paracetamol")
+        for product_id in ("fev-001", "fev-002", "fev-004"):
+            assert f"({product_id})" in reply
+        assert "(fev-003)" not in reply and [p["id"] for p in store.get_last_products("s1")][:3] == ["fev-001", "fev-002", "fev-004"]
+
+    def test_yes_then_starts_the_order_for_a_single_product(self, monkeypatch):
+        self._model_must_not_run(monkeypatch)
+        _chat("s1", "do you have ibuprofen")
+        assert "address" in _chat("s1", "yes").lower()
+        assert store.get_pending_order("s1")["product_id"] == "fev-003"
+
+    def test_a_listed_product_can_be_picked_by_number(self, monkeypatch):
+        self._model_must_not_run(monkeypatch)
+        _chat("s1", "do you stock paracetamol")
+        _chat("s1", "the second one")
+        assert store.get_pending_order("s1")["product_id"] == "fev-002"
+
+    def test_a_stated_condition_adds_its_caution(self, monkeypatch):
+        store.save_session_messages("s1", [{"role": "user", "content": "I have a stomach ulcer"}])
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", "do you have ibuprofen")
+        assert "Please be careful with:" in reply and "you mentioned a stomach ulcer" in reply
+
+    def test_an_unstocked_brand_keeps_its_own_answer(self, monkeypatch):
+        self._model_must_not_run(monkeypatch)
+        assert _chat("s1", "do you have Tylenol").startswith("We don't carry Tylenol")
+
+    @pytest.mark.parametrize("text", [
+        "do you have something for a cold", "do you have anything for fever", "order ibuprofen", "what are the side effects of ibuprofen",
+        "is my order available", "do you have my address",
+    ])
+    def test_everything_else_keeps_its_own_path(self, monkeypatch, text):
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        assert "is in our catalog at" not in _chat("s1", text)
+
+    def test_an_order_awaiting_its_address_is_left_alone(self, monkeypatch):
+        store.set_pending_order("s1", "col-004", 1)
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        assert "is in our catalog at" not in _chat("s1", "do you have ibuprofen")
+        assert store.get_pending_order("s1")["product_id"] == "col-004"

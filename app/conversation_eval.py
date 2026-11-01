@@ -974,6 +974,19 @@ CONVERSATION_CASES = [
         ],
     },
     {
+        "name": "do_you_have_a_product_we_carry",
+        # Fully deterministic. On Nov 1 "do you have ibuprofen" got the
+        # child-or-adult question and "is col-005 in stock" the model's
+        # invented "not currently available for ordering".
+        "turns": [
+            {"text": "do you have ibuprofen", "checks": [("confirms it with the price", lambda r: "Yes, Ibuprofen 200mg Tablets is in our catalog at $5.29." in r)]},
+            {"text": "is col-005 in stock", "checks": [("honest about stock levels", lambda r: "I don't track live stock levels" in r and "not currently available" not in r)]},
+            {"text": "do you stock paracetamol", "checks": [("lists the paracetamol products", lambda r: "(fev-001)" in r and "(fev-002)" in r and "(fev-004)" in r)]},
+            {"text": "the second one", "checks": [("starts that order", lambda r: "address" in r.lower())],
+             "state_checks": [("pending is the second listed product", lambda sid: (store.get_pending_order(sid) or {}).get("product_id") == "fev-002")]},
+        ],
+    },
+    {
         "name": "bare_numeric_selection_from_a_product_list",
         # Fully deterministic — proves main.py's _resolve_bare_selection
         # dispatch is actually wired correctly end-to-end through the real

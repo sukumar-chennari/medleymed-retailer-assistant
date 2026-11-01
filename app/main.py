@@ -1492,6 +1492,44 @@ def _clear_conversation_state(session_id: str) -> None:
     store.set_last_products(session_id, [])
 
 
+# "Do you have ibuprofen?" / "is cetirizine available?" / "is col-005 in stock?" for
+# a product we DO carry. Found Nov 1: they got the child-or-adult question, the
+# out-of-scope decline, or (for "is col-005 in stock") the model's invention that
+# "Col-005 is not currently available for ordering, as there are no orders to
+# check on". The shop tracks no stock levels, so the honest answer is that it is
+# in the catalog, with the price, and that live stock is not known.
+_STOCK_QUESTION_RE = re.compile(
+    r"\b(?:do\s+you\s+(?:have|sell|stock|carry|offer)|have\s+you\s+got|are\s+you\s+selling|"
+    r"(?:is|are)\s+.{1,60}?\s+(?:available|in\s+stock|sold\s+here)|"
+    r"(?:is|are)\s+there\s+.{1,30}?\s+(?:available|in\s+stock))\b",
+    re.IGNORECASE,
+)
+_ASKS_ABOUT_STOCK_RE = re.compile(r"\b(?:available|in\s+stock)\b", re.IGNORECASE)
+
+
+def _stocked_product_reply(text: str, session_id: str) -> str | None:
+    words = re.findall(r"[a-z0-9']+", text.lower())
+    if not words or len(words) > 14 or "@" in text:
+        return None
+    if not _STOCK_QUESTION_RE.search(text) or is_info_question(text):
+        return None
+    without_subject = re.sub(r"\b(?:my|the|that|this|your)\s+orders?\b", " ", text, flags=re.IGNORECASE)
+    if _has_unnegated_intent(without_subject, ORDER_INTENT_RE) or brands.classify(text):
+        return None
+    named = _products_named_in(text)
+    if not named:
+        return None
+    store.set_last_products(session_id, named)
+    stock_note = " I don't track live stock levels, but you can order it now." if _ASKS_ABOUT_STOCK_RE.search(text) else ""
+    if len(named) == 1:
+        product = named[0]
+        store.set_last_recommended_product(session_id, product["id"])
+        return f"Yes, {product['name']} is in our catalog at ${product['price_usd']:.2f}.{stock_note} Would you like to order it?"
+    store.clear_last_recommended_product(session_id)
+    listing = "\n".join(f"- {p['name']} ({p['id']}) — ${p['price_usd']:.2f}" for p in named)
+    return f"Yes, we carry these:\n{listing}\n\nWould you like to order one of these?"
+
+
 def _reply_for_start_order_result(order: dict) -> str:
     if "error" in order:
         return f"Sorry, {order['error']}"
@@ -1790,6 +1828,12 @@ def chat(req: ChatRequest):
             combination_reply := interactions.combination_reply(text, store.get_catalog())
         ):
             reply = combination_reply
+            messages.append({"role": "user", "content": text})
+            messages.append({"role": "assistant", "content": reply})
+        elif text and not pending_product_id and not pending_address_confirmation and (
+            stocked_reply := _stocked_product_reply(text, req.session_id)
+        ):
+            reply = stocked_reply
             messages.append({"role": "user", "content": text})
             messages.append({"role": "assistant", "content": reply})
         elif text and (price_reply := _price_reply(text, last_products)):
