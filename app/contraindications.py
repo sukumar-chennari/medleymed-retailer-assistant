@@ -98,17 +98,36 @@ _ALLERGY_PHRASE_RE = re.compile(r"\ballerg(?:ic|y|ies)\b[^.!?;]{0,60}", re.IGNOR
 _ALLERGY_BEFORE_RE = re.compile(r"([A-Za-z\-/ ]{3,40}?)\s+allergy\b", re.IGNORECASE)
 
 
-def _unnegated(pattern: re.Pattern, text: str) -> bool:
+# "can I take ibuprofen and paracetamol together" ASKS about a medicine; it does
+# not say the customer takes it. Found Nov 1 by the harness: that question set the
+# "taking another anti-inflammatory" condition, and a later order for Ibuprofen in
+# the same session was refused with "you mentioned another anti-inflammatory".
+# For the current-medication conditions a question or an intention ("can I take",
+# "safe to take", "I want to take") is not a statement.
+_QUESTION_PREFIX_RE = re.compile(
+    r"(?:\b(?:can|could|should|may|would|will|do|does|shall)\s+(?:i|we|you)\s+|\bto\s+|\b(?:if|whether)\s+(?:i|we)\s+)$", re.IGNORECASE
+)
+_STATEMENT_ONLY_KEYS = {"nsaid_use", "paracetamol_use"}
+
+
+def _unnegated(pattern: re.Pattern, text: str, statement_only: bool = False) -> bool:
     for match in pattern.finditer(text):
         before = text[max(0, match.start() - _NEGATION_LOOKBACK) : match.start()]
-        if not _NEGATION_RE.search(before):
-            return True
+        if _NEGATION_RE.search(before):
+            continue
+        if statement_only and _QUESTION_PREFIX_RE.search(before):
+            continue
+        return True
     return False
 
 
 def conditions_in(text: str) -> set[str]:
-    """The condition keys the text states (negated mentions are ignored)."""
-    return {key for key, (_, pattern) in _COMPILED.items() if _unnegated(pattern, text)}
+    """The condition keys the text states (negated mentions are ignored; for the
+    current-medication keys a question is not a statement)."""
+    return {
+        key for key, (_, pattern) in _COMPILED.items()
+        if _unnegated(pattern, text, statement_only=key in _STATEMENT_ONLY_KEYS)
+    }
 
 
 def allergic_product_ids(text: str) -> dict[str, str]:

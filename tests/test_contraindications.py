@@ -173,3 +173,35 @@ class TestRoute:
         self._chat("s1", "I have a fever")
         reply = self._chat("s1", "for myself")
         assert "(fev-003)" in reply and "Left out" not in reply
+
+
+class TestAQuestionIsNotAStatement:
+    """Real bug (found by the harness on Nov 1): "can i take ibuprofen and
+    paracetamol together" set the "taking another anti-inflammatory" condition, and
+    a later order for Ibuprofen in the same session was refused with "you mentioned
+    another anti-inflammatory"."""
+
+    @pytest.mark.parametrize("text", [
+        "can i take ibuprofen and paracetamol together", "is it safe to take aspirin with food", "should I take ibuprofen",
+        "I want to take ibuprofen", "can I take paracetamol", "could I take naproxen", "do you take aspirin",
+        "I wonder if I take ibuprofen with food",
+    ])
+    def test_a_question_or_intention_sets_no_condition(self, text):
+        assert ci.conditions_in(text) == set()
+
+    @pytest.mark.parametrize("text, key", [
+        ("I take aspirin daily", "nsaid_use"), ("I am taking naproxen", "nsaid_use"), ("I am on ibuprofen", "nsaid_use"),
+        ("I took paracetamol an hour ago", "paracetamol_use"), ("I'm taking paracetamol already", "paracetamol_use"),
+    ])
+    def test_a_statement_still_does(self, text, key):
+        assert key in ci.conditions_in(text)
+
+    def test_the_question_does_not_block_a_later_order_in_the_same_session(self):
+        store.save_session_messages("s1", [{"role": "user", "content": "can i take ibuprofen and paracetamol together"}])
+        ci.set_current_text("order Ibuprofen 200mg Tablets")
+        assert "error" not in json.loads(tools.start_order("fev-003", "s1"))
+
+    def test_a_real_statement_still_blocks_the_order(self):
+        store.save_session_messages("s2", [{"role": "user", "content": "I take aspirin daily"}])
+        ci.set_current_text("order Ibuprofen 200mg Tablets")
+        assert "error" in json.loads(tools.start_order("fev-003", "s2"))
