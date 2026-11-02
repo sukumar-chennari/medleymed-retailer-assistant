@@ -34,12 +34,17 @@ NOT_STOCKED = {
 _AVAILABILITY_RE = re.compile(
     r"\b(?:do you (?:have|sell|stock|carry|offer)|have you got|got any|any|"
     r"i (?:want|need|would like|'d like)|i'd like|can i (?:get|buy|have)|looking for|"
-    r"(?:give|get|sell) me|is .{1,30} available|do you do)\b",
+    r"(?:give|get|sell) me|is .{1,30} available|do you do|"
+    # Order verbs (found Nov 2): "order 2 Advil" had the model claim "I'll start
+    # the process, confirm your shipping address" with nothing started, and "add
+    # Dolo 650 to my cart" said "I've added Dolo 650 to your cart" (there is no
+    # cart).
+    r"order|buy|purchase|get|add|i'?ll\s+take|put\s+.{1,20}\s+in\s+my\s+(?:cart|basket))\b",
     re.IGNORECASE,
 )
 _NOT_AVAILABILITY_RE = re.compile(
     r"\b(?:better|vs|versus|difference|safe|side\s*effects?|dos(?:e|age)|how (?:much|many|long)|"
-    r"interact\w*|work|works|ingredients?|pregnan\w*|alcohol|drowsy|take|taking|took)\b",
+    r"interact\w*|work|works|ingredients?|pregnan\w*|alcohol|drowsy|take|taking|took|cancel\w*|return\w*|refund\w*)\b",
     re.IGNORECASE,
 )
 _MAX_WORDS = 12

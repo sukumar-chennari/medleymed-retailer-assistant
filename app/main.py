@@ -981,6 +981,9 @@ def _brand_availability_reply(text: str, session_id: str) -> str | None:
             "tell me what you're dealing with, or say \"show me all your products\"."
         )
     store.set_last_products(session_id, products)
+    if len(products) == 1:
+        # a lone equivalent is "the product just offered": a bare "yes" orders it
+        store.set_last_recommended_product(session_id, products[0]["id"])
     lines = []
     for brand in named_brands:
         if brands.is_ingredient_itself(brand):

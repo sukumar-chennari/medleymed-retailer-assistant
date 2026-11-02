@@ -1621,3 +1621,52 @@ class TestDoYouHaveAProductWeCarry:
         monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
         assert "is in our catalog at" not in _chat("s1", "do you have ibuprofen")
         assert store.get_pending_order("s1")["product_id"] == "col-004"
+
+
+class TestOrderingAMedicineWeDoNotCarry:
+    """Real bugs (Nov 2 probe): "order 2 Advil" had the model claim "I'll start the
+    process, confirm your shipping address" with nothing started; "add Dolo 650 to
+    my cart" said "I've added Dolo 650 to your cart" (there is no cart); "order
+    Tylenol" got a confused explanation; "buy aspirin" the out-of-scope decline."""
+
+    @staticmethod
+    def _model_must_not_run(monkeypatch):
+        def _boom(*args, **kwargs):
+            raise AssertionError("the model must not be reached")
+
+        monkeypatch.setattr(main, "run_turn", _boom)
+
+    @pytest.mark.parametrize("text, brand, equivalent", [
+        ("order Tylenol", "Tylenol", "fev-001"), ("order 2 Advil", "Advil", "fev-003"), ("I'd like to order Crocin", "Crocin", "fev-001"),
+        ("add Dolo 650 to my cart", "Dolo", "fev-001"), ("buy Zyrtec", "Zyrtec", "col-001"), ("purchase Sudafed", "Sudafed", "col-002"),
+    ])
+    def test_a_brand_order_gets_the_same_ingredient_products_and_starts_nothing(self, monkeypatch, text, brand, equivalent):
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", text)
+        assert reply.startswith(f"We don't carry {brand}") and f"({equivalent})" in reply
+        assert store.get_pending_order("s1") is None and store.list_orders("demo_user") == []
+
+    @pytest.mark.parametrize("text", ["buy aspirin", "purchase Benadryl", "order amoxicillin", "get me some NyQuil"])
+    def test_a_medicine_with_no_equivalent_gets_an_honest_not_stocked(self, monkeypatch, text):
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", text)
+        assert reply.startswith("We don't carry") and "show me all your products" in reply and store.get_pending_order("s1") is None
+
+    def test_the_equivalents_can_then_be_picked_and_ordered(self, monkeypatch):
+        self._model_must_not_run(monkeypatch)
+        _chat("s1", "order Advil")
+        assert "address" in _chat("s1", "yes").lower()
+        assert store.get_pending_order("s1")["product_id"] == "fev-003"
+
+    @pytest.mark.parametrize("text", [
+        "order Ibuprofen 200mg Tablets", "order col-001", "I ordered Tylenol yesterday and it helped", "how much does Tylenol cost to order",
+    ])
+    def test_stocked_products_and_unrelated_messages_keep_their_own_path(self, monkeypatch, text):
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        assert not _chat("s1", text).startswith("We don't carry")
+
+    def test_cancelling_an_order_of_a_brand_still_cancels_not_a_not_stocked_reply(self, monkeypatch):
+        store.save_address("demo_user", "10 High St, Leeds")
+        store.create_order("demo_user", "fev-001", "10 High St, Leeds", 1)
+        self._model_must_not_run(monkeypatch)
+        assert "has been cancelled" in _chat("s1", "cancel my Tylenol order")

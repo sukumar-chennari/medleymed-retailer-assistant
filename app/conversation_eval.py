@@ -987,6 +987,18 @@ CONVERSATION_CASES = [
         ],
     },
     {
+        "name": "ordering_a_medicine_we_do_not_carry",
+        # Fully deterministic. On Nov 2 "order 2 Advil" had the model claim it
+        # would "start the process" with nothing started, and "add Dolo 650 to my
+        # cart" said "I've added Dolo 650 to your cart" (there is no cart).
+        "turns": [
+            {"text": "order 2 Advil", "checks": [("says it does not carry the brand and offers the ingredient", lambda r: r.startswith("We don't carry Advil") and "(fev-003)" in r)],
+             "state_checks": [("nothing was started", lambda sid: store.get_pending_order(sid) is None)]},
+            {"text": "add Dolo 650 to my cart", "checks": [("no false cart claim", lambda r: "added" not in r.lower() and r.startswith("We don't carry Dolo"))]},
+            {"text": "buy aspirin", "checks": [("honest not-stocked", lambda r: r.startswith("We don't carry Aspirin"))]},
+        ],
+    },
+    {
         "name": "bare_numeric_selection_from_a_product_list",
         # Fully deterministic — proves main.py's _resolve_bare_selection
         # dispatch is actually wired correctly end-to-end through the real
