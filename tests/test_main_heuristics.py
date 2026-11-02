@@ -426,3 +426,23 @@ class TestNonLatinAddressesAreAddresses:
     @pytest.mark.parametrize("text", ["make it 2", "one more", "2 please", "x2", "actually just 1"])
     def test_the_conversational_phrases_are_still_refused(self, text):
         assert main._is_not_an_address_phrase(text) is True
+
+
+class TestFillerWordsAndPunctuationAreNeverAddresses:
+    """Real bugs (found by a stateful fuzz, Nov 2): with an order waiting for its
+    address, "hmm" and "later" were saved as the shipping address and the order
+    placed to them, and so was "..." — the bare-place-name fallback accepted any
+    short text."""
+
+    @pytest.mark.parametrize("text", [
+        "hmm", "later", "thanks", "...", "?!", "💊", "ok", "what", "idk", "hello", "stop", "maybe", "not now", "bye", "k", "wow", "sorry",
+    ])
+    def test_it_is_not_an_address(self, text):
+        assert main._looks_like_a_first_time_address(text) is False
+        assert main._is_not_an_address_phrase(text) is True
+
+    @pytest.mark.parametrize("text", [
+        "Hyderabad", "hyderabad", "Pune", "Cool Road 5, Pune", "Good Street 12", "Right Lane, Delhi", "Wow Nagar, Mumbai", "Stop 4 Road",
+    ])
+    def test_real_places_and_streets_with_such_words_still_pass(self, text):
+        assert main._looks_like_a_first_time_address(text) is True

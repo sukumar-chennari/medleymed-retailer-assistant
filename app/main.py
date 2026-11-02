@@ -194,6 +194,13 @@ _CONVERSATIONAL_WORDS = {
     "ten", "twice", "double", "units", "unit", "boxes", "box", "packs", "pack", "tablets", "tablet", "them", "those",
     "quantity", "qty", "to", "a", "an", "and", "or", "yes", "yeah", "ok", "okay", "sure", "thanks", "thank", "you",
     "changed", "mind", "my", "me", "give", "lets", "let", "s", "do", "is", "be", "so", "then", "also", "too", "much",
+    # Pleasantries and fillers. A stateful fuzz found "hmm" and "later" saved as
+    # the shipping address (and an order placed to them) when an order waited for
+    # its address: the bare-place-name fallback accepted any short word (Nov 2).
+    "hmm", "hmmm", "hm", "umm", "um", "uh", "well", "hello", "hi", "hey", "k", "kk", "fine", "cool", "great", "nothing",
+    "idk", "dunno", "stop", "bye", "goodbye", "what", "huh", "oh", "ah", "wow", "lol", "haha", "pls", "plz", "good", "nice",
+    "alright", "right", "never", "cancel", "skip", "later", "now", "not", "hold", "on", "ty", "thankyou", "thanku", "maybe",
+    "perhaps", "sorry", "oops", "why", "how", "who", "when", "where", "which", "nope", "nah",
 }
 
 
@@ -218,7 +225,7 @@ def _is_not_an_address_phrase(text: str) -> bool:
     # was refused as "just a small number" (found Oct 29).
     tokens = re.findall(r"\d+|[^\W\d_]+", text.lower().replace("'", " "))
     if not tokens:
-        return False
+        return True   # no letters or digits at all ("...", "?!", "💊"): not an address
     return all(t in _CONVERSATIONAL_WORDS or (t.isdigit() and len(t) <= 2) for t in tokens)
 
 
@@ -459,7 +466,7 @@ def _wants_different_address(text: str) -> bool:
 # guardrails.py's GREETING_WORDS/BYE_WORDS (a short message containing one
 # of these is basically never anything else). Used to detect the user
 # opting out of a pending email/address ask rather than answering it.
-DECLINE_WORDS = {"no", "nope", "nah", "skip", "cancel", "nevermind"}
+DECLINE_WORDS = {"no", "nope", "nah", "skip", "cancel", "nevermind", "later"}
 MAX_DECLINE_WORDS = 6
 
 
@@ -467,7 +474,7 @@ def _declines(text: str) -> bool:
     words = re.findall(r"[a-z']+", text.lower())
     if not words or len(words) > MAX_DECLINE_WORDS:
         return False
-    return any(w in DECLINE_WORDS for w in words)
+    return any(w in DECLINE_WORDS for w in words) or bool(re.search(r"\bnot\s+now\b", text, re.IGNORECASE))
 
 
 def _looks_like_order_cancellation(text: str) -> bool:

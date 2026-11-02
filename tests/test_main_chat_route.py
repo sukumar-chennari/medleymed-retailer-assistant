@@ -1670,3 +1670,27 @@ class TestOrderingAMedicineWeDoNotCarry:
         store.create_order("demo_user", "fev-001", "10 High St, Leeds", 1)
         self._model_must_not_run(monkeypatch)
         assert "has been cancelled" in _chat("s1", "cancel my Tylenol order")
+
+
+class TestFillerWhileAnOrderAwaitsItsAddress:
+    @pytest.mark.parametrize("text", ["hmm", "...", "thanks", "?!", "idk", "what"])
+    def test_filler_is_never_saved_as_the_address_and_the_order_keeps_waiting(self, monkeypatch, text):
+        store.set_pending_order("s1", "fev-003", 1)
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        _chat("s1", text)
+        assert store.get_address("demo_user") in (None, "") and store.list_orders("demo_user") == []
+        assert store.get_pending_order("s1")["product_id"] == "fev-003"
+
+    @pytest.mark.parametrize("text", ["later", "not now", "maybe later"])
+    def test_later_declines_the_waiting_order(self, monkeypatch, text):
+        store.set_pending_order("s1", "fev-003", 1)
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        reply = _chat("s1", text)
+        assert "won't place that order without a shipping address" in reply
+        assert store.get_pending_order("s1") is None and store.list_orders("demo_user") == []
+
+    def test_the_real_address_afterwards_still_works(self, monkeypatch):
+        store.set_pending_order("s1", "fev-003", 1)
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        _chat("s1", "hmm")
+        assert "Shipping to: 5 Mid Rd, Pune" in _chat("s1", "5 Mid Rd, Pune")
