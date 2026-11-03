@@ -94,8 +94,16 @@ _ALLERGY_TERMS = [
     (r"dextromethorphan", ("col-004", "col-006")),
 ]
 _ALLERGY_RES = [(re.compile(p, re.IGNORECASE), ids) for p, ids in _ALLERGY_TERMS]
-_ALLERGY_PHRASE_RE = re.compile(r"\ballerg(?:ic|y|ies)\b[^.!?;]{0,60}", re.IGNORECASE)
-_ALLERGY_BEFORE_RE = re.compile(r"([A-Za-z\-/ ]{3,40}?)\s+allergy\b", re.IGNORECASE)
+# The span after "allergic" must stay inside ONE statement. It used to run 60
+# characters across a newline into the NEXT message, so "I'm allergic to
+# ibuprofen" followed by "order Paracetamol 500mg Tablets" refused the paracetamol
+# order with "you mentioned an allergy to paracetamol" (found Nov 3 by a harness
+# case). It now stops at a line break and at words that start a new request.
+_ALLERGY_PHRASE_RE = re.compile(
+    r"\ballerg(?:ic|y|ies)\b(?:(?!\b(?:but|then|so|however|order|buy|purchase|want|ship|deliver|please)\b)[^.!?;\n]){0,60}",
+    re.IGNORECASE,
+)
+_ALLERGY_BEFORE_RE = re.compile(r"([A-Za-z\-/ ]{3,40}?)\s+allergy\b", re.IGNORECASE)   # no newline in the class: one statement
 
 
 # "can I take ibuprofen and paracetamol together" ASKS about a medicine; it does

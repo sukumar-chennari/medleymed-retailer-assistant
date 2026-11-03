@@ -205,3 +205,37 @@ class TestAQuestionIsNotAStatement:
         store.save_session_messages("s2", [{"role": "user", "content": "I take aspirin daily"}])
         ci.set_current_text("order Ibuprofen 200mg Tablets")
         assert "error" in json.loads(tools.start_order("fev-003", "s2"))
+
+
+class TestAnAllergyStatementStaysInsideOneStatement:
+    """Real bug (found by a harness case, Nov 3): the span read after "allergic"
+    ran 60 characters across a newline into the NEXT message, so "I'm allergic to
+    ibuprofen" followed by "order Paracetamol 500mg Tablets" refused the paracetamol
+    order with "you mentioned an allergy to paracetamol"."""
+
+    def test_the_next_message_is_not_part_of_the_allergy(self):
+        text = "I'm allergic to ibuprofen\norder Paracetamol 500mg Tablets ship to 5 Mid Rd, Pune"
+        assert set(ci.allergic_product_ids(text)) == {"fev-003"}
+
+    @pytest.mark.parametrize("text", [
+        "I'm allergic to ibuprofen but order paracetamol", "I'm allergic to ibuprofen, order Paracetamol",
+        "I have an allergy to ibuprofen. Please order paracetamol", "allergic to ibuprofen\nI have a fever",
+        "allergic to ibuprofen then buy paracetamol",
+    ])
+    def test_a_new_request_ends_the_allergy(self, text):
+        assert set(ci.allergic_product_ids(text)) == {"fev-003"}
+
+    @pytest.mark.parametrize("text, expected", [
+        ("allergic to aspirin and paracetamol", {"fev-003", "fev-001", "fev-002", "fev-004", "col-003"}),
+        ("I'm allergic to aspirin or ibuprofen", {"fev-003"}),
+        ("paracetamol allergy", {"fev-001", "fev-002", "fev-004", "col-003"}),
+    ])
+    def test_a_real_list_of_allergies_still_counts_every_item(self, text, expected):
+        assert set(ci.allergic_product_ids(text)) == expected
+
+    def test_an_ibuprofen_allergy_in_one_message_does_not_block_paracetamol_in_the_next(self):
+        store.save_session_messages("s1", [{"role": "user", "content": "I'm allergic to ibuprofen"}])
+        ci.set_current_text("order Paracetamol 500mg Tablets")
+        assert "error" not in json.loads(tools.start_order("fev-001", "s1"))
+        ci.set_current_text("order Ibuprofen 200mg Tablets")
+        assert "error" in json.loads(tools.start_order("fev-003", "s1"))
