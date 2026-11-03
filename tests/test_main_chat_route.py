@@ -1740,3 +1740,32 @@ class TestAConditionStatedAfterTheOrderStartedStillStopsIt:
         assert "Order confirmed!" in _chat("s1", "5 Mid Rd, Pune")
         _chat("s2", "order Ibuprofen 200mg Tablets")
         assert "Order confirmed!" in _chat("s2", "5 Mid Rd, Pune")
+
+
+class TestAStatementAboutTheCustomerIsNotAnAddress:
+    """Real bug (stateful fuzz, Nov 3): with an order waiting for its address, "I
+    have a stomach ulcer" was accepted as the shipping address and the order placed
+    to it."""
+
+    @staticmethod
+    def _stub_model(monkeypatch):
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+
+    @pytest.mark.parametrize("text", [
+        "I have a stomach ulcer", "I'm pregnant", "I am allergic to ibuprofen", "I can't breathe", "I don't have a house number",
+        "my son is allergic to penicillin", "my mother has diabetes", "it's for my wife", "he has a fever", "I think I have the flu",
+        "I need it urgently", "I'm on warfarin", "im sick", "im on warfarin", "im allergic to ibuprofen",
+    ])
+    def test_it_is_never_saved_as_the_address(self, monkeypatch, text):
+        store.set_pending_order("s1", "fev-003", 1)
+        self._stub_model(monkeypatch)
+        _chat("s1", text)
+        assert store.get_address("demo_user") in (None, "") and store.list_orders("demo_user") == []
+        assert store.get_pending_order("s1")["product_id"] == "fev-003"
+
+    @pytest.mark.parametrize("address", [
+        "I.T. Park Road, Hyderabad", "Im Lane 4, Pune", "Itza Nagar 5", "Hemant Colony, Delhi", "My Home Apartments, Block 4, Pune",
+        "Issac Newton Road 12", "He Man Street 3",
+    ])
+    def test_real_addresses_that_start_with_such_letters_still_pass(self, address):
+        assert main._looks_like_a_first_time_address(address) is True

@@ -215,8 +215,19 @@ _STARTS_LIKE_AN_ORDER_RE = re.compile(
 )
 
 
+# "I have a stomach ulcer", "I'm pregnant", "my son is allergic": a statement about
+# the customer is not an address, however short (the stateful fuzz saw one saved
+# as the shipping address and the order placed to it, Nov 3).
+_SELF_STATEMENT_START_RE = re.compile(
+    r"^\s*(?:i\s*(?:'m|am|have|had|feel|think|need|can'?t|cannot|don'?t|do\s+not|was|got|get|will|would|should|want|wish|take|took)\b"
+    r"|i've\b|im\s+(?:a|an|the|not|so|very|sick|ill|allergic|pregnant|on|taking|having|feeling)\b"
+    r"|my\s+\w+\s+(?:has|have|is|was|hurts|feels)\b|(?:it|he|she|they)\s*(?:'s|is|has|was)\b)",
+    re.IGNORECASE,
+)
+
+
 def _is_not_an_address_phrase(text: str) -> bool:
-    if _INSTRUCTION_START_RE.match(text):
+    if _INSTRUCTION_START_RE.match(text) or _SELF_STATEMENT_START_RE.match(text):
         return True
     if _STARTS_LIKE_AN_ORDER_RE.match(text) and (_names_a_drug(text) or _STRENGTH_RE.search(text)):
         return True

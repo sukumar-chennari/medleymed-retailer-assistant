@@ -1013,6 +1013,16 @@ CONVERSATION_CASES = [
         ],
     },
     {
+        "name": "a_statement_about_the_customer_is_not_an_address",
+        # Fully deterministic. With an order waiting for its address, "I have a
+        # stomach ulcer" was saved as the shipping address and the order placed.
+        "turns": [
+            {"text": "order Ibuprofen 200mg Tablets", "checks": [("asks for an address", lambda r: "address" in r.lower())]},
+            {"text": "I have a stomach ulcer", "checks": [("is not taken as the address", lambda r: "Order confirmed!" not in r and "Shipping to" not in r)],
+             "state_checks": [("no order placed", _order_count_is(0)), ("nothing saved as an address", lambda sid: not store.get_address("demo_user"))]},
+        ],
+    },
+    {
         "name": "bare_numeric_selection_from_a_product_list",
         # Fully deterministic — proves main.py's _resolve_bare_selection
         # dispatch is actually wired correctly end-to-end through the real
