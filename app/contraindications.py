@@ -118,9 +118,18 @@ _QUESTION_PREFIX_RE = re.compile(
 _STATEMENT_ONLY_KEYS = {"nsaid_use", "paracetamol_use"}
 
 
+def _same_message_before(text: str, start: int) -> str:
+    """The few characters before a match, from the SAME message only. The text
+    scanned is the customer's messages joined by newlines, and the lookback used
+    to cross a line break: "I can't breathe" followed by "I'm allergic to
+    ibuprofen" read the allergy as negated ("can't ... allergic"), so an ibuprofen
+    order went through (found Nov 3 by the stateful fuzz)."""
+    return text[max(0, start - _NEGATION_LOOKBACK): start].rsplit("\n", 1)[-1]
+
+
 def _unnegated(pattern: re.Pattern, text: str, statement_only: bool = False) -> bool:
     for match in pattern.finditer(text):
-        before = text[max(0, match.start() - _NEGATION_LOOKBACK) : match.start()]
+        before = _same_message_before(text, match.start())
         if _NEGATION_RE.search(before):
             continue
         if statement_only and _QUESTION_PREFIX_RE.search(before):
@@ -144,7 +153,7 @@ def allergic_product_ids(text: str) -> dict[str, str]:
     found: dict[str, str] = {}
     matches = list(_ALLERGY_PHRASE_RE.finditer(text)) + list(_ALLERGY_BEFORE_RE.finditer(text))
     for match in matches:
-        before = text[max(0, match.start() - _NEGATION_LOOKBACK) : match.start()]
+        before = _same_message_before(text, match.start())
         keyword_at = match.group(0).lower().find("allerg")
         inside_before = match.group(0)[: max(keyword_at, 0)]
         if _NEGATION_RE.search(before) or _NEGATION_RE.search(inside_before):

@@ -239,3 +239,39 @@ class TestAnAllergyStatementStaysInsideOneStatement:
         assert "error" not in json.loads(tools.start_order("fev-001", "s1"))
         ci.set_current_text("order Ibuprofen 200mg Tablets")
         assert "error" in json.loads(tools.start_order("fev-003", "s1"))
+
+
+class TestANegationInOneMessageDoesNotCancelAConditionInTheNext:
+    """Real bug (stateful fuzz, seed 77, Nov 3): "I can't breathe" followed by "I'm
+    allergic to ibuprofen" read the allergy as negated ("can't ... allergic") because
+    the 25-character lookback crossed the line break between the two messages, so an
+    ibuprofen order went through."""
+
+    @pytest.mark.parametrize("text, expected", [
+        ("I can't breathe\nI'm allergic to ibuprofen", {"fev-003"}),
+        ("I don't smoke\nI'm allergic to ibuprofen", {"fev-003"}),
+        ("no, thanks\nI'm allergic to ibuprofen", {"fev-003"}),
+    ])
+    def test_an_allergy_after_a_negation_in_the_previous_message(self, text, expected):
+        assert set(ci.allergic_product_ids(text)) == expected
+
+    @pytest.mark.parametrize("text, key", [
+        ("I don't smoke\nI have a stomach ulcer", "ulcer"), ("no history of ulcers\nI'm pregnant", "pregnant"),
+        ("I have no kidney problems\nI have asthma", "asthma"), ("I can't breathe\nI'm on warfarin", "blood_thinner"),
+    ])
+    def test_a_condition_after_a_negation_in_the_previous_message(self, text, key):
+        assert key in ci.conditions_in(text)
+
+    @pytest.mark.parametrize("text", [
+        "I'm not allergic to ibuprofen", "I have no kidney problems", "no history of ulcers", "I don't have asthma",
+    ])
+    def test_a_negation_inside_the_same_message_still_negates(self, text):
+        assert ci.conditions_in(text) == set() and ci.allergic_product_ids(text) == {}
+
+    def test_the_exact_sequence_from_the_fuzz_is_refused(self):
+        store.save_session_messages("s1", [
+            {"role": "user", "content": "I can't breathe"}, {"role": "assistant", "content": "..."},
+            {"role": "user", "content": "I'm allergic to ibuprofen"}, {"role": "assistant", "content": "..."},
+        ])
+        ci.set_current_text("order Ibuprofen 200mg Tablets")
+        assert "error" in json.loads(tools.start_order("fev-003", "s1"))
