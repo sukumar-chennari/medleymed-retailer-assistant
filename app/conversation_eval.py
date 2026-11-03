@@ -999,6 +999,20 @@ CONVERSATION_CASES = [
         ],
     },
     {
+        "name": "a_condition_said_after_the_order_started_still_stops_it",
+        # Fully deterministic. The condition check used to run only when an order
+        # STARTED: order ibuprofen, then "I have a stomach ulcer", then the
+        # address placed the ibuprofen order.
+        "turns": [
+            {"text": "order Ibuprofen 200mg Tablets", "checks": [("asks for an address", lambda r: "address" in r.lower())]},
+            {"text": "5 Mid Rd, Pune, I'm allergic to ibuprofen", "checks": [
+                ("refuses instead of placing it", lambda r: r.startswith("Sorry, I can't set up an order for Ibuprofen 200mg Tablets") and "Order confirmed!" not in r)],
+             "state_checks": [("no order exists", _order_count_is(0))]},
+            {"text": "order Paracetamol 500mg Tablets ship to 5 Mid Rd, Pune", "checks": [("another product still orders normally", lambda r: "Order confirmed!" in r)],
+             "state_checks": [("one real order", _order_count_is(1))]},
+        ],
+    },
+    {
         "name": "bare_numeric_selection_from_a_product_list",
         # Fully deterministic — proves main.py's _resolve_bare_selection
         # dispatch is actually wired correctly end-to-end through the real

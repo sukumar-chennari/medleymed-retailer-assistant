@@ -288,10 +288,32 @@ def _looks_like_a_first_time_address(text: str) -> bool:
     return True
 
 
+def _refusal_at_completion(session_id: str, product_id: str) -> str | None:
+    """A condition stated AFTER an order was started must still stop it. Found by
+    the stateful fuzz (Nov 3): "order Ibuprofen 200mg Tablets" ... "I have a
+    stomach ulcer" ... then the address -> the ibuprofen order was placed.
+    start_order only checks at the moment it begins; this checks again when the
+    order is completed, with the whole conversation including the current
+    message."""
+    product = store.find_product(product_id)
+    if product is None:
+        return None
+    history = [
+        m["content"] for m in store.get_session_messages(session_id)
+        if m.get("role") == "user" and isinstance(m.get("content"), str)
+    ]
+    return contraindications.refusal_for(product, contraindications.stated_text(history))
+
+
 def _complete_pending_order(session_id: str, pending: dict, address_text: str) -> str:
     """Deterministically finishes an order once the user's next message supplies
     the address, instead of trusting the LLM to chain save_address + place_order
     + send_confirmation_email itself across turns (see agent.py/tools.py for why)."""
+    refusal = _refusal_at_completion(session_id, pending["product_id"])
+    if refusal:
+        store.clear_pending_order(session_id)
+        store.clear_pending_address_confirmation(session_id)
+        return f"Sorry, {refusal}"
     email_in_text, address_only = _extract_email(address_text)
     store.save_address("demo_user", _strip_address_filler(address_only or address_text))
     if email_in_text:
@@ -326,6 +348,11 @@ def _complete_confirmed_order(session_id: str, pending: dict) -> str:
     file is still correct, rather than assuming it silently — real orders
     always ship somewhere real; a stale saved address is a genuine mistake
     worth double-checking, not just a demo nicety."""
+    refusal = _refusal_at_completion(session_id, pending["product_id"])
+    if refusal:
+        store.clear_pending_order(session_id)
+        store.clear_pending_address_confirmation(session_id)
+        return f"Sorry, {refusal}"
     order = json.loads(tools.complete_confirmed_order(session_id, pending["product_id"], pending.get("quantity", 1)))
     if "error" in order:
         return f"Sorry, something went wrong placing that order: {order['error']}"

@@ -1694,3 +1694,49 @@ class TestFillerWhileAnOrderAwaitsItsAddress:
         monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
         _chat("s1", "hmm")
         assert "Shipping to: 5 Mid Rd, Pune" in _chat("s1", "5 Mid Rd, Pune")
+
+
+class TestAConditionStatedAfterTheOrderStartedStillStopsIt:
+    """Real safety gap (stateful fuzz, Nov 3): the condition check ran only when
+    an order STARTED. "order Ibuprofen 200mg Tablets" ... "I'm on warfarin" ... then
+    the address -> the ibuprofen order was placed."""
+
+    @staticmethod
+    def _model_must_not_run(monkeypatch):
+        def _boom(*args, **kwargs):
+            raise AssertionError("the model must not be reached")
+
+        monkeypatch.setattr(main, "run_turn", _boom)
+
+    @pytest.mark.parametrize("statement", ["I have a stomach ulcer", "I'm on warfarin", "I'm pregnant", "I'm allergic to ibuprofen"])
+    def test_a_condition_said_while_the_address_is_awaited_blocks_the_order(self, monkeypatch, statement):
+        self._model_must_not_run(monkeypatch)
+        _chat("s1", "order Ibuprofen 200mg Tablets")
+        store.save_session_messages("s1", store.get_session_messages("s1") + [{"role": "user", "content": statement}])
+        reply = _chat("s1", "5 Mid Rd, Pune")
+        assert reply.startswith("Sorry, I can't set up an order for Ibuprofen 200mg Tablets") and "Order confirmed!" not in reply
+        assert store.list_orders("demo_user") == [] and store.get_pending_order("s1") is None
+
+    def test_the_same_at_the_address_confirmation_step(self, monkeypatch):
+        store.save_address("demo_user", "10 High St, Leeds")
+        self._model_must_not_run(monkeypatch)
+        _chat("s1", "order Ibuprofen 200mg Tablets")
+        assert store.get_pending_address_confirmation("s1") is not None
+        store.save_session_messages("s1", store.get_session_messages("s1") + [{"role": "user", "content": "I have a stomach ulcer"}])
+        reply = _chat("s1", "yes")
+        assert "I can't set up an order for Ibuprofen 200mg Tablets" in reply and store.list_orders("demo_user") == []
+        assert store.get_pending_address_confirmation("s1") is None
+
+    def test_a_condition_in_the_completing_message_itself_counts(self, monkeypatch):
+        self._model_must_not_run(monkeypatch)
+        _chat("s1", "order Ibuprofen 200mg Tablets")
+        reply = _chat("s1", "5 Mid Rd, Pune, I'm allergic to ibuprofen")
+        assert "I can't set up an order" in reply and store.list_orders("demo_user") == []
+
+    def test_another_product_is_unaffected_and_a_clean_order_still_completes(self, monkeypatch):
+        self._model_must_not_run(monkeypatch)
+        _chat("s1", "order Paracetamol 500mg Tablets")
+        store.save_session_messages("s1", store.get_session_messages("s1") + [{"role": "user", "content": "I have a stomach ulcer"}])
+        assert "Order confirmed!" in _chat("s1", "5 Mid Rd, Pune")
+        _chat("s2", "order Ibuprofen 200mg Tablets")
+        assert "Order confirmed!" in _chat("s2", "5 Mid Rd, Pune")
