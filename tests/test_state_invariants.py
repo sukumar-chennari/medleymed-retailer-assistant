@@ -10,6 +10,10 @@ chat model unavailable, and after EVERY turn these invariants are checked:
   an order id;
 - pending orders and confirmations name a real product with a quantity of 1-2;
 - every order row is valid; every reply is non-empty and has no traceback;
+- consistency: every receipt (id, product, quantity, total, address) matches its
+  database row, "has been cancelled" is true, an order listing shows every order
+  with its real status, an address/email read-back equals the stored value, and
+  remembered lists / email prompts / recommendations reference real things;
 - safety: no ibuprofen order is ever created after a stated ulcer, ibuprofen
   allergy, warfarin or pregnancy; no pseudoephedrine order after stated high blood
   pressure; an overdose, an infant's fever and "I can't breathe" always get the
@@ -70,6 +74,10 @@ RISKY_CHUNKS = [
     ["order Ibuprofen 200mg Tablets", "make it 2", "5 Mid Rd, Pune"],
     ["order Ibuprofen 200mg Tablets", "I have a stomach ulcer", "5 Mid Rd, Pune"],
 ]
+# The only real addresses the pool ever types. Anything else saved as the shipping
+# address is junk: a stronger check than a list of banned words, which let "dry" and
+# "order it" through (found Nov 5 when a deliberately broken receipt exposed them).
+REAL_ADDRESSES = {"10 High St, Leeds", "5 Mid Rd, Pune", "Flat 4, Rose Lane, Delhi", "99 New Rd, York"}
 _FILLER_ADDRESSES = {"yes", "no", "ok", "help", "later", "hmm", "what", "...", "thanks", "?!", "stop"}
 
 
@@ -102,6 +110,8 @@ def _violations(session_id, message, reply, orders_before, history_text):
         if not 1 <= order["quantity"] <= 2 or order["product_id"] not in ids:
             found.append(f"invalid order row: {order}")
     address = store.get_address("demo_user")
+    if address and address not in REAL_ADDRESSES:
+        found.append(f"saved address is not one the customer ever gave: {address!r}")
     if address:
         low = address.lower()
         if (
@@ -136,8 +146,64 @@ def _violations(session_id, message, reply, orders_before, history_text):
     email = store.get_email("demo_user")
     if email and not re.fullmatch(r"[\w.+-]+@[\w-]+(?:\.[\w-]*\w)+", email):
         found.append(f"bad saved email: {email!r}")
+    found.extend(_consistency_problems(session_id, message, reply, orders))
     if not reply.strip() or "Traceback" in reply:
         found.append(f"bad reply: {reply[:60]!r}")
+    return found
+
+
+def _consistency_problems(session_id, message, reply, orders):
+    """Every number and name the assistant states must match the database."""
+    found = []
+    by_id = {o["order_id"]: o for o in orders}
+    catalog = {p["id"]: p for p in store.get_catalog()}
+    # a receipt block: Order ID / Product / Quantity / Total / Shipping to
+    for block in re.finditer(
+        r"Order ID: (ord-\d+)\nProduct: ([^\n]+)\nQuantity: (\d+)\nTotal: \$([\d.]+)\nShipping to: ([^\n]+)", reply
+    ):
+        order_id, product, quantity, total, address = block.groups()
+        row = by_id.get(order_id)
+        if row is None:
+            found.append(f"receipt for an order that does not exist: {order_id}")
+            continue
+        price = catalog[row["product_id"]]["price_usd"]
+        if product != catalog[row["product_id"]]["name"]:
+            found.append(f"receipt product {product!r} != row {catalog[row['product_id']]['name']!r}")
+        if int(quantity) != row["quantity"]:
+            found.append(f"receipt quantity {quantity} != row {row['quantity']}")
+        if abs(float(total) - round(price * row["quantity"], 2)) > 0.011:
+            found.append(f"receipt total {total} != {price} x {row['quantity']}")
+        if address != row["address"]:
+            found.append(f"receipt address {address!r} != row {row['address']!r}")
+    # "Order ord-0002 (Name) has been cancelled." must really be cancelled
+    for cancelled in re.finditer(r"Order (ord-\d+) \([^)]*\) has been cancelled\.", reply):
+        row = by_id.get(cancelled.group(1))
+        if row is None or row["status"] != "cancelled":
+            found.append(f"claims {cancelled.group(1)} was cancelled but the row says {row and row['status']}")
+    # an order listing must show every order with its real status
+    if reply.startswith("Here is your order") or reply.startswith("Here are your orders"):
+        for order in orders:
+            if f"Order ID: {order['order_id']}" not in reply:
+                found.append(f"order listing is missing {order['order_id']}")
+            elif f"Status: {order['status']}" not in reply.split(f"Order ID: {order['order_id']}")[1].split("Order ID:")[0]:
+                found.append(f"order listing shows the wrong status for {order['order_id']}")
+    # reading the address back must give the stored address
+    if reply.startswith("The shipping address I have on file for you is:"):
+        if reply.split(": ", 1)[1].strip() != store.get_address("demo_user"):
+            found.append("address read-back differs from the stored address")
+    if reply.startswith("The email address I have on file for you is:"):
+        if reply.split(": ", 1)[1].strip() != store.get_email("demo_user"):
+            found.append("email read-back differs from the stored email")
+    # remembered lists and prompts must reference real things
+    for product in store.get_last_products(session_id) or []:
+        if product["id"] not in catalog:
+            found.append(f"remembered a product that is not in the catalog: {product['id']}")
+    pending_email = store.get_pending_email(session_id)
+    if pending_email and pending_email not in by_id:
+        found.append(f"pending email prompt for an order that does not exist: {pending_email}")
+    last = store.get_last_recommended_product(session_id)
+    if last and last not in catalog:
+        found.append(f"last recommended product is not in the catalog: {last}")
     return found
 
 
