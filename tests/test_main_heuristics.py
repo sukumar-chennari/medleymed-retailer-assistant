@@ -446,3 +446,39 @@ class TestFillerWordsAndPunctuationAreNeverAddresses:
     ])
     def test_real_places_and_streets_with_such_words_still_pass(self, text):
         assert main._looks_like_a_first_time_address(text) is True
+
+
+class TestSentencesAnswersAndCommandsAreNeverAddresses:
+    """Real bugs (found Nov 5 by a fuzz invariant: "the saved address must be one the
+    customer actually gave"): with an order waiting for its address, orders were
+    shipped to "adult", "dry", "order it", "reorder that", "good morning", "send me
+    the receipt", "for myself", "show me all your products", "my 4 year old has a
+    cold", "ordr ibuprofin 200 mg" and a romanised Telugu symptom sentence."""
+
+    @pytest.mark.parametrize("text", [
+        "adult", "child", "dry", "wet", "chesty", "myself", "for myself", "order it", "order that", "buy it", "same again",
+        "the first one", "both of them", "the last one", "reorder that", "cancel my last order", "good morning", "good evening",
+        "send me the receipt", "show me all your products", "tell me more", "give me the list", "compare them",
+        "my 4 year old has a cold", "my wife has a fever", "ordr ibuprofin 200 mg", "naaku jvaram undi", "मुझे बुखार है",
+        "నాకు జ్వరం ఉంది", "what is my address", "who are you", "I want it", "yes please", "not sure",
+    ])
+    def test_it_is_not_an_address(self, text):
+        assert main._looks_like_a_first_time_address(text) is False, text
+
+    @pytest.mark.parametrize("text", [
+        "Hyderabad", "hyderabad", "Pune", "Secunderabad", "Banjara Hills", "Jubilee Hills, Hyderabad", "Park Street", "Kolkata",
+        "Bay of Bengal", "The Mall", "Isle of Man", "12 Khansi Road, Bachha Nagar", "No. 12, MG Road", "Flat 4, Rose Lane, Delhi",
+        "10 Cold Storage Road", "5 Dry Creek Road", "7 Adult Education Lane", "3 Order Street, Mumbai", "Good Street 12",
+    ])
+    def test_real_places_and_streets_still_pass(self, text):
+        assert main._looks_like_a_first_time_address(text) is True, text
+
+    def test_the_stored_address_is_never_changed_by_the_checks(self):
+        # the normalisers are used to LOOK at the text, never to rewrite it
+        assert main._looks_like_a_first_time_address("12 Ibuprofin Road, Pune") is True
+
+
+class TestACommandWordInANumberedStreetIsStillAnAddress:
+    @pytest.mark.parametrize("text", ["123 Cancel Reorder Rd", "5 Reorder Street, Pune", "10 Cancel Lane", "12 Good Morning Road"])
+    def test_it_passes(self, text):
+        assert main._looks_like_a_first_time_address(text) is True

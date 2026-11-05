@@ -185,7 +185,8 @@ _INSTRUCTION_START_RE = re.compile(
     r"^\s*(?:(?:oh|well|so|um|uh|hmm|sorry)[\s,.!]+)*"
     r"(?:make\s+(?:it|that|this)|change\s+(?:it|that|this|the\s+(?:order|quantity))|actually\b|wait\b|instead\b|"
     r"never\s*mind|forget\s+(?:it|that)|i\s+(?:want|would|need|meant|changed|think|said)\b|i'd\b|let'?s\b|"
-    r"can\s+you\b|could\s+you\b|no\s+wait\b|just\s+(?:\d|one|two|three|a\b))",
+    r"can\s+you\b|could\s+you\b|no\s+wait\b|just\s+(?:\d|one|two|three|a\b)|"
+    r"(?:show|tell|list|give|compare|explain|display)\s+(?:me|us)\b)",
     re.IGNORECASE,
 )
 _CONVERSATIONAL_WORDS = {
@@ -201,6 +202,13 @@ _CONVERSATIONAL_WORDS = {
     "idk", "dunno", "stop", "bye", "goodbye", "what", "huh", "oh", "ah", "wow", "lol", "haha", "pls", "plz", "good", "nice",
     "alright", "right", "never", "cancel", "skip", "later", "now", "not", "hold", "on", "ty", "thankyou", "thanku", "maybe",
     "perhaps", "sorry", "oops", "why", "how", "who", "when", "where", "which", "nope", "nah",
+    # Answers to the clarifying questions and order commands typed while an order
+    # waits for its address. A fuzz invariant ("the saved address must be one the
+    # customer actually gave") found orders shipped to "adult", "dry" and "order it"
+    # (Nov 5).
+    "dry", "wet", "chesty", "productive", "child", "children", "kid", "kids", "baby", "infant", "toddler", "adult", "myself",
+    "grown", "order", "buy", "purchase", "place", "add", "cart", "basket", "again", "first", "second", "third", "fourth",
+    "fifth", "last", "both", "all", "each", "every", "other", "either", "neither", "any", "some", "same",
 }
 
 
@@ -221,14 +229,54 @@ _STARTS_LIKE_AN_ORDER_RE = re.compile(
 _SELF_STATEMENT_START_RE = re.compile(
     r"^\s*(?:i\s*(?:'m|am|have|had|feel|think|need|can'?t|cannot|don'?t|do\s+not|was|got|get|will|would|should|want|wish|take|took)\b"
     r"|i've\b|im\s+(?:a|an|the|not|so|very|sick|ill|allergic|pregnant|on|taking|having|feeling)\b"
-    r"|my\s+\w+\s+(?:has|have|is|was|hurts|feels)\b|(?:it|he|she|they)\s*(?:'s|is|has|was)\b)",
+    r"|my\s+(?:\w+\s+){1,5}?(?:has|have|had|is|was|hurts|feels)\b|(?:it|he|she|they)\s*(?:'s|is|has|was)\b)",
     re.IGNORECASE,
 )
+
+
+# Words that make a number-less text a sentence rather than a place name. The fuzz
+# kept finding new ones one at a time ("send me the receipt", "for myself", "show
+# me all your products"), so this is a broad set of everyday verbs, pronouns,
+# prepositions and request words. "of", "the" and "and" are deliberately NOT here:
+# real names contain them ("Bay of Bengal", "The Mall").
+_NON_PLACE_WORDS = {
+    "send", "show", "tell", "give", "get", "take", "make", "need", "want", "have", "has", "had", "do", "does", "did", "can",
+    "could", "will", "would", "should", "may", "might", "must", "go", "come", "see", "look", "know", "think", "say", "ask",
+    "use", "find", "put", "keep", "let", "help", "call", "try", "work", "feel", "leave", "bring", "start", "end", "check",
+    "you", "your", "yours", "he", "she", "they", "we", "us", "our", "his", "her", "their", "its", "me", "my", "mine", "myself",
+    "for", "with", "from", "about", "into", "over", "after", "before", "between", "under", "off", "out", "up", "down", "if",
+    "than", "because", "this", "that", "these", "those", "there", "here", "what", "which", "who", "whom", "whose", "when",
+    "where", "why", "how", "is", "are", "was", "were", "be", "been", "am", "not", "no", "yes", "please", "thanks", "thank",
+    "receipt", "order", "orders", "product", "products", "medicine", "medicines", "address", "email", "mail", "name", "thing",
+    "things", "same", "more", "again", "one", "ones", "also", "just", "only", "very", "much", "many", "some", "any", "all",
+    "compare", "explain", "list", "display", "them", "it", "him",
+}
 
 
 def _is_not_an_address_phrase(text: str) -> bool:
     if _INSTRUCTION_START_RE.match(text) or _SELF_STATEMENT_START_RE.match(text):
         return True
+    if not any(ch.isdigit() for ch in text) and (set(re.findall(r"[^\W\d_]+", text.lower())) & _NON_PLACE_WORDS):
+        return True
+    # Commands and greetings are not addresses either: the fuzz saw orders shipped
+    # to "reorder that" and "good morning" (Nov 5).
+    # (Only without a house number: "reorder that" has none, while "123 Cancel
+    # Reorder Rd" is an address.)
+    if not any(ch.isdigit() for ch in text) and (
+        _has_reorder_intent(text) or _has_cancel_intent(text) or guardrails.deterministic_pleasantry_reply(text)
+    ):
+        return True
+    # While an order waits for its address the spelling / language normalisers are
+    # skipped (an address must be stored exactly as typed), which left this check
+    # blind to "ordr ibuprofin 200 mg" and a romanised Telugu symptom sentence. So
+    # look at the NORMALISED text here, without changing what is stored.
+    fixed = spellfix.correct(text)
+    if fixed != text and (
+        _STARTS_LIKE_AN_ORDER_RE.match(fixed) and (_names_a_drug(fixed) or _STRENGTH_RE.search(fixed))
+    ):
+        return True
+    if hinglish.gloss(text) != text and not any(ch.isdigit() for ch in text):
+        return True   # a symptom sentence in another language ("12 Khansi Road, ..." has a number and passes)
     if _STARTS_LIKE_AN_ORDER_RE.match(text) and (_names_a_drug(text) or _STRENGTH_RE.search(text)):
         return True
     # Unicode-aware on purpose: with [a-z] only, a Telugu or Devanagari address

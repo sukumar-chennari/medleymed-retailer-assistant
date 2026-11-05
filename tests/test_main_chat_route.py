@@ -1769,3 +1769,22 @@ class TestAStatementAboutTheCustomerIsNotAnAddress:
     ])
     def test_real_addresses_that_start_with_such_letters_still_pass(self, address):
         assert main._looks_like_a_first_time_address(address) is True
+
+
+class TestWhileAnOrderWaitsNothingButARealAddressBecomesTheAddress:
+    @pytest.mark.parametrize("text", [
+        "adult", "dry", "order it", "reorder that", "good morning", "send me the receipt", "for myself", "show me all your products",
+        "my 4 year old has a cold", "ordr ibuprofin 200 mg", "naaku jvaram undi",
+    ])
+    def test_no_order_is_shipped_to_it(self, monkeypatch, text):
+        store.set_pending_order("s1", "fev-003", 1)
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        _chat("s1", text)
+        assert store.list_orders("demo_user") == [] and store.get_address("demo_user") in (None, "")
+
+    def test_the_real_address_still_completes_it_afterwards(self, monkeypatch):
+        store.set_pending_order("s1", "fev-003", 1)
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        for filler in ["adult", "order it", "good morning"]:
+            _chat("s1", filler)
+        assert "Shipping to: 5 Mid Rd, Pune" in _chat("s1", "5 Mid Rd, Pune")

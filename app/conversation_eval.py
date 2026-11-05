@@ -1023,6 +1023,24 @@ CONVERSATION_CASES = [
         ],
     },
     {
+        "name": "answers_and_commands_are_never_the_shipping_address",
+        # Fully deterministic. With an order waiting for its address, orders were
+        # shipped to "adult", "dry", "order it", "reorder that", "good morning",
+        # "send me the receipt" and "show me all your products".
+        "turns": [
+            {"text": "order Ibuprofen 200mg Tablets", "checks": [("asks for an address", lambda r: "address" in r.lower())]},
+            {"text": "adult", "checks": [("not an address", lambda r: "Order confirmed!" not in r)], "state_checks": [("nothing placed", _order_count_is(0))]},
+            {"text": "order it", "checks": [("not an address", lambda r: "Order confirmed!" not in r)], "state_checks": [("nothing placed", _order_count_is(0))]},
+            {"text": "send me the receipt", "checks": [("not an address", lambda r: "Order confirmed!" not in r)], "state_checks": [("nothing placed", _order_count_is(0))]},
+            {"text": "good morning", "checks": [("not an address", lambda r: "Order confirmed!" not in r)], "state_checks": [("nothing placed", _order_count_is(0))]},
+            {
+                "text": "5 Mid Rd, Pune",
+                "checks": [("only the real address completes it", lambda r: "Order confirmed!" in r and "Shipping to: 5 Mid Rd, Pune" in r)],
+                "state_checks": [("one real order", _order_count_is(1))],
+            },
+        ],
+    },
+    {
         "name": "bare_numeric_selection_from_a_product_list",
         # Fully deterministic — proves main.py's _resolve_bare_selection
         # dispatch is actually wired correctly end-to-end through the real
