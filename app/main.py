@@ -1760,6 +1760,16 @@ def chat(req: ChatRequest):
                     image_b64=req.image_b64,
                     image_media_type=req.image_media_type,
                 )
+        elif (pending_product_id or pending_address_confirmation) and text and (given_address := _extract_address_change(text)):
+            # "change my address to 99 New Rd, York" while an order waits GIVES the
+            # address: complete the order with 99 New Rd, York — not with the whole
+            # sentence (a fuzz invariant saw the sentence saved as the address).
+            pending = pending_product_id or pending_address_confirmation
+            store.clear_pending_order(req.session_id)
+            store.clear_pending_address_confirmation(req.session_id)
+            reply = _complete_pending_order(req.session_id, pending, given_address)
+            messages.append({"role": "user", "content": text})
+            messages.append({"role": "assistant", "content": reply})
         elif (pending_product_id or pending_address_confirmation) and text and _is_bare_email(text):
             # An email typed where an address was expected. It used to reach the
             # model, which sometimes asked "is your shipping address still

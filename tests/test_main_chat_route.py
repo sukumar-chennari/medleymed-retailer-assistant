@@ -1788,3 +1788,59 @@ class TestWhileAnOrderWaitsNothingButARealAddressBecomesTheAddress:
         for filler in ["adult", "order it", "good morning"]:
             _chat("s1", filler)
         assert "Shipping to: 5 Mid Rd, Pune" in _chat("s1", "5 Mid Rd, Pune")
+
+
+class TestChangeMyAddressToXWhileAnOrderWaits:
+    """Real bug (fuzz, Nov 5): with an order waiting for its address, "change my
+    address to 99 New Rd, York" was saved as the address -- the whole sentence --
+    and the order placed to it. The sentence GIVES the address: complete the order
+    with "99 New Rd, York"."""
+
+    @staticmethod
+    def _model_must_not_run(monkeypatch):
+        def _boom(*args, **kwargs):
+            raise AssertionError("the model must not be reached")
+
+        monkeypatch.setattr(main, "run_turn", _boom)
+
+    @pytest.mark.parametrize("text", [
+        "change my address to 99 New Rd, York", "update my shipping address to 99 New Rd, York", "please set my address as 99 New Rd, York",
+    ])
+    def test_the_order_ships_to_the_address_in_the_sentence_only(self, monkeypatch, text):
+        store.set_pending_order("s1", "fev-003", 1)
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", text)
+        assert "Order confirmed!" in reply and "Shipping to: 99 New Rd, York" in reply
+        assert store.get_address("demo_user") == "99 New Rd, York" and store.get_pending_order("s1") is None
+
+    def test_at_the_address_confirmation_step_it_is_the_different_address(self, monkeypatch):
+        store.save_address("demo_user", "10 High St, Leeds")
+        store.set_pending_address_confirmation("s1", "fev-003", 1)
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", "change my address to 99 New Rd, York")
+        assert "Order confirmed!" in reply and "Shipping to: 99 New Rd, York" in reply
+        assert store.get_address("demo_user") == "99 New Rd, York" and store.get_pending_address_confirmation("s1") is None
+
+    def test_the_quantity_and_product_of_the_waiting_order_are_kept(self, monkeypatch):
+        store.set_pending_order("s1", "col-001", 2)
+        self._model_must_not_run(monkeypatch)
+        _chat("s1", "change my address to 99 New Rd, York")
+        assert [(o["product_id"], o["quantity"], o["address"]) for o in store.list_orders("demo_user")] == [("col-001", 2, "99 New Rd, York")]
+
+    def test_a_stated_condition_still_stops_it(self, monkeypatch):
+        store.save_session_messages("s1", [{"role": "user", "content": "I have a stomach ulcer"}])
+        store.set_pending_order("s1", "fev-003", 1)
+        self._model_must_not_run(monkeypatch)
+        assert "I can't set up an order" in _chat("s1", "change my address to 99 New Rd, York")
+        assert store.list_orders("demo_user") == []
+
+    def test_with_nothing_waiting_it_only_saves_the_address_as_before(self, monkeypatch):
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", "change my address to 99 New Rd, York")
+        assert "saved 99 New Rd, York" in reply and store.list_orders("demo_user") == []
+
+    def test_a_phrase_that_is_not_a_real_address_is_not_accepted(self, monkeypatch):
+        store.set_pending_order("s1", "fev-003", 1)
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        _chat("s1", "change my address to later")   # "later" is also a decline word: the waiting order is dropped
+        assert store.list_orders("demo_user") == [] and store.get_address("demo_user") in (None, "")

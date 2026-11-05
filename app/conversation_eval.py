@@ -1041,6 +1041,19 @@ CONVERSATION_CASES = [
         ],
     },
     {
+        "name": "change_my_address_to_x_while_an_order_waits",
+        # Fully deterministic. The whole sentence "change my address to 99 New Rd,
+        # York" used to be saved as the shipping address when an order waited.
+        "turns": [
+            {"text": "order Ibuprofen 200mg Tablets", "checks": [("asks for an address", lambda r: "address" in r.lower())]},
+            {
+                "text": "change my address to 99 New Rd, York",
+                "checks": [("ships to the address in the sentence only", lambda r: "Order confirmed!" in r and "Shipping to: 99 New Rd, York" in r and "change my address" not in r)],
+                "state_checks": [("one real order", _order_count_is(1)), ("the saved address is just the address", lambda sid: store.get_address("demo_user") == "99 New Rd, York")],
+            },
+        ],
+    },
+    {
         "name": "bare_numeric_selection_from_a_product_list",
         # Fully deterministic — proves main.py's _resolve_bare_selection
         # dispatch is actually wired correctly end-to-end through the real
