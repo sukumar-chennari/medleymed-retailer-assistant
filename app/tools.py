@@ -168,6 +168,15 @@ def save_address(address: str) -> str:
             "saved": False,
             "error": "No address was given — ask the user for their shipping address.",
         })
+    # Found by a fuzz of the REAL model (Nov 6): with an order waiting for its
+    # address, "my email is x@y.com" reached the model, which called
+    # save_address("x@y.com") — the email became the shipping address. An address
+    # is never just an email.
+    if re.fullmatch(r"[\w.+-]+@[\w-]+(?:\.[\w-]*\w)+", address):
+        return json.dumps({
+            "saved": False,
+            "error": "That is an email address, not a shipping address — ask the user for their street address.",
+        })
     store.save_address("demo_user", address)
     return json.dumps({"saved": True, "address": address})
 

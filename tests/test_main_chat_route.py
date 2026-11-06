@@ -1844,3 +1844,39 @@ class TestChangeMyAddressToXWhileAnOrderWaits:
         monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
         _chat("s1", "change my address to later")   # "later" is also a decline word: the waiting order is dropped
         assert store.list_orders("demo_user") == [] and store.get_address("demo_user") in (None, "")
+
+
+class TestAnEmailSentenceWhileAnOrderAwaitsItsAddress:
+    """Real bug (a fuzz of the REAL chat model, Nov 6): with an order waiting for its
+    address, "my email is x@y.com" reached the model, which called
+    save_address("x@y.com") -- the email became the shipping address."""
+
+    @staticmethod
+    def _model_must_not_run(monkeypatch):
+        def _boom(*args, **kwargs):
+            raise AssertionError("the model must not be reached")
+
+        monkeypatch.setattr(main, "run_turn", _boom)
+
+    @pytest.mark.parametrize("text", ["my email is x@y.com", "use x@y.com as my email", "email me at x@y.com", "x@y.com is my email"])
+    def test_the_email_is_saved_and_the_address_asked_again(self, monkeypatch, text):
+        store.set_pending_order("s1", "fev-003", 1)
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", text)
+        assert "saved x@y.com" in reply and "shipping address" in reply
+        assert store.get_email("demo_user") == "x@y.com" and store.get_address("demo_user") in (None, "")
+        assert store.get_pending_order("s1")["product_id"] == "fev-003" and store.list_orders("demo_user") == []
+
+    def test_at_the_address_confirmation_step_too(self, monkeypatch):
+        store.save_address("demo_user", "10 High St, Leeds")
+        store.set_pending_address_confirmation("s1", "fev-003", 1)
+        self._model_must_not_run(monkeypatch)
+        reply = _chat("s1", "my email is x@y.com")
+        assert "saved x@y.com" in reply and "10 High St, Leeds" in reply
+        assert store.get_address("demo_user") == "10 High St, Leeds"
+
+    @pytest.mark.parametrize("text", ["5 Mid Rd, Pune, my email is a@b.com", "5 Mid Rd, Pune and email me at a@b.com", "5 Mid Rd, Pune, a@b.com"])
+    def test_a_real_address_with_an_email_is_still_an_address(self, monkeypatch, text):
+        store.set_pending_order("s1", "fev-003", 1)
+        reply = _chat("s1", text)
+        assert "Order confirmed!" in reply and store.get_email("demo_user") == "a@b.com"

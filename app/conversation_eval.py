@@ -1054,6 +1054,21 @@ CONVERSATION_CASES = [
         ],
     },
     {
+        "name": "an_email_sentence_while_an_order_awaits_its_address",
+        # Found by fuzzing the REAL chat model (Nov 6): "my email is x@y.com" while an
+        # order waited for its address made the model save the EMAIL as the address.
+        "turns": [
+            {"text": "order Ibuprofen 200mg Tablets", "checks": [("asks for an address", lambda r: "address" in r.lower())]},
+            {
+                "text": "my email is x@y.com",
+                "checks": [("saves the email and asks for the address again", lambda r: "saved x@y.com" in r and "shipping address" in r)],
+                "state_checks": [("the email is saved", lambda sid: store.get_email("demo_user") == "x@y.com"),
+                                 ("nothing is saved as an address", lambda sid: not store.get_address("demo_user")), ("no order yet", _order_count_is(0))],
+            },
+            {"text": "6 Email Lane, Pune", "checks": [("completes with the real address", lambda r: "Order confirmed!" in r and "Shipping to: 6 Email Lane, Pune" in r)]},
+        ],
+    },
+    {
         "name": "bare_numeric_selection_from_a_product_list",
         # Fully deterministic — proves main.py's _resolve_bare_selection
         # dispatch is actually wired correctly end-to-end through the real

@@ -12,7 +12,9 @@ monkeypatching disproportionate to this project's scale.
 
 import json
 
-from app import tools
+import pytest
+
+from app import store, tools
 
 
 class TestClassifyCategories:
@@ -132,3 +134,18 @@ class TestClampQuantity:
         assert quantity == tools.MAX_QUANTITY_PER_ORDER
         assert reason is not None
         assert "limit" in reason
+
+
+class TestSaveAddressRefusesAnEmail:
+    """Real bug (fuzz of the real chat model, Nov 6): the model called
+    save_address("x@y.com") and the email became the shipping address."""
+
+    @pytest.mark.parametrize("value", ["x@y.com", "  sukumar123@example.com ", "first.last+tag@sub.example.co.uk"])
+    def test_an_email_is_not_saved_as_an_address(self, isolated_db, value):
+        result = json.loads(tools.save_address(value))
+        assert result["saved"] is False and "email address" in result["error"]
+        assert store.get_address("demo_user") in (None, "")
+
+    @pytest.mark.parametrize("value", ["5 Mid Rd, Pune, a@b.com", "10 High St, Leeds", "hyderabad"])
+    def test_an_address_that_merely_mentions_one_or_has_none_is_saved(self, isolated_db, value):
+        assert json.loads(tools.save_address(value))["saved"] is True

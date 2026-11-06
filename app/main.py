@@ -1770,7 +1770,9 @@ def chat(req: ChatRequest):
             reply = _complete_pending_order(req.session_id, pending, given_address)
             messages.append({"role": "user", "content": text})
             messages.append({"role": "assistant", "content": reply})
-        elif (pending_product_id or pending_address_confirmation) and text and _is_bare_email(text):
+        elif (pending_product_id or pending_address_confirmation) and text and (
+            _is_bare_email(text) or (_email_to_save(text) and not _looks_like_an_address(_extract_email(text)[1]))
+        ):
             # An email typed where an address was expected. It used to reach the
             # model, which sometimes asked "is your shipping address still
             # sukumar123@example.com?" (a flaky harness check, found Oct 29): the
