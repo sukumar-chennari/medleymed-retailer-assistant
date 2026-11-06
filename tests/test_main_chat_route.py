@@ -1880,3 +1880,18 @@ class TestAnEmailSentenceWhileAnOrderAwaitsItsAddress:
         store.set_pending_order("s1", "fev-003", 1)
         reply = _chat("s1", text)
         assert "Order confirmed!" in reply and store.get_email("demo_user") == "a@b.com"
+
+
+class TestTheEmailsIntroducingWordsAreNotPartOfTheAddress:
+    """Real bug (found Nov 6): "5 Mid Rd, Pune, my email is a@b.com" shipped to --
+    and the receipt said -- "5 Mid Rd, Pune, my email is"."""
+
+    @pytest.mark.parametrize("text", [
+        "5 Mid Rd, Pune, my email is a@b.com", "5 Mid Rd, Pune and email me at a@b.com",
+        "5 Mid Rd, Pune. Send the confirmation to a@b.com", "5 Mid Rd, Pune, email: a@b.com", "5 Mid Rd, Pune, a@b.com",
+    ])
+    def test_the_address_is_stored_and_printed_without_the_lead_in(self, text):
+        store.set_pending_order("s1", "fev-003", 1)
+        reply = _chat("s1", text)
+        assert "Shipping to: 5 Mid Rd, Pune\n" in reply + "\n"
+        assert store.get_address("demo_user") == "5 Mid Rd, Pune" and store.get_email("demo_user") == "a@b.com"

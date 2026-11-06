@@ -1069,6 +1069,22 @@ CONVERSATION_CASES = [
         ],
     },
     {
+        "name": "an_address_with_an_email_introduced_in_words",
+        # Fully deterministic (mail is forced to mock mode). "5 Mid Rd, Pune, my
+        # email is a@b.com" used to ship to -- and print on the receipt --
+        # "5 Mid Rd, Pune, my email is".
+        "turns": [
+            {"text": "order Ibuprofen 200mg Tablets", "checks": [("asks for an address", lambda r: "address" in r.lower())]},
+            {
+                "text": "5 Mid Rd, Pune, my email is a@b.com",
+                "checks": [("the receipt shows the clean address", lambda r: "Shipping to: 5 Mid Rd, Pune\n" in r + "\n" and "my email is" not in r),
+                           ("the confirmation is sent", lambda r: "A confirmation email has been sent." in r)],
+                "state_checks": [("the saved address is clean", lambda sid: store.get_address("demo_user") == "5 Mid Rd, Pune"),
+                                 ("the email is saved", lambda sid: store.get_email("demo_user") == "a@b.com")],
+            },
+        ],
+    },
+    {
         "name": "bare_numeric_selection_from_a_product_list",
         # Fully deterministic — proves main.py's _resolve_bare_selection
         # dispatch is actually wired correctly end-to-end through the real

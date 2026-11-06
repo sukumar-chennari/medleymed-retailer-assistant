@@ -89,7 +89,12 @@ def _extract_email(text: str) -> tuple[str | None, str]:
     if not match:
         return None, text
     email = match.group(0)
-    remainder = text[: match.start()] + text[match.end() :]
+    # Drop the words that introduced the email ("my email is", "and email me at",
+    # "send the confirmation to") with it: "5 Mid Rd, Pune, my email is a@b.com"
+    # was saved — and printed on the receipt — as "5 Mid Rd, Pune, my email is"
+    # (found Nov 6).
+    lead_in_removed = _EMAIL_LEAD_IN_RE.sub("", text[: match.start()])
+    remainder = lead_in_removed + text[match.end() :]
     # Also drop a leading label word like "email:" or "mail" that introduced
     # the address, so it doesn't linger in the saved shipping address.
     remainder = re.sub(r"[,;:\-\s]*\b(e-?mail|mail)\b\s*:?\s*$", "", remainder, flags=re.IGNORECASE)
