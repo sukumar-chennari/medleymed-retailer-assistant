@@ -272,3 +272,55 @@ def test_two_interleaved_sessions_do_not_interfere():
                 changed = {k: (other_before[k], other_after[k]) for k in other_before if other_before[k] != other_after[k]}
                 failures.append(f"session {other[-1]} changed by session {speaker[-1]}'s {message!r}: {changed}")
     assert failures == [], "\n".join(failures[:5])
+
+
+# Messages that only ASK for information. They may change what is remembered for
+# conversation flow (the list on screen), but they must never create or change an
+# order, change the saved address or email, or disturb an order that is waiting.
+NEUTRAL_MESSAGES = [
+    "how much is ibuprofen", "what is the difference between paracetamol and ibuprofen", "compare paracetamol and ibuprofen",
+    "can I take paracetamol and ibuprofen together", "show me all your products", "who are you", "what can you do", "are you a doctor",
+    "what is my address", "show my orders", "how long does delivery take", "what is your refund policy", "do you have Tylenol",
+    "is cetirizine available", "what is the cheapest cold medicine", "can you speak telugu", "what is dextromethorphan",
+    "how many tablets in a pack of paracetamol", "is cetirizine safe during pregnancy", "which is better, ibuprofen or paracetamol",
+]
+
+
+def _durable_state(session_id):
+    return {
+        "orders": sorted((o["order_id"], o["status"], o["quantity"], o["address"]) for o in store.list_orders("demo_user")),
+        "address": store.get_address("demo_user"),
+        "email": store.get_email("demo_user"),
+        "pending_order": store.get_pending_order(session_id),
+        "pending_address_confirmation": store.get_pending_address_confirmation(session_id),
+    }
+
+
+def test_questions_never_change_orders_addresses_or_what_is_waiting():
+    rng = random.Random(SEED + 2)
+    failures = []
+    for sequence in range(max(30, SEQUENCES // 2)):
+        store.reset_demo_data()
+        session_id = f"neutral-{sequence}"
+        plan = [rng.choice(POOL) for _ in range(TURNS)]
+        if rng.random() < 0.6:
+            at = rng.randrange(0, TURNS - 2)
+            plan[at: at + 3] = rng.choice(RISKY_CHUNKS)
+        # a neutral question after every other message, on purpose
+        steps = []
+        for message in plan:
+            steps.append(message)
+            steps.append(rng.choice(NEUTRAL_MESSAGES))
+        history = []
+        for message in steps:
+            history.append(message)
+            before = _durable_state(session_id)
+            res = client.post("/api/chat", json={"session_id": session_id, "text": message})
+            reply = res.json().get("reply", "") if res.status_code == 200 else f"HTTP {res.status_code}"
+            after = _durable_state(session_id)
+            if message in NEUTRAL_MESSAGES and before != after:
+                changed = {k: (before[k], after[k]) for k in before if before[k] != after[k]}
+                failures.append(f"a question changed state: {message!r} -> {changed}  | after {history[-6:]!r}")
+            if not reply.strip():
+                failures.append(f"empty reply to {message!r}")
+    assert failures == [], "\n".join(failures[:5])
