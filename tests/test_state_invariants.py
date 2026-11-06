@@ -194,6 +194,26 @@ def _consistency_problems(session_id, message, reply, orders):
     if reply.startswith("The email address I have on file for you is:"):
         if reply.split(": ", 1)[1].strip() != store.get_email("demo_user"):
             found.append("email read-back differs from the stored email")
+    # every "(fev-001)" the assistant writes must come right after that product's real name
+    for marker in re.finditer(r"\(((?:fev|col)-\d{3})\)", reply):
+        product_id = marker.group(1)
+        before = reply[max(0, marker.start() - 90): marker.start()].rstrip()
+        real = catalog.get(product_id)
+        if real is None or not before.endswith(real["name"]):
+            found.append(f"id ({product_id}) not preceded by its product name {real and real['name']!r}: ...{before[-50:]!r}")
+    # a line that names exactly one product and states a price must state ITS price
+    names = {p["name"]: p for p in catalog.values()}
+    for line in reply.split("\n"):
+        if "$" not in line or line.startswith(("Total:", "Quantity:")):
+            continue
+        in_line = [p for n, p in names.items() if n in line]
+        # ignore a name that is only part of a longer product name in the same line
+        in_line = [p for p in in_line if not any(p["name"] != q["name"] and p["name"] in q["name"] for q in in_line)]
+        if len(in_line) == 1:
+            product = in_line[0]
+            for amount in re.findall(r"\$(\d+\.\d{2})", line):
+                if abs(float(amount) - product["price_usd"]) > 0.011 and "Total" not in line:
+                    found.append(f"price {amount} stated for {product['name']} (catalog {product['price_usd']}): {line.strip()[:100]!r}")
     # remembered lists and prompts must reference real things
     for product in store.get_last_products(session_id) or []:
         if product["id"] not in catalog:
