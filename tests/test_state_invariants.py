@@ -226,3 +226,49 @@ def test_the_invariants_hold_across_random_sessions():
             for problem in _violations(session_id, message, reply, before, history):
                 failures.append(f"{problem}  | after {history!r}")
     assert failures == [], "\n".join(failures[:5])
+
+
+def _session_snapshot(session_id):
+    """Everything the application remembers about ONE conversation."""
+    return {
+        "pending_order": store.get_pending_order(session_id),
+        "pending_address_confirmation": store.get_pending_address_confirmation(session_id),
+        "pending_clarification": store.get_pending_clarification(session_id),
+        "pending_email": store.get_pending_email(session_id),
+        "last_products": [p["id"] for p in (store.get_last_products(session_id) or [])],
+        "last_recommended": store.get_last_recommended_product(session_id),
+    }
+
+
+def test_two_interleaved_sessions_do_not_interfere():
+    """Two customers chat at once. The address, email and orders are shared by
+    design (a single demo user), but what a conversation is WAITING for is its own:
+    a turn in one session must never change another session's pending order,
+    address confirmation, open question, email prompt or remembered list. All the
+    single-session invariants must hold for the session that spoke as well."""
+    rng = random.Random(SEED + 1)
+    failures = []
+    sequences = max(20, SEQUENCES // 2)
+    for sequence in range(sequences):
+        store.reset_demo_data()
+        sessions = [f"two-{sequence}-a", f"two-{sequence}-b"]
+        histories = {s: [] for s in sessions}
+        plan = [rng.choice(POOL) for _ in range(TURNS + 3)]
+        if rng.random() < 0.6:
+            at = rng.randrange(0, TURNS)
+            plan[at: at + 3] = rng.choice(RISKY_CHUNKS)
+        for message in plan:
+            speaker = rng.choice(sessions)
+            other = sessions[1] if speaker == sessions[0] else sessions[0]
+            histories[speaker].append(message)
+            before_orders = store.list_orders("demo_user")
+            other_before = _session_snapshot(other)
+            res = client.post("/api/chat", json={"session_id": speaker, "text": message})
+            reply = res.json().get("reply", "") if res.status_code == 200 else f"HTTP {res.status_code}"
+            for problem in _violations(speaker, message, reply, before_orders, histories[speaker]):
+                failures.append(f"{problem}  | {speaker[-1]} said {histories[speaker]!r}")
+            other_after = _session_snapshot(other)
+            if other_after != other_before:
+                changed = {k: (other_before[k], other_after[k]) for k in other_before if other_before[k] != other_after[k]}
+                failures.append(f"session {other[-1]} changed by session {speaker[-1]}'s {message!r}: {changed}")
+    assert failures == [], "\n".join(failures[:5])
