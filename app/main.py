@@ -1672,6 +1672,35 @@ def _reply_for_which_product_answer(text: str, session_id: str) -> str | None:
     return f"Which one would you like?\n{listing}\n\nSay the name or its number in the list."
 
 
+# "What is the maximum quantity?" / "how many can I order?". Found Nov 8: the model
+# INVENTED a limit -- "Paracetamol 500mg Tablets: 20 tablets per order" -- and for
+# "how many can I order" apologised for a mistake it had not made, with a hidden
+# tool-argument error. The real limit is tools.MAX_QUANTITY_PER_ORDER, so say that.
+_QUANTITY_LIMIT_RE = re.compile(
+    r"\b(?:(?:max(?:imum)?|limit|most|upper\s+limit)\b.{0,30}\b(?:order|buy|purchase|quantity|quantities|units?|packs?|boxes|per\s+order)\b"
+    r"|how\s+(?:many|much)\b.{0,30}\b(?:can|may|could)\s+(?:i|we)\s+(?:order|buy|purchase|get)\b"
+    r"|(?:order|quantity|purchase)\s+limit\b"
+    r"|more\s+than\s+(?:\d+|one|two|three)\b.{0,25}\b(?:order|buy|purchase|get)\b"
+    r"|(?:order|buy|purchase|get)\b.{0,15}\bmore\s+than\s+(?:\d+|one|two|three)\b)",
+    re.IGNORECASE,
+)
+_NOT_ABOUT_ORDER_LIMIT_RE = re.compile(r"\b(?:take|taking|dose|dosage|day|daily|hours?|safe|tablets?\s+(?:a|per)\s+day)\b", re.IGNORECASE)
+
+
+def _quantity_limit_reply(text: str) -> str | None:
+    words = re.findall(r"[a-z']+", text.lower())
+    if not words or len(words) > 16 or "@" in text or _NOT_ABOUT_ORDER_LIMIT_RE.search(text):
+        return None
+    if not _QUANTITY_LIMIT_RE.search(text):
+        return None
+    limit = tools.MAX_QUANTITY_PER_ORDER
+    return (
+        f"You can order up to {limit} of each product in one order. If you ask for more I'll cap it at "
+        f"{limit} and tell you. (That is a placeholder limit for this demo, not a medical recommendation "
+        "for how much to take.)"
+    )
+
+
 def _reply_for_start_order_result(order: dict) -> str:
     if "error" in order:
         return f"Sorry, {order['error']}"
@@ -1952,6 +1981,12 @@ def chat(req: ChatRequest):
             if about_reply == RESTART_REPLY:
                 _clear_conversation_state(req.session_id)
             reply = about_reply
+            messages.append({"role": "user", "content": text})
+            messages.append({"role": "assistant", "content": reply})
+        elif text and not pending_product_id and not pending_address_confirmation and (
+            quantity_limit_reply := _quantity_limit_reply(text)
+        ):
+            reply = quantity_limit_reply
             messages.append({"role": "user", "content": text})
             messages.append({"role": "assistant", "content": reply})
         elif text and not pending_product_id and not pending_address_confirmation and _is_order_address_change(text):

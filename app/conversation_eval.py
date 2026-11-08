@@ -1098,6 +1098,15 @@ CONVERSATION_CASES = [
         ],
     },
     {
+        "name": "how_many_can_i_order_states_the_real_limit",
+        # Fully deterministic. The model used to INVENT a limit ("20 tablets per
+        # order") for "what is the maximum quantity".
+        "turns": [
+            {"text": "what is the maximum quantity", "checks": [("states the real limit", lambda r: r.startswith("You can order up to 2 of each product in one order.") and "20" not in r)]},
+            {"text": "order 5 Ibuprofen 200mg Tablets", "checks": [("and the limit is what is enforced", lambda r: "capped at our per-order limit of 2" in r)]},
+        ],
+    },
+    {
         "name": "bare_numeric_selection_from_a_product_list",
         # Fully deterministic — proves main.py's _resolve_bare_selection
         # dispatch is actually wired correctly end-to-end through the real

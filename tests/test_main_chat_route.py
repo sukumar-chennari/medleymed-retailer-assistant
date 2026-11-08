@@ -22,7 +22,7 @@ LLM and stays in conversation_eval.py / manual testing.
 import pytest
 from fastapi.testclient import TestClient
 
-from app import config, main, store
+from app import config, main, store, tools
 
 pytestmark = pytest.mark.usefixtures("isolated_db")
 
@@ -1963,3 +1963,43 @@ class TestIWantToOrderWithNoProduct:
         monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
         assert _chat("s1", "I want to order") != main.ORDER_WHICH_REPLY
         assert store.get_pending_order("s1")["product_id"] == "col-004"
+
+
+class TestHowManyCanIOrder:
+    """Real bug (Nov 8): "what is the maximum quantity" made the model INVENT a limit
+    ("Paracetamol 500mg Tablets: 20 tablets per order"); "how many can I order"
+    got an apology for a mistake it had not made (with a hidden tool error). The
+    real limit is tools.MAX_QUANTITY_PER_ORDER."""
+
+    @pytest.mark.parametrize("text", [
+        "what is the maximum quantity", "how many can I order", "what's the order limit", "can I order more than 2",
+        "is there a limit on how many I can buy", "maximum per order", "how much can I order",
+    ])
+    def test_the_real_limit_is_stated(self, monkeypatch, text):
+        def _boom(*args, **kwargs):
+            raise AssertionError("the model must not be reached")
+
+        monkeypatch.setattr(main, "run_turn", _boom)
+        reply = _chat("s1", text)
+        assert reply.startswith(f"You can order up to {tools.MAX_QUANTITY_PER_ORDER} of each product in one order.")
+        assert "20 tablets" not in reply and "placeholder limit" in reply
+
+    def test_the_stated_limit_is_what_is_actually_enforced(self, monkeypatch):
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        limit = tools.MAX_QUANTITY_PER_ORDER
+        assert f"{limit} of each product" in _chat("s1", "what is the maximum quantity")
+        _chat("s2", f"order {limit + 3} Ibuprofen 200mg Tablets")
+        assert store.get_pending_order("s2")["quantity"] == limit
+
+    @pytest.mark.parametrize("text", [
+        "what is the maximum dose of ibuprofen per day", "how many tablets can I take", "how many can I take per day",
+        "order 2 ibuprofen", "how many orders do I have", "limit",
+    ])
+    def test_dosing_and_other_messages_are_left_alone(self, monkeypatch, text):
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        assert "of each product in one order" not in _chat("s1", text)
+
+    def test_an_order_awaiting_its_address_is_left_alone(self, monkeypatch):
+        store.set_pending_order("s1", "col-004", 1)
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        assert "of each product in one order" not in _chat("s1", "what is the maximum quantity")
