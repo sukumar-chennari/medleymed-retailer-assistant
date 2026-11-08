@@ -1631,6 +1631,47 @@ def _stocked_product_reply(text: str, session_id: str) -> str | None:
     return f"Yes, we carry these:\n{listing}\n\nWould you like to order one of these?"
 
 
+# "I want to order" / "I'd like to buy something" with NO product. Found Nov 8: the
+# model invented "I'll need you to confirm your shipping address before we can
+# proceed" (with a hidden tool-argument error), the follow-up "ibuprofen" got the
+# child-or-adult question instead of being taken as the product, and the address
+# typed after that was saved silently with no order placed. Ask WHICH product,
+# remember that we asked, and take the next message as the answer.
+ORDER_WHICH_TRIGGER = "order:which"
+ORDER_WHICH_REPLY = (
+    "Happy to help you order. Which product would you like? Tell me its name (for example "
+    "\"Ibuprofen 200mg Tablets\"), describe your symptoms and I'll recommend one, or say "
+    "\"show me all your products\"."
+)
+_BARE_ORDER_RE = re.compile(
+    # ("ok order" is deliberately NOT here: it is a confirmation attempt, answered
+    # "nothing to confirm" when nothing is waiting.)
+    r"^\s*(?:(?:hi|hello|hey)[\s,!.]+)*(?:please\s+)?(?:i(?:\s+|(?='))?)?(?:(?:want|would\s+like|'d\s+like|need|wanna|wish)\s+)?(?:to\s+)?"
+    r"(?:place\s+an?\s+order|order|buy|purchase|make\s+an?\s+order)(?:\s+(?:something|a\s+medicine|medicine|medicines|some\s+medicine|now|please|one|here))*[\s.!]*$",
+    re.IGNORECASE,
+)
+
+
+def _is_bare_order_request(text: str) -> bool:
+    words = re.findall(r"[a-z']+", text.lower())
+    return bool(words) and len(words) <= 9 and bool(_BARE_ORDER_RE.match(text)) and not _products_named_in(text)
+
+
+def _reply_for_which_product_answer(text: str, session_id: str) -> str | None:
+    """The answer to "which product?": the product named, or the choices when an
+    ingredient names several. None when the message names no product."""
+    named = _products_named_in(text)
+    if not named:
+        return None
+    if len(named) == 1:
+        order = json.loads(tools.start_order(named[0]["id"], session_id))
+        return _reply_for_start_order_result(order)
+    store.set_last_products(session_id, named)
+    store.clear_last_recommended_product(session_id)
+    listing = "\n".join(f"- {p['name']} ({p['id']}) — ${p['price_usd']:.2f}" for p in named)
+    return f"Which one would you like?\n{listing}\n\nSay the name or its number in the list."
+
+
 def _reply_for_start_order_result(order: dict) -> str:
     if "error" in order:
         return f"Sorry, {order['error']}"
@@ -1744,6 +1785,22 @@ def chat(req: ChatRequest):
             messages.append({"role": "assistant", "content": reply})
         elif clarification_answer:
             reply = clarification_answer
+            messages.append({"role": "user", "content": text})
+            messages.append({"role": "assistant", "content": reply})
+        elif (
+            text
+            and pending_clarification == ORDER_WHICH_TRIGGER
+            and not pending_product_id
+            and not pending_address_confirmation
+            and (which_reply := _reply_for_which_product_answer(text, req.session_id))
+        ):
+            store.clear_pending_clarification(req.session_id)
+            reply = which_reply
+            messages.append({"role": "user", "content": text})
+            messages.append({"role": "assistant", "content": reply})
+        elif text and not pending_product_id and not pending_address_confirmation and _is_bare_order_request(text):
+            store.set_pending_clarification(req.session_id, ORDER_WHICH_TRIGGER)
+            reply = ORDER_WHICH_REPLY
             messages.append({"role": "user", "content": text})
             messages.append({"role": "assistant", "content": reply})
         elif pending_clarification and text:

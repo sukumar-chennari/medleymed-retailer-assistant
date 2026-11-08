@@ -1085,6 +1085,19 @@ CONVERSATION_CASES = [
         ],
     },
     {
+        "name": "i_want_to_order_with_no_product_named",
+        # Fully deterministic. "I want to order" made the model invent "I'll need you
+        # to confirm your shipping address before we can proceed", and the follow-up
+        # "ibuprofen" got the child-or-adult question.
+        "turns": [
+            {"text": "I want to order", "checks": [("asks which product", lambda r: r.startswith("Happy to help you order. Which product would you like?"))]},
+            {"text": "ibuprofen", "checks": [("the answer is taken as the product", lambda r: "address" in r.lower() and "child, or for an adult" not in r)],
+             "state_checks": [("pending is ibuprofen", lambda sid: (store.get_pending_order(sid) or {}).get("product_id") == "fev-003")]},
+            {"text": "5 Mid Rd, Pune", "checks": [("a real order is placed", lambda r: "Order confirmed!" in r and "Ibuprofen 200mg Tablets" in r)],
+             "state_checks": [("one real order", _order_count_is(1))]},
+        ],
+    },
+    {
         "name": "bare_numeric_selection_from_a_product_list",
         # Fully deterministic — proves main.py's _resolve_bare_selection
         # dispatch is actually wired correctly end-to-end through the real

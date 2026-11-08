@@ -1895,3 +1895,71 @@ class TestTheEmailsIntroducingWordsAreNotPartOfTheAddress:
         reply = _chat("s1", text)
         assert "Shipping to: 5 Mid Rd, Pune\n" in reply + "\n"
         assert store.get_address("demo_user") == "5 Mid Rd, Pune" and store.get_email("demo_user") == "a@b.com"
+
+
+class TestIWantToOrderWithNoProduct:
+    """Real bug (Nov 8): "I want to order" made the model invent "I'll need you to
+    confirm your shipping address before we can proceed" (with a hidden tool-
+    argument error); the follow-up "ibuprofen" then got the child-or-adult question
+    instead of being taken as the product; and the address typed after that was
+    saved silently with no order placed."""
+
+    @staticmethod
+    def _model_must_not_run(monkeypatch):
+        def _boom(*args, **kwargs):
+            raise AssertionError("the model must not be reached")
+
+        monkeypatch.setattr(main, "run_turn", _boom)
+
+    @pytest.mark.parametrize("text", [
+        "I want to order", "order", "I'd like to buy something", "I need to order medicine", "place an order", "buy", "hello, I want to order",
+    ])
+    def test_it_asks_which_product(self, monkeypatch, text):
+        self._model_must_not_run(monkeypatch)
+        assert _chat("s1", text) == main.ORDER_WHICH_REPLY
+        assert store.get_pending_clarification("s1") == main.ORDER_WHICH_TRIGGER and store.get_pending_order("s1") is None
+
+    @pytest.mark.parametrize("answer, product_id", [
+        ("ibuprofen", "fev-003"), ("Ibuprofen 200mg Tablets", "fev-003"), ("cetirizine", "col-001"), ("col-005", "col-005"),
+        ("the guaifenesin one", "col-005"),
+    ])
+    def test_the_next_message_naming_a_product_starts_that_order(self, monkeypatch, answer, product_id):
+        self._model_must_not_run(monkeypatch)
+        _chat("s1", "I want to order")
+        reply = _chat("s1", answer)
+        assert "address" in reply.lower() and store.get_pending_order("s1")["product_id"] == product_id
+        assert store.get_pending_clarification("s1") is None
+
+    def test_an_ingredient_in_several_products_asks_which_one_and_remembers_the_list(self, monkeypatch):
+        self._model_must_not_run(monkeypatch)
+        _chat("s1", "I want to order")
+        reply = _chat("s1", "paracetamol")
+        assert reply.startswith("Which one would you like?") and "(fev-001)" in reply and "(fev-002)" in reply
+        _chat("s1", "the second one")
+        assert store.get_pending_order("s1")["product_id"] == "fev-002"
+
+    def test_the_whole_flow_ends_in_a_real_order(self, monkeypatch):
+        self._model_must_not_run(monkeypatch)
+        _chat("s1", "I want to order")
+        _chat("s1", "ibuprofen")
+        assert "Order confirmed!" in _chat("s1", "5 Mid Rd, Pune")
+        assert [o["product_id"] for o in store.list_orders("demo_user")] == ["fev-003"]
+
+    def test_an_answer_that_names_no_product_goes_to_the_normal_path(self, monkeypatch):
+        _chat_stub = lambda messages, **kwargs: ("from the model", messages)
+        monkeypatch.setattr(main, "run_turn", _chat_stub)
+        _chat("s1", "I want to order")
+        assert _chat("s1", "I have a fever") != main.ORDER_WHICH_REPLY
+
+    @pytest.mark.parametrize("text", [
+        "order ibuprofen", "how do I order", "can I order", "I want to order it", "ok order", "cancel my order", "I want to know about ordering",
+    ])
+    def test_other_messages_do_not_start_it(self, monkeypatch, text):
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        assert _chat("s1", text) != main.ORDER_WHICH_REPLY
+
+    def test_with_an_order_already_waiting_it_is_left_alone(self, monkeypatch):
+        store.set_pending_order("s1", "col-004", 1)
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        assert _chat("s1", "I want to order") != main.ORDER_WHICH_REPLY
+        assert store.get_pending_order("s1")["product_id"] == "col-004"
