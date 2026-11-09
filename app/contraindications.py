@@ -103,7 +103,15 @@ _ALLERGY_PHRASE_RE = re.compile(
     r"\ballerg(?:ic|y|ies)\b(?:(?!\b(?:but|then|so|however|order|buy|purchase|want|ship|deliver|please)\b)[^.!?;\n]){0,60}",
     re.IGNORECASE,
 )
-_ALLERGY_BEFORE_RE = re.compile(r"([A-Za-z\-/ ]{3,40}?)\s+allergy\b", re.IGNORECASE)   # no newline in the class: one statement
+# "<words> allergy" ("paracetamol allergy"). The first version was ONE regex,
+# ([A-Za-z\-/ ]{3,40}?)\s+allergy\b, which is QUADRATIC on a long run of spaces or
+# letters: 0.14 s at 1,000 characters, 0.55 s at 2,000, 2.3 s at 4,000 (the longest
+# message the API accepts), and it runs several times per request over the whole
+# conversation. The cheap keyword is found first and only a bounded window before it
+# is examined (found Nov 9 by timing every handler on hostile input).
+_ALLERGY_KEYWORD_RE = re.compile(r"\ballerg(?:y|ies)\b", re.IGNORECASE)
+_ALLERGY_SUBJECT_RE = re.compile(r"([A-Za-z\-/ ]{3,40}?)\s+$")
+_ALLERGY_WINDOW = 60
 
 
 # "can I take ibuprofen and paracetamol together" ASKS about a medicine; it does
@@ -151,19 +159,31 @@ def allergic_product_ids(text: str) -> dict[str, str]:
     """product id -> the allergy phrase that excludes it. A negated allergy
     ("I'm not allergic to ibuprofen") excludes nothing."""
     found: dict[str, str] = {}
-    matches = list(_ALLERGY_PHRASE_RE.finditer(text)) + list(_ALLERGY_BEFORE_RE.finditer(text))
-    for match in matches:
-        before = _same_message_before(text, match.start())
-        keyword_at = match.group(0).lower().find("allerg")
-        inside_before = match.group(0)[: max(keyword_at, 0)]
+    for start, span in _allergy_spans(text):
+        before = _same_message_before(text, start)
+        keyword_at = span.lower().find("allerg")
+        inside_before = span[: max(keyword_at, 0)]
         if _NEGATION_RE.search(before) or _NEGATION_RE.search(inside_before):
             continue
         for pattern, ids in _ALLERGY_RES:
-            hit = pattern.search(match.group(0))
+            hit = pattern.search(span)
             if hit:
                 for product_id in ids:
                     found.setdefault(product_id, hit.group(0).lower())
     return found
+
+
+def _allergy_spans(text: str) -> list[tuple[int, str]]:
+    """(start index, text) of every allergy statement: "allergic to X ..." after
+    the keyword, and "X allergy" before it (bounded window, same line only)."""
+    spans = [(m.start(), m.group(0)) for m in _ALLERGY_PHRASE_RE.finditer(text)]
+    for keyword in _ALLERGY_KEYWORD_RE.finditer(text):
+        window_start = max(0, keyword.start() - _ALLERGY_WINDOW)
+        window = text[window_start: keyword.start()]
+        subject = _ALLERGY_SUBJECT_RE.search(window)
+        if subject:
+            spans.append((window_start + subject.start(1), f"{subject.group(1)} {keyword.group(0)}"))
+    return spans
 
 
 def label(condition: str) -> str:

@@ -275,3 +275,41 @@ class TestANegationInOneMessageDoesNotCancelAConditionInTheNext:
         ])
         ci.set_current_text("order Ibuprofen 200mg Tablets")
         assert "error" in json.loads(tools.start_order("fev-003", "s1"))
+
+
+class TestTheAllergyDetectorIsFastOnHostileInput:
+    """Real bug (found Nov 9 by timing every handler on hostile input): the "X
+    allergy" pattern was QUADRATIC on a long run of spaces or letters -- 2.3
+    seconds for one 4,000-character message (the API's maximum), and it runs several
+    times per request over the whole conversation. A cheap way to stall the server."""
+
+    @pytest.mark.parametrize("text", [" " * 4000, "a " * 2000, "x" * 4000, "allergy " * 500, "allergic to " * 300, "\n" * 4000, "- / " * 1000])
+    def test_a_4000_character_message_is_scanned_in_well_under_a_second(self, text):
+        import time
+
+        started = time.perf_counter()
+        ci.concerns(text)
+        assert time.perf_counter() - started < 0.5   # the quadratic version took ~2.3 s on 4000 spaces
+
+    def test_the_cost_does_not_grow_with_a_whole_long_conversation(self):
+        import time
+
+        history = "\n".join(["I have a fever and a cough and some other things to say " * 30] * 40)   # ~67,000 characters
+        started = time.perf_counter()
+        ci.concerns(history)
+        assert time.perf_counter() - started < 1.0
+
+    @pytest.mark.parametrize("text, expected", [
+        ("paracetamol allergy", {"fev-001", "fev-002", "fev-004", "col-003"}),
+        ("I have a paracetamol allergy", {"fev-001", "fev-002", "fev-004", "col-003"}),
+        ("aspirin or paracetamol allergy", {"fev-003", "fev-001", "fev-002", "fev-004", "col-003"}),
+        ("ibuprofen allergy", {"fev-003"}),
+        ("allergy to ibuprofen", {"fev-003"}),
+        ("I'm allergic to ibuprofen", {"fev-003"}),
+        ("I can't breathe\nparacetamol allergy", {"fev-001", "fev-002", "fev-004", "col-003"}),
+        ("I have a penicillin allergy and a fever", set()),
+        ("not paracetamol allergy", set()),
+        ("no ibuprofen allergy", set()),
+    ])
+    def test_every_allergy_phrasing_still_gives_the_same_answer(self, text, expected):
+        assert set(ci.allergic_product_ids(text)) == expected
