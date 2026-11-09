@@ -612,3 +612,14 @@ class TestInvokeAgentWithRetry:
         with pytest.raises(GraphRecursionError):
             agent._invoke_agent_with_retry(graph, {}, {})
         assert attempts["n"] == 1
+
+
+class TestCurlyApostropheNegatesIntent:
+    """"don’t cancel" (curly apostrophe, as phones type it) is a negation."""
+
+    @pytest.mark.parametrize("text", ["don't cancel it", "don’t cancel it", "do not cancel it", "never cancel it"])
+    def test_negated_cancel_is_not_an_intent(self, text):
+        assert agent._has_unnegated_intent(text, agent.CANCEL_INTENT_RE) is False
+
+    def test_a_plain_cancel_is_an_intent(self):
+        assert agent._has_unnegated_intent("please cancel it", agent.CANCEL_INTENT_RE) is True

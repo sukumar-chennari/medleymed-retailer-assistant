@@ -157,3 +157,16 @@ class TestDoctorNoteRoute:
         self._chat("s1", "I have a fever for a week")
         shown = self._chat("s1", "for myself")
         assert store.get_session_messages("s1")[-1]["content"] == shown
+
+
+class TestCurlyApostropheNegation:
+    """Phones type ’ not '. "I don’t have chest pain" is a denial either way."""
+
+    @pytest.mark.parametrize("text", [
+        "I don’t have chest pain, just a cold", "it isn’t a seizure", "she doesn’t have trouble breathing",
+    ])
+    def test_a_negated_symptom_with_a_curly_apostrophe_is_not_escalated(self, text):
+        assert red_flags.check(text) is None
+
+    def test_a_real_mention_after_a_curly_negation_still_escalates(self):
+        assert red_flags.check("I didn’t have chest pain earlier but now I can’t breathe") == red_flags.EMERGENCY_REPLY

@@ -34,7 +34,7 @@ INFANT_FEVER_REPLY = (
     f"If the baby is unusually sleepy, feeding poorly or struggling to breathe, call emergency services ({EMERGENCY_NUMBERS})."
 )
 
-_NEGATION_RE = re.compile(r"\b(?:no|not|never|without|nor|neither|isn't|aren't|don't|doesn't|didn't|hasn't|haven't)\b|n't\b", re.IGNORECASE)
+_NEGATION_RE = re.compile(r"\b(?:no|not|never|without|nor|neither|isn['’]t|aren['’]t|don['’]t|doesn['’]t|didn['’]t|hasn['’]t|haven['’]t)\b|n['’]t\b", re.IGNORECASE)
 _NEGATION_LOOKBACK = 25
 
 # Tablets in one go before it counts as an overdose on its own. The highest
@@ -107,7 +107,11 @@ def _has_unnegated_match(pattern: re.Pattern, text: str) -> bool:
     return False
 
 
+_CURLY = str.maketrans({"\u2018": "'", "\u2019": "'"})
+
+
 def is_overdose(text: str) -> bool:
+    text = text.translate(_CURLY)
     if any(_has_unnegated_match(p, text) for p in _OVERDOSE_RES):
         return True
     for match in _TABLET_COUNT_RE.finditer(text):
@@ -118,6 +122,7 @@ def is_overdose(text: str) -> bool:
 
 
 def is_emergency(text: str) -> bool:
+    text = text.translate(_CURLY)  # "can’t breathe" typed on a phone
     return any(_has_unnegated_match(p, text) for p in _EMERGENCY_RES)
 
 
@@ -147,6 +152,7 @@ def check(text: str) -> str | None:
     """The fixed reply for a message describing an emergency, or None."""
     if not text:
         return None
+    text = text.translate(_CURLY)
     if is_overdose(text):
         return OVERDOSE_REPLY
     if is_infant_fever(text):

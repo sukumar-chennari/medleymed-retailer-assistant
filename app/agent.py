@@ -294,7 +294,7 @@ REORDER_INTENT_RE = re.compile(
 # matched, rather than a fixed-distance regex tied to one specific trigger
 # word — works the same way for both CANCEL_INTENT_RE's single word and
 # REORDER_INTENT_RE's several different phrasings.
-_NEGATION_WORDS_RE = re.compile(r"\b(don'?t|do not|never|not)\b", re.IGNORECASE)
+_NEGATION_WORDS_RE = re.compile(r"\b(don['’]?t|do not|never|not)\b", re.IGNORECASE)
 _NEGATION_LOOKBACK_CHARS = 25
 
 

@@ -1734,6 +1734,9 @@ def _complete_pending_email(email: str, order_id: str) -> str:
     return f"I've saved {email}, but the confirmation email couldn't be sent right now."
 
 
+_CURLY_QUOTES = str.maketrans({"\u2018": "'", "\u2019": "'", "\u201c": '"', "\u201d": '"'})
+
+
 @app.post("/api/chat", response_model=ChatResponse)
 def chat(req: ChatRequest):
     # Real bug: this checked the raw req.text, so a whitespace-only message
@@ -1742,6 +1745,11 @@ def chat(req: ChatRequest):
     if not (req.text and req.text.strip()) and not req.image_b64:
         raise HTTPException(status_code=400, detail="Provide text or an image.")
 
+    # Phones type curly quotes: "don’t cancel my order" has to read the same as
+    # "don't cancel my order" in every negation check downstream (found Nov 9 —
+    # the curly form was treated as a plain cancel request).
+    if req.text:
+        req.text = req.text.translate(_CURLY_QUOTES)
     messages = store.get_session_messages(req.session_id)
     text = req.text.strip() if req.text else ""
 

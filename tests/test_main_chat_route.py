@@ -2003,3 +2003,33 @@ class TestHowManyCanIOrder:
         store.set_pending_order("s1", "col-004", 1)
         monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
         assert "of each product in one order" not in _chat("s1", "what is the maximum quantity")
+
+
+class TestCurlyApostropheNegation:
+    """Real bug (Nov 9): phones type "don’t" with a curly apostrophe, and the
+    cancel/reorder negation check only knew the straight one — so "don’t
+    cancel my order" was read as a cancel request. Every curly quote is now
+    normalised at the door."""
+
+    def _order(self):
+        store.save_address("demo_user", "10 High St, Leeds")
+        return store.create_order("demo_user", "fev-003", "10 High St, Leeds", 1)
+
+    @pytest.mark.parametrize("text", ["don’t cancel ord-0001", "Please don’t cancel ord-0001 yet"])
+    def test_a_negated_cancel_with_a_curly_apostrophe_cancels_nothing(self, monkeypatch, text):
+        self._order()
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        _chat("s1", text)
+        assert store.get_order("ord-0001")["status"] != "cancelled"
+
+    def test_the_straight_apostrophe_form_behaves_the_same(self, monkeypatch):
+        self._order()
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        _chat("s1", "don't cancel ord-0001")
+        assert store.get_order("ord-0001")["status"] != "cancelled"
+
+    def test_the_model_sees_the_normalised_text(self, monkeypatch):
+        seen = []
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: (seen.append(kwargs["user_text"]) or "ok", messages))
+        _chat("s1", "I’ve been feeling “off” since yesterday, any ideas")
+        assert seen and "’" not in seen[0] and "“" not in seen[0]
