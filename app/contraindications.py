@@ -21,9 +21,21 @@ import contextvars
 import re
 
 _NEGATION_RE = re.compile(
-    r"\b(?:no|not|never|without|nor|neither|isn't|aren't|don't|doesn't|didn't|hasn't|haven't|free\s+of|history\s+of\s+no)\b|n't\b",
+    r"\b(?:no|not|never|without|nor|neither|isn['’]t|aren['’]t|don['’]t|doesn['’]t|didn['’]t|hasn['’]t|haven['’]t|free\s+of|history\s+of\s+no)\b|n['’]t\b",
     re.IGNORECASE,
 )
+# A negation reaches only to the end of its clause. "I don't know why but I have an
+# ibuprofen allergy" must still count as an allergy: missing a real allergy is the
+# unsafe direction (found Nov 9).
+_CLAUSE_BREAK_RE = re.compile(r"\bbut\b|\bhowever\b|\bthough\b|\balthough\b|[,;.!?]", re.IGNORECASE)
+
+
+def _negated(context: str) -> bool:
+    """True when the text just before a condition negates it, within its clause."""
+    clause = _CLAUSE_BREAK_RE.split(context)[-1]
+    return bool(_NEGATION_RE.search(clause))
+
+
 _NEGATION_LOOKBACK = 25
 
 # condition -> (label shown to the customer, pattern)
@@ -138,7 +150,7 @@ def _same_message_before(text: str, start: int) -> str:
 def _unnegated(pattern: re.Pattern, text: str, statement_only: bool = False) -> bool:
     for match in pattern.finditer(text):
         before = _same_message_before(text, match.start())
-        if _NEGATION_RE.search(before):
+        if _negated(before):
             continue
         if statement_only and _QUESTION_PREFIX_RE.search(before):
             continue
@@ -163,7 +175,12 @@ def allergic_product_ids(text: str) -> dict[str, str]:
         before = _same_message_before(text, start)
         keyword_at = span.lower().find("allerg")
         inside_before = span[: max(keyword_at, 0)]
-        if _NEGATION_RE.search(before) or _NEGATION_RE.search(inside_before):
+        # Check the text before the span AND the words inside it before the keyword
+        # TOGETHER: an apostrophe splits "don't" across the boundary (the span
+        # starts at "t have a paracetamol"), so "I don't have a paracetamol
+        # allergy" used to count as a paracetamol allergy (found Nov 9; the old
+        # code had the same bug).
+        if _negated(before + inside_before):
             continue
         for pattern, ids in _ALLERGY_RES:
             hit = pattern.search(span)

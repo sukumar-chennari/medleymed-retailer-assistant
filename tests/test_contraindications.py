@@ -310,6 +310,36 @@ class TestTheAllergyDetectorIsFastOnHostileInput:
         ("I have a penicillin allergy and a fever", set()),
         ("not paracetamol allergy", set()),
         ("no ibuprofen allergy", set()),
+        ("I don't have a paracetamol allergy", set()),
     ])
     def test_every_allergy_phrasing_still_gives_the_same_answer(self, text, expected):
         assert set(ci.allergic_product_ids(text)) == expected
+
+
+class TestANegatedAllergyWithAnApostropheIsNotAnAllergy:
+    """Real bug (found Nov 9; the code before today had it too): "I don't have a
+    paracetamol allergy" counted as a paracetamol allergy and would block every
+    paracetamol product. The apostrophe splits "don't" across the boundary of the
+    text being matched, so the negation was lost."""
+
+    @pytest.mark.parametrize("text", [
+        "I don't have a paracetamol allergy", "I haven't got an ibuprofen allergy", "there's no ibuprofen allergy",
+        "I do not have an ibuprofen allergy", "I'm not allergic to ibuprofen", "I don’t have a paracetamol allergy",
+        "no, I don't have an ibuprofen allergy", "I don't think I have a paracetamol allergy",
+    ])
+    def test_it_is_not_an_allergy(self, text):
+        assert ci.allergic_product_ids(text) == {}
+
+    @pytest.mark.parametrize("text, expected", [
+        ("I have a paracetamol allergy", {"fev-001", "fev-002", "fev-004", "col-003"}),
+        ("I don't smoke\nI have a paracetamol allergy", {"fev-001", "fev-002", "fev-004", "col-003"}),
+        ("I can't breathe\nI'm allergic to ibuprofen", {"fev-003"}),
+        ("I don't know why but I have an ibuprofen allergy", {"fev-003"}),
+    ])
+    def test_a_real_allergy_after_an_unrelated_negation_still_counts(self, text, expected):
+        assert set(ci.allergic_product_ids(text)) == expected
+
+    def test_a_denied_allergy_does_not_block_the_order(self):
+        store.save_session_messages("s1", [{"role": "user", "content": "I don't have a paracetamol allergy"}])
+        ci.set_current_text("order Paracetamol 500mg Tablets")
+        assert "error" not in json.loads(tools.start_order("fev-001", "s1"))
