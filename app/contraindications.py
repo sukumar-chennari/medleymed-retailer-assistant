@@ -41,8 +41,11 @@ _NEGATION_LOOKBACK = 25
 # condition -> (label shown to the customer, pattern)
 _CONDITIONS = {
     "ulcer": ("a stomach ulcer", r"\b(?:stomach|peptic|gastric|duodenal)\s+ulcers?\b|\bulcers?\b"),
-    "kidney": ("kidney problems", r"\bkidney\s+(?:problems?|disease|failure|issues?|stones?|damage)\b|\brenal\b|\bdialysis\b|\bckd\b"),
-    "heart": ("a heart condition", r"\bheart\s+(?:disease|condition|conditions|problems?|failure|attack|issues?)\b|\bcardiac\b|\bangina\b|\barrhythmia\b|\bpacemaker\b"),
+    "kidney": ("kidney problems", r"\bkidney\s+(?:problems?|disease|failure|issues?|stones?|damage|patient|transplant|trouble|infection)\b|\brenal\b|\bdialysis\b|\bckd\b"
+               # "bad kidneys", "my kidneys are weak" (Nov 10: neither was recognised)
+               r"|\b(?:bad|weak|poor|failing|damaged|failed)\s+kidneys?\b|\bkidneys?\s+(?:are|is|have|has)\s+(?:been\s+)?(?:bad|weak|poor|failing|damaged|failed)\b"),
+    "heart": ("a heart condition", r"\bheart\s+(?:disease|condition|conditions|problems?|failure|attack|issues?)\b|\bcardiac\b|\bangina\b|\barrhythmia\b|\bpacemaker\b"
+              r"|\bheart\s+(?:patient|surgery|trouble|stent|bypass|ailment|valve)\b|\b(?:weak|bad)\s+heart\b|\bbypass\s+surgery\b|\bcoronary\b"),
     "high_bp": ("high blood pressure", r"\bhigh\s+blood\s+pressure\b|\bhypertensi(?:on|ve)\b|\bhigh\s+bp\b|\bbp\s+(?:is\s+)?high\b"),
     "thyroid": ("a thyroid condition", r"\bthyroid\b|\bhyperthyroid\w*|\bhypothyroid\w*|\bgraves\b"),
     "pregnant": ("pregnancy", r"\bpregnan\w*|\bexpecting\b|\btrimester\b"),
@@ -52,9 +55,12 @@ _CONDITIONS = {
     "alcohol": ("regular alcohol use", r"\bdrinks?\s+(?:alcohol\s+)?(?:daily|regularly|heavily|a\s+lot)\b|\bheavy\s+drinker\b|\balcoholic\b|\bdrink\s+(?:alcohol\s+)?every\s+day\b"),
     "maoi": ("an MAOI antidepressant", r"\bmaoi\b|\bphenelzine\b|\bselegiline\b|\btranylcypromine\b|\bmoclobemide\b"),
     "antidepressant": ("an antidepressant", r"\bantidepressants?\b"),
-    "nsaid_use": ("another anti-inflammatory", r"\b(?:taking|on|using|took|take)\s+(?:an?\s+)?(?:aspirin|naproxen|diclofenac|nsaids?|ibuprofen|brufen|advil)\b"),
-    "paracetamol_use": ("other paracetamol", r"\b(?:taking|on|using|took|take)\s+(?:some\s+|other\s+|more\s+)?(?:paracetamol|acetaminophen|crocin|dolo|panadol|tylenol|calpol)\b"),
-    "blood_thinner": ("a blood thinner", r"\bwarfarin\b|\bblood\s+thinners?\b|\banticoagulants?\b|\bclopidogrel\b|\bapixaban\b|\brivaroxaban\b|\bheparin\b"),
+    "nsaid_use": ("another anti-inflammatory", r"\b(?:taking|on|using|use|used|takes|took|take)\s+(?:an?\s+)?(?:aspirin|naproxen|diclofenac|nsaids?|ibuprofen|brufen|advil|nurofen|motrin|aleve|voltaren|ecosprin|disprin|combiflam|ketorolac|mefenamic(?:\s+acid)?)\b"),
+    "paracetamol_use": ("other paracetamol", r"\b(?:taking|on|using|took|take)\s+(?:some\s+|other\s+|more\s+)?(?:paracetamol|acetaminophen|crocin|dolo|panadol|tylenol|calpol|combiflam)\b"),
+    "blood_thinner": ("a blood thinner", r"\bwarfarin\b|\bblood[\s-]+thin(?:ners?|ning)\b|\banticoagulants?\b|\bclopidogrel\b|\bapixaban\b|\brivaroxaban\b|\bheparin\b"
+                      # brand names people actually type (Nov 10)
+                      r"|\b(?:eliquis|xarelto|coumadin|plavix|pradaxa|dabigatran|edoxaban|ticagrelor|brilinta|prasugrel)\b"),
+    "gi_bleed": ("stomach bleeding", r"\b(?:stomach|gastric|gi|gastrointestinal|intestinal)\s+bleed(?:ing|s)?\b|\bbleeding\s+(?:in\s+(?:my\s+)?)?stomach\b"),
 }
 _COMPILED = {key: (label, re.compile(pattern, re.IGNORECASE)) for key, (label, pattern) in _CONDITIONS.items()}
 
@@ -70,6 +76,7 @@ _RULES = [
     ("pregnant", "fev-003", "exclude", "our product information says to avoid it during pregnancy unless a doctor advises otherwise"),
     ("nsaid_use", "fev-003", "exclude", "our product information says not to combine it with other anti-inflammatories"),
     ("blood_thinner", "fev-003", "exclude", _NOT_COVERED),
+    ("gi_bleed", "fev-003", "exclude", _NOT_COVERED),
     ("asthma", "fev-003", "note", _NOT_COVERED),
     ("heart", "col-002", "exclude", _NOT_RECOMMENDED),
     ("high_bp", "col-002", "exclude", _NOT_RECOMMENDED),

@@ -343,3 +343,46 @@ class TestANegatedAllergyWithAnApostropheIsNotAnAllergy:
         store.save_session_messages("s1", [{"role": "user", "content": "I don't have a paracetamol allergy"}])
         ci.set_current_text("order Paracetamol 500mg Tablets")
         assert "error" not in json.loads(tools.start_order("fev-001", "s1"))
+
+
+class TestPhrasingsAndBrandsThePatternsMissed:
+    """Real gaps (Nov 10): "I have bad kidneys", "I'm a heart patient", "stomach
+    bleeding", and brand names (Eliquis, Xarelto, Plavix, Coumadin, Ecosprin,
+    Disprin, Voltaren, Combiflam) were not recognised, so an ibuprofen order
+    for them went straight through."""
+
+    IBUPROFEN = "fev-003"
+
+    @staticmethod
+    def _refusal(text, product_id="fev-003"):
+        return ci.refusal_for(store.find_product(product_id), text)
+
+    @pytest.mark.parametrize("text, label", [
+        ("my kidneys are weak", "kidney problems"), ("I have bad kidneys", "kidney problems"),
+        ("I'm a kidney patient", "kidney problems"), ("had a kidney transplant", "kidney problems"),
+        ("I'm a heart patient", "a heart condition"), ("I have a weak heart", "a heart condition"),
+        ("I had bypass surgery", "a heart condition"), ("I have a heart stent", "a heart condition"),
+        ("stomach bleeding", "stomach bleeding"), ("I had gastric bleeding", "stomach bleeding"),
+        ("history of GI bleed", "stomach bleeding"),
+        ("I use eliquis", "a blood thinner"), ("I take Xarelto", "a blood thinner"),
+        ("I take coumadin", "a blood thinner"), ("I take plavix", "a blood thinner"),
+        ("I take blood thinning tablets", "a blood thinner"),
+        ("I'm on ecosprin", "another anti-inflammatory"), ("taking disprin", "another anti-inflammatory"),
+        ("I use voltaren gel", "another anti-inflammatory"), ("I take combiflam", "another anti-inflammatory"),
+    ])
+    def test_ibuprofen_is_refused_and_the_reason_is_named(self, text, label):
+        refusal = self._refusal(text)
+        assert refusal and label in refusal, (text, refusal)
+
+    @pytest.mark.parametrize("text", [
+        "I don't have bad kidneys", "no stomach bleeding", "I'm not a heart patient", "I take vitamin c",
+        "what about kidney beans", "my heart is happy", "I don’t take plavix",
+    ])
+    def test_denials_and_unrelated_words_are_not_conditions(self, text):
+        assert self._refusal(text) is None, text
+
+    def test_combiflam_also_contains_paracetamol(self):
+        assert self._refusal("I take combiflam", "fev-001")
+
+    def test_a_heart_patient_is_also_kept_off_the_decongestant(self):
+        assert self._refusal("I'm a heart patient", "col-002")
