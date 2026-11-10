@@ -126,10 +126,20 @@ def _is_bare_email(text: str) -> bool:
     return not remainder.strip()
 
 
-ADDRESS_FILLER_RE = re.compile(
-    r"^\s*(actually\s+)?(please\s+)?(ship|send|deliver)\s+(it\s+|this\s+|that\s+)?to\s+",
-    re.IGNORECASE,
+# The words that introduce an address: "ship it to", "deliver to:", "my address is",
+# "address:". Found Nov 10: only "ship/send/deliver ... to " was stripped, so
+# "Deliver to: 12 Baker Street" was saved (and printed on the receipt) as
+# "Shipping to: Deliver to: 12 Baker Street", and "my address is 12 Baker Street"
+# was not recognised as an address at all.
+_ADDRESS_LEAD_IN = (
+    r"(?:actually\s+)?(?:please\s+)?"
+    r"(?:(?:ship|send|deliver)\s+(?:it\s+|this\s+|that\s+|them\s+)?to"
+    r"|(?:my|the|our)\s+(?:(?:new|home|shipping|delivery|current)\s+)?address\s+(?:is|would\s+be|will\s+be)"
+    r"|(?:(?:shipping|delivery|new|home)\s+)?address\s*:)"
 )
+ADDRESS_FILLER_RE = re.compile(r"^\s*" + _ADDRESS_LEAD_IN + r"[\s:,\-]+", re.IGNORECASE)
+# "...London please" / "...thanks": politeness after the address is not part of it.
+_ADDRESS_TRAILER_RE = re.compile(r"[\s,.!;]+(?:please|pls|plz|thanks|thank\s+you|thx|ty)[\s.!]*$", re.IGNORECASE)
 
 
 def _strip_address_filler(text: str) -> str:
@@ -137,13 +147,10 @@ def _strip_address_filler(text: str) -> str:
     tends to produce phrasing like "actually ship to 456 New Ave" rather
     than just the bare address — without this, that whole phrase gets saved
     and shown back verbatim in the order confirmation."""
-    return ADDRESS_FILLER_RE.sub("", text).strip()
+    return _ADDRESS_TRAILER_RE.sub("", ADDRESS_FILLER_RE.sub("", text)).strip()
 
 
-_ADDRESS_FILLER_ONLY_RE = re.compile(
-    r"^\s*(actually\s+)?(please\s+)?(ship|send|deliver)\s+(it\s+|this\s+|that\s+)?to\s*$",
-    re.IGNORECASE,
-)
+_ADDRESS_FILLER_ONLY_RE = re.compile(r"^\s*" + _ADDRESS_LEAD_IN + r"[\s:,\-]*$", re.IGNORECASE)
 
 
 def _is_filler_only(text: str) -> bool:
@@ -258,8 +265,33 @@ _NON_PLACE_WORDS = {
 }
 
 
+# A number followed by a unit of time, dose, money or age is a quantity, not a house
+# number: "for 3 days", "5 years old", "650 mg tablets", "every 6 hours", "20
+# dollars". A stateful probe found all of them accepted as the shipping address
+# (Nov 10). Single letters (c, f, g), "old" and "times" are NOT units here:
+# "12 C Block", "12 Old Kent Road" and "7 Times Square" are addresses.
+_NUMBER_WITH_UNIT_RE = re.compile(
+    r"\b\d+(?:\.\d+)?\s*(?:st|nd|rd|th)?\s*(?:days?|weeks?|hours?|hrs?|months?|years?|yrs?|minutes?|mins?|mg|ml|mcg|"
+    r"tablets?|tabs?|pills?|capsules?|doses?|am|pm|dollars?|rupees?|rs|usd|inr|percent|degrees?)\b"
+    # ...unless a street word follows: "22 MG Road", "10 Hours Lane", "5 Tab Marg"
+    r"(?!\s+(?:road|rd|street|st|lane|ln|avenue|ave|marg|nagar|colony|square|sq|circle|cross|main|park|market|layout|"
+    r"enclave|plaza|way|drive|dr|boulevard|blvd|place|pl|court|ct|garden|gardens|path|chowk|bazaar|highway|hwy)\b)"
+    r"|\d\s*%",
+    re.IGNORECASE,
+)
+
+
+def _only_quantities_no_house_number(text: str) -> bool:
+    """True when every number in the text sits in front of a unit word."""
+    if not _NUMBER_WITH_UNIT_RE.search(text):
+        return False
+    return not re.search(r"\d", _NUMBER_WITH_UNIT_RE.sub(" ", text))
+
+
 def _is_not_an_address_phrase(text: str) -> bool:
     if _INSTRUCTION_START_RE.match(text) or _SELF_STATEMENT_START_RE.match(text):
+        return True
+    if _only_quantities_no_house_number(text):
         return True
     if not any(ch.isdigit() for ch in text) and (set(re.findall(r"[^\W\d_]+", text.lower())) & _NON_PLACE_WORDS):
         return True
@@ -300,6 +332,7 @@ def _looks_like_an_address(text: str) -> bool:
     Also rejects anything containing a product id pattern (fev-001, col-002) —
     a message like "order col-001" has a digit and is long enough to pass the
     basic check, but is clearly a product reference, not an address."""
+    text = _strip_address_filler(text)
     if guardrails.PRODUCT_ID_RE.search(text):
         return False
     if _names_a_catalog_product(text) or _names_an_order_id(text) or _is_not_an_address_phrase(text):
@@ -327,6 +360,9 @@ _QUESTION_WORDS = {
 
 
 def _looks_like_a_first_time_address(text: str) -> bool:
+    if _is_filler_only(text):
+        return False
+    text = _strip_address_filler(text)   # "my address is Hyderabad" -> "Hyderabad"
     if _looks_like_an_address(text):
         return True
     if guardrails.PRODUCT_ID_RE.search(text):

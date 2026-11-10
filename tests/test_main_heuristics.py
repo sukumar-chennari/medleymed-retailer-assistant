@@ -503,3 +503,57 @@ class TestDozensAndNegativeQuantities:
     @pytest.mark.parametrize("rest, expected", [("- 2 boxes", 2), ("x3", 3), ("", 1)])
     def test_dashes_that_are_not_minus_signs_are_left_alone(self, rest, expected):
         assert main._parse_quantity(rest) == expected
+
+
+class TestQuantitiesAreNotAddresses:
+    """Real bug (Nov 10): with an order waiting for its address, "in 3 days",
+    "for 2 weeks", "5 years old", "650 mg tablets", "20 dollars", "every 6
+    hours" all passed as the shipping address (a digit and 8+ characters)."""
+
+    @pytest.mark.parametrize("text", [
+        "in 3 days", "for 3 days", "2 days ago", "fever 3 days", "650 mg tablets", "after 5 pm", "tomorrow at 10 am",
+        "for 2 weeks", "in 2 hours", "20 dollars", "100 rupees", "5 tablets a day", "every 6 hours", "1 month old baby",
+        "5 years old", "25 years", "38.5 degrees",
+    ])
+    def test_not_an_address(self, text):
+        assert not main._looks_like_an_address(text), text
+        assert not main._looks_like_a_first_time_address(text), text
+
+    @pytest.mark.parametrize("text", [
+        "22 MG Road", "22 mg road, bangalore", "12 Old Kent Road", "7 Times Square, New York", "12 C Block, Rohini",
+        "5 Hours Lane, Leeds", "1 Tab Marg", "3rd Main, 5th Cross, HSR", "flat 4b, 22 mg road bangalore 560001",
+        "10 Oak Lane, Leeds", "12 Baker Street",
+    ])
+    def test_real_addresses_that_contain_a_unit_looking_word_still_pass(self, text):
+        assert main._looks_like_an_address(text), text
+
+
+class TestAddressLeadInsAndTrailers:
+    """Real bug (Nov 10): "Deliver to: 12 Baker Street" was saved with its lead-in
+    ("Shipping to: Deliver to: 12 Baker Street"), "...London please" kept the
+    "please", and "my address is 12 Baker Street" was not recognised as an
+    address at all (it looks like a statement about the customer)."""
+
+    @pytest.mark.parametrize("text, expected", [
+        ("Deliver to: 12 Baker Street, London", "12 Baker Street, London"),
+        ("deliver to 12 Baker Street, London", "12 Baker Street, London"),
+        ("ship it to 12 Baker Street, London please", "12 Baker Street, London"),
+        ("my address is 12 Baker Street, London", "12 Baker Street, London"),
+        ("The shipping address is 12 Baker Street, London.", "12 Baker Street, London."),
+        ("Address: 12 Baker Street, London, thanks", "12 Baker Street, London"),
+        ("12 Baker Street, London", "12 Baker Street, London"),
+    ])
+    def test_strip(self, text, expected):
+        assert main._strip_address_filler(text) == expected
+
+    @pytest.mark.parametrize("text", ["my address is 12 Baker Street, London", "Deliver to: 12 Baker Street, London"])
+    def test_recognised_as_addresses(self, text):
+        assert main._looks_like_an_address(text)
+
+    def test_a_first_time_bare_place_after_a_lead_in(self):
+        assert main._looks_like_a_first_time_address("my address is Hyderabad")
+
+    @pytest.mark.parametrize("text", ["my address is", "deliver to:", "address:", "my shipping address is"])
+    def test_a_lead_in_alone_is_not_an_address(self, text):
+        assert main._is_filler_only(text)
+        assert not main._looks_like_a_first_time_address(text)

@@ -2046,3 +2046,25 @@ class TestDozenAndNegativeQuantityRoute:
         reply = _chat("s1", "order -1 ibuprofen")
         assert "wasn't valid" in reply
         assert store.get_pending_order("s1")["quantity"] == 1
+
+
+class TestPendingOrderAddressReplies:
+    def _pending(self):
+        store.set_pending_order("s1", "fev-003", 1)
+
+    @pytest.mark.parametrize("text", ["in 3 days", "for 2 weeks", "5 years old", "650 mg tablets"])
+    def test_a_quantity_is_not_shipped_to_as_an_address(self, monkeypatch, text):
+        self._pending()
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        assert _chat("s1", text) == "from the model"
+        assert store.get_pending_order("s1") is not None and store.list_orders("demo_user") == []
+
+    @pytest.mark.parametrize("text", [
+        "Deliver to: 12 Baker Street, London", "my address is 12 Baker Street, London",
+        "ship it to 12 Baker Street, London please",
+    ])
+    def test_the_lead_in_and_the_please_are_not_part_of_the_saved_address(self, text):
+        self._pending()
+        reply = _chat("s1", text)
+        assert "Shipping to: 12 Baker Street, London\n" in reply
+        assert store.get_address("demo_user") == "12 Baker Street, London"
