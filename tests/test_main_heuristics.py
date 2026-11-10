@@ -482,3 +482,24 @@ class TestACommandWordInANumberedStreetIsStillAnAddress:
     @pytest.mark.parametrize("text", ["123 Cancel Reorder Rd", "5 Reorder Street, Pune", "10 Cancel Lane", "12 Good Morning Road"])
     def test_it_passes(self, text):
         assert main._looks_like_a_first_time_address(text) is True
+
+
+class TestDozensAndNegativeQuantities:
+    """Real bugs (Nov 10): "order a dozen ibuprofen" ordered ONE with no word
+    about the limit (the customer asked for 12), and "order -1 ibuprofen"
+    quietly ordered one as if 1 had been asked."""
+
+    @pytest.mark.parametrize("rest, expected", [
+        ("a dozen", 12), ("dozen", 12), ("half a dozen", 6), ("half dozen", 6),
+        ("two dozen", 12), ("3 dozen", 12),
+    ])
+    def test_dozens(self, rest, expected):
+        assert main._parse_quantity(rest) == expected
+
+    @pytest.mark.parametrize("rest", ["-1", " -2 ", "-5 boxes"])
+    def test_a_negative_quantity_is_reported_invalid_not_read_as_positive(self, rest):
+        assert main._parse_quantity(rest) == 0
+
+    @pytest.mark.parametrize("rest, expected", [("- 2 boxes", 2), ("x3", 3), ("", 1)])
+    def test_dashes_that_are_not_minus_signs_are_left_alone(self, rest, expected):
+        assert main._parse_quantity(rest) == expected

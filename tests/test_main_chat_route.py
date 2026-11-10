@@ -2033,3 +2033,16 @@ class TestCurlyApostropheNegation:
         monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: (seen.append(kwargs["user_text"]) or "ok", messages))
         _chat("s1", "I’ve been feeling “off” since yesterday, any ideas")
         assert seen and "’" not in seen[0] and "“" not in seen[0]
+
+
+class TestDozenAndNegativeQuantityRoute:
+    @pytest.mark.parametrize("text", ["order a dozen ibuprofen", "order half a dozen ibuprofen", "order two dozen ibuprofen"])
+    def test_a_dozen_is_capped_at_the_real_limit_and_says_so(self, text):
+        reply = _chat("s1", text)
+        assert f"per-order limit of {tools.MAX_QUANTITY_PER_ORDER}" in reply
+        assert store.get_pending_order("s1")["quantity"] == tools.MAX_QUANTITY_PER_ORDER
+
+    def test_a_negative_quantity_says_it_was_not_valid(self):
+        reply = _chat("s1", "order -1 ibuprofen")
+        assert "wasn't valid" in reply
+        assert store.get_pending_order("s1")["quantity"] == 1

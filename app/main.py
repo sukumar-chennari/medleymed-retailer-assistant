@@ -647,7 +647,7 @@ _MAX_NAMED_ORDER_WORDS = 14
 _NUMBER_WORDS = {
     "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
     "seven": 7, "eight": 8, "nine": 9, "ten": 10, "twice": 2, "double": 2,
-    "couple": 2, "pair": 2,
+    "couple": 2, "pair": 2, "dozen": 12,
 }
 _QUANTITY_TOKEN_RE = re.compile(r"\b(?:\d+|" + "|".join(_NUMBER_WORDS) + r")\b")
 _AMBIGUOUS_QUANTITY_RE = re.compile(r"\b(?:another|more|extra)\b")
@@ -660,6 +660,13 @@ def _parse_quantity(rest: str) -> int | None:
     tools.start_order clamps them and says so."""
     if _AMBIGUOUS_QUANTITY_RE.search(rest):
         return None
+    # "-1" is not "1": 0 is reported by start_order as "wasn't valid, used 1"
+    # instead of quietly ordering one as if that was what was asked.
+    if re.search(r"(?:^|\s)-\d", rest):
+        return 0
+    # "a dozen" is 12 (then capped and said so), "half a dozen" is 6.
+    rest = re.sub(r"\bhalf\s+(?:a\s+)?dozen\b", "six", rest)
+    rest = re.sub(r"\b(?:\d+|two|three|four|five|six|ten)\s+dozen\b", "12", rest)  # far over the limit either way
     tokens = _QUANTITY_TOKEN_RE.findall(re.sub(r"\bx(\d+)\b", r"\1", rest))
     if not tokens:
         return 1
