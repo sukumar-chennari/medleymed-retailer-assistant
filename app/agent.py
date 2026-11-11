@@ -278,7 +278,10 @@ ORDER_INTENT_RE = re.compile(
 CANCEL_INTENT_RE = re.compile(r"\bcancel\b", re.IGNORECASE)
 
 REORDER_INTENT_RE = re.compile(
-    r"\b(reorder|re-order|order (it|that|this|the same) again|same (thing|order) again|order again)\b",
+    r"\b(reorder|re-order|order (it|that|this|the same) again|same (thing|order) again|order again"
+    # "same as last time" (Nov 11: the real model just listed the order instead of reordering)
+    r"|same again|same as (last time|before|the last (one|time|order))|repeat (my |the )?(last |previous )?order"
+    r"|order the same( thing| one| order)?|(buy|get) the same( thing| one)? again)\b",
     re.IGNORECASE,
 )
 

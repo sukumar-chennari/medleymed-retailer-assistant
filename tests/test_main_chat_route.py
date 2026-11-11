@@ -2068,3 +2068,36 @@ class TestPendingOrderAddressReplies:
         reply = _chat("s1", text)
         assert "Shipping to: 12 Baker Street, London\n" in reply
         assert store.get_address("demo_user") == "12 Baker Street, London"
+
+
+class TestReorderPhrasings:
+    """Real gap (Nov 11): with the real model, "same as last time" listed the
+    order instead of reordering it. Common ways of saying "again" are now
+    recognised in code."""
+
+    def _placed(self):
+        store.save_address("demo_user", "10 High St, Leeds")
+        store.create_order("demo_user", "fev-003", "10 High St, Leeds", 1)
+
+    @pytest.mark.parametrize("text", [
+        "same as last time", "repeat my last order", "order the same", "same again please",
+        "get the same thing again", "same as before", "Same again!",
+    ])
+    def test_these_start_a_reorder(self, monkeypatch, text):
+        self._placed()
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        reply = _chat("s1", text)
+        assert reply != "from the model", text
+        assert "10 High St, Leeds" in reply
+        assert store.get_pending_address_confirmation("s1") == {"product_id": "fev-003", "quantity": 1}
+
+    @pytest.mark.parametrize("text", [
+        "what is the same as before in ibuprofen", "how do I repeat my last order", "which is the same as last time",
+        "don't repeat my last order", "order it",
+    ])
+    def test_questions_and_retractions_do_not(self, monkeypatch, text):
+        self._placed()
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        _chat("s1", text)
+        assert store.get_pending_address_confirmation("s1") is None
+        assert len(store.list_orders("demo_user")) == 1

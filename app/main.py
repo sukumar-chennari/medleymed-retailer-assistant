@@ -654,6 +654,10 @@ def _is_plain_reorder_request(text: str) -> bool:
         return False
     if "@" in text or guardrails.PRODUCT_ID_RE.search(text) or _QUANTITY_WORDS_RE.search(text):
         return False
+    # A question that merely contains the phrase ("what is the same as before in
+    # ibuprofen") is not a request to reorder (Nov 11).
+    if words[0] in {"what", "whats", "what's", "why", "how", "which", "who", "when", "where", "is", "are", "does"}:
+        return False
     return _has_reorder_intent(text)
 
 
