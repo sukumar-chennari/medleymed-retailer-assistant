@@ -70,3 +70,33 @@ class TestScreenRecommendation:
                     {"role": "assistant", "content": "You might consider Advil for the fever."}]
         reply = main._screen_recommendation("s1", messages[-1]["content"], messages)
         assert reply.startswith("I can't recommend Ibuprofen 200mg Tablets")
+
+
+class TestLetteredVitaminsKeepTheirLetter:
+    """Real bug (Nov 11): "do you sell vitamin c" was answered "We don't carry
+    Vitamin." — the letter was cut off."""
+
+    @pytest.mark.parametrize("text, name", [
+        ("do you sell vitamin c", "vitamin c"), ("do you have vitamin d3", "vitamin d3"),
+        ("any vitamin b12", "vitamin b12"), ("do you have vitamins", "vitamins"), ("do you sell vitamin", "vitamin"),
+    ])
+    def test_the_name_is_reported_whole(self, text, name):
+        assert brands.classify(text) == ([], [name])
+
+    def test_two_unstocked_names_are_both_reported(self):
+        assert brands.classify("do you have vitamin c and zinc") == ([], ["vitamin c", "zinc"])
+
+    def test_the_reply_names_the_vitamin(self, monkeypatch):
+        from fastapi.testclient import TestClient
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        reply = TestClient(main.app).post("/api/chat", json={"session_id": "s1", "text": "do you sell vitamin c"}).json()["reply"]
+        assert reply.startswith("We don't carry Vitamin C.")
+
+    @pytest.mark.parametrize("text, names", [
+        ("do you have zinc and vitamin c", ["zinc", "vitamin c"]),
+        ("do you have vitamin c and zinc", ["vitamin c", "zinc"]),
+        ("any omeprazole or zinc or vitamin d", ["omeprazole", "zinc", "vitamin d"]),
+    ])
+    def test_names_come_back_in_the_order_they_were_typed(self, text, names):
+        # NOT_STOCKED is a set: the order used to change with the hash seed.
+        assert brands.classify(text)[1] == names

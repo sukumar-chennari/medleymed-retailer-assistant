@@ -50,9 +50,22 @@ _NOT_AVAILABILITY_RE = re.compile(
 _MAX_WORDS = 12
 
 
+# "vitamin c", "vitamin d3", "vitamin b12" are named by their letter: the reply
+# used to say "We don't carry Vitamin." (found Nov 11).
+_LETTERED = {"vitamin"}
+
+
 def _mentions(text: str, names) -> list[str]:
     lower = text.lower()
-    return [n for n in names if re.search(rf"\b{re.escape(n)}\b", lower)]
+    found = []
+    for n in names:
+        suffix = r"(?:\s+[a-z]\d{0,2}\b)?" if n in _LETTERED else ""
+        match = re.search(rf"\b{re.escape(n)}\b{suffix}", lower)
+        if match:
+            found.append((match.start(), match.group(0) if n in _LETTERED else n))
+    # In the order the customer typed them: NOT_STOCKED is a set, so the reply
+    # used to list two unstocked names in a different order from run to run.
+    return [name for _, name in sorted(found)]
 
 
 def classify(text: str) -> tuple[list[str], list[str]] | None:
