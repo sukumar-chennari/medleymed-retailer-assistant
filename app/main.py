@@ -859,7 +859,7 @@ def _reply_for_address_query() -> str:
 # questions got an age clarification. The knowledge-base documents hold no
 # prices — the catalog does — so these are answered from it in code.
 _PRICE_RE = re.compile(
-    r"\b(?:prices?|pricing|priced|costs?|how much (?:is|are|does|do|would|for))\b", re.IGNORECASE
+    r"\b(?:prices?|pricing|priced|costs?|how much (?:is|are|does|do|would|for)|total\s+(?:cost\s+|price\s+)?(?:for|of))\b", re.IGNORECASE
 )
 _PRICE_NOT_DOSE_RE = re.compile(r"\b(?:dose|dosage|dosing|take|taking|safe|side\s*effects?)\b", re.IGNORECASE)
 _CHEAPEST_RE = re.compile(
@@ -880,6 +880,19 @@ def _products_named_in(text: str) -> list[dict]:
     named += [p for p in catalog if p["id"] in ids and p not in named]
     if named:
         return named
+    # "paracetamol 500mg" names ONE product; the ingredient fallback below used to
+    # answer with all four paracetamol products (found Nov 11). Two strengths in
+    # one message ("500mg and 650mg") still mean "all of them".
+    if len(_STRENGTH_RE.findall(normalized)) <= 1:
+        by_strength = [
+            p for p in catalog
+            if any(
+                any(ch.isdigit() for ch in alias) and re.search(rf"(?<![a-z]){re.escape(alias)}(?![a-z])", normalized)
+                for alias in _product_aliases(p, catalog)
+            )
+        ]
+        if by_strength:
+            return by_strength
     tokens = set(re.findall(r"[a-z]+", normalized))
     return [
         p for p in catalog
@@ -888,6 +901,21 @@ def _products_named_in(text: str) -> list[dict]:
 
 
 _ABOUT_THE_SHOWN_LIST_RE = re.compile(r"\b(?:which\s+(?:one|of)|of\s+(?:these|those|them)|the\s+cheapest\s+one|these|those)\b", re.IGNORECASE)
+
+
+def _quantity_asked_about(text: str, product: dict, catalog: list[dict]) -> int | None:
+    """"how much for 2 ibuprofen" asks for a total, not the unit price (the unit
+    price used to be the whole answer, found Nov 11). None when no quantity is
+    stated or it is ambiguous."""
+    normalized = " ".join(text.lower().replace("\u2019", "'").split())
+    for alias in _product_aliases(product, catalog) + [product["id"]]:
+        if re.search(rf"(?<![a-z]){re.escape(alias)}(?![a-z])", normalized):
+            rest = normalized.replace(alias, " ")
+            if _STRENGTH_RE.search(rest):
+                return None
+            quantity = _parse_quantity(rest)
+            return quantity if quantity and quantity > 0 else None
+    return None
 
 
 def _price_reply(text: str, shown_products: list[dict] | None = None) -> str | None:
@@ -925,6 +953,22 @@ def _price_reply(text: str, shown_products: list[dict] | None = None) -> str | N
     if not named:
         return None
     if len(named) == 1:
+        asked_strengths = {m.replace(" ", "").lower() for m in _STRENGTH_RE.findall(text)}
+        if asked_strengths and not all(st in named[0]["name"].lower() for st in asked_strengths):
+            # "ibuprofen 400mg": we sell 200mg only; quoting its price as the
+            # answer would pass one product off as the other (found Nov 11).
+            return (
+                f"We don't carry that strength. The closest we have is {named[0]['name']}, "
+                f"which costs ${named[0]['price_usd']:.2f}."
+            )
+        quantity = _quantity_asked_about(text, named[0], catalog)
+        if quantity and quantity != 1:
+            product = named[0]
+            limit = tools.MAX_QUANTITY_PER_ORDER
+            shown = min(quantity, limit)
+            total = product["price_usd"] * shown
+            prefix = f"Our per-order limit is {limit}, so the most you can order at once is " if quantity > limit else ""
+            return f"{prefix}{shown} × {product['name']} = ${total:.2f} (${product['price_usd']:.2f} each)."
         return f"{named[0]['name']} costs ${named[0]['price_usd']:.2f}."
     return "Here are the prices:\n" + "\n".join(f"- {p['name']} — ${p['price_usd']:.2f}" for p in named)
 

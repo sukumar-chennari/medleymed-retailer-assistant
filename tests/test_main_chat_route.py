@@ -2101,3 +2101,47 @@ class TestReorderPhrasings:
         _chat("s1", text)
         assert store.get_pending_address_confirmation("s1") is None
         assert len(store.list_orders("demo_user")) == 1
+
+
+class TestPriceQuestionsAnswerWhatWasAsked:
+    """Real gaps (Nov 11): "how much for 2 ibuprofen" answered the single-unit
+    price; "price of paracetamol 500mg" listed all the paracetamol products;
+    "how much for ibuprofen 400mg" quoted the 200mg price as if it were the
+    400mg one."""
+
+    @pytest.fixture(autouse=True)
+    def _no_model(self, monkeypatch):
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+
+    @pytest.mark.parametrize("text, reply", [
+        ("how much for 2 ibuprofen", "2 × Ibuprofen 200mg Tablets = $10.58 ($5.29 each)."),
+        ("how much for two ibuprofen tablets", "2 × Ibuprofen 200mg Tablets = $10.58 ($5.29 each)."),
+        ("total for 2 paracetamol 500mg", "2 × Paracetamol 500mg Tablets = $9.98 ($4.99 each)."),
+        ("how much for 2 fev-003", "2 × Ibuprofen 200mg Tablets = $10.58 ($5.29 each)."),
+    ])
+    def test_a_quantity_gets_a_total(self, text, reply):
+        assert _chat("s1", text) == reply
+
+    def test_a_quantity_over_the_limit_is_capped_and_says_so(self):
+        reply = _chat("s1", "price of 5 ibuprofen")
+        assert f"per-order limit is {tools.MAX_QUANTITY_PER_ORDER}" in reply
+        assert "= $10.58" in reply
+
+    @pytest.mark.parametrize("text", ["how much is ibuprofen", "cost of 1 ibuprofen"])
+    def test_a_single_unit_keeps_the_plain_price(self, text):
+        assert _chat("s1", text) == "Ibuprofen 200mg Tablets costs $5.29."
+
+    @pytest.mark.parametrize("text, reply", [
+        ("price of paracetamol 500mg", "Paracetamol 500mg Tablets costs $4.99."),
+        ("price of paracetamol 650mg", "Paracetamol Extra Strength 650mg costs $6.49."),
+    ])
+    def test_a_named_strength_names_one_product(self, text, reply):
+        assert _chat("s1", text) == reply
+
+    def test_two_strengths_still_list_the_range(self):
+        reply = _chat("s1", "price of paracetamol 500mg and 650mg")
+        assert "Paracetamol 500mg Tablets" in reply and "Paracetamol Extra Strength 650mg" in reply
+
+    def test_a_strength_we_do_not_stock_is_not_priced_as_if_we_did(self):
+        reply = _chat("s1", "how much for ibuprofen 400mg")
+        assert reply.startswith("We don't carry that strength") and "$5.29" in reply
