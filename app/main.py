@@ -977,6 +977,30 @@ def _price_reply(text: str, shown_products: list[dict] | None = None) -> str | N
     return "Here are the prices:\n" + "\n".join(f"- {p['name']} — ${p['price_usd']:.2f}" for p in named)
 
 
+# Ibuprofen for a child. The ibuprofen text gives an adult dose only, so a question
+# about a child gets that said, not a silent switch to another product (found Nov
+# 12: "can I give ibuprofen to my 5 year old" got only "Children's Paracetamol Syrup
+# would be a good fit") or a made-up paediatric dose from the model.
+_IBUPROFEN_WORD_RE = re.compile(r"\b(?:ibuprofen|advil|brufen|nurofen|motrin|fev-003)\b", re.IGNORECASE)
+_CHILD_CUE_RE = re.compile(r"\(child\)|\b(?:child|children|kid|kids|toddler|baby|babies|infant|newborn)\b", re.IGNORECASE)
+
+
+def _ibuprofen_for_a_child_reply(text: str) -> str | None:
+    if not (_IBUPROFEN_WORD_RE.search(text) and _CHILD_CUE_RE.search(text)):
+        return None
+    if _has_unnegated_intent(text, ORDER_INTENT_RE) or len(re.findall(r"[a-z']+", text.lower())) > 30:
+        return None
+    reply = (
+        "Our product information for Ibuprofen 200mg Tablets gives an adult dose only — it doesn't say whether, "
+        "or how much, to give a child, so I can't confirm it is suitable. Please ask a pharmacist or doctor before "
+        "giving ibuprofen to a child."
+    )
+    syrup = next((p for p in store.get_catalog() if p["name"].lower().startswith("children")), None)
+    if syrup:
+        reply += f" For a child's fever we carry {syrup['name']} ({syrup['id']}) — ask me about it if you'd like."
+    return reply + f"\n\n{guardrails.DISCLAIMER}"
+
+
 # "Show me all your products" / "what do you sell?" got the out-of-scope
 # decline ("This demo only handles fever and cold OTC guidance") — a customer
 # asking what the shop carries was told the shop can't help. Answered from the
@@ -2136,6 +2160,12 @@ def chat(req: ChatRequest):
             combination_reply := interactions.combination_reply(text, store.get_catalog())
         ):
             reply = combination_reply
+            messages.append({"role": "user", "content": text})
+            messages.append({"role": "assistant", "content": reply})
+        elif text and not pending_product_id and not pending_address_confirmation and (
+            child_reply := _ibuprofen_for_a_child_reply(text)
+        ):
+            reply = child_reply
             messages.append({"role": "user", "content": text})
             messages.append({"role": "assistant", "content": reply})
         elif text and not pending_product_id and not pending_address_confirmation and (

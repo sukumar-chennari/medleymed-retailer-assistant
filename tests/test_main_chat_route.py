@@ -2152,3 +2152,37 @@ class TestAgesAreNotQuantitiesRoute:
     def test_the_pending_quantity_is_one(self, text):
         _chat("s1", text)
         assert store.get_pending_order("s1")["quantity"] == 1
+
+
+class TestIbuprofenForAChildRoute:
+    @pytest.fixture(autouse=True)
+    def _no_model(self, monkeypatch):
+        def boom(*args, **kwargs):
+            raise AssertionError("the model must not be reached")
+        monkeypatch.setattr(main, "run_turn", boom)
+
+    @pytest.mark.parametrize("text", [
+        "can I give ibuprofen to my 5 year old", "is ibuprofen safe for kids", "ibuprofen dose for my son",
+        "my daughter has fever can she take ibuprofen", "can children take ibuprofen", "ibuprofen for baby",
+        "can I give advil to my toddler",
+    ])
+    def test_the_question_gets_an_honest_adult_only_answer(self, text):
+        reply = _chat("s1", text)
+        assert "adult dose only" in reply and "pharmacist or doctor" in reply
+        assert "Children's Paracetamol Syrup (fev-004)" in reply
+        assert store.get_pending_order("s1") is None
+
+    @pytest.mark.parametrize("text", [
+        "order ibuprofen for my 5 year old", "I want ibuprofen for my son", "my 2 year old has fever I want ibuprofen",
+        "order ibuprofen for my 6 month old",
+    ])
+    def test_an_order_for_a_child_is_refused_and_nothing_starts(self, text):
+        reply = _chat("s1", text)
+        assert reply.startswith("Sorry, I can't set up an order for Ibuprofen 200mg Tablets")
+        assert "a child" in reply
+        assert store.get_pending_order("s1") is None
+
+    def test_an_adult_can_still_order_ibuprofen(self):
+        assert store.get_pending_order("s1") is None
+        _chat("s1", "order ibuprofen")
+        assert store.get_pending_order("s1")["product_id"] == "fev-003"

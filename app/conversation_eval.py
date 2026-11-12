@@ -460,7 +460,10 @@ CONVERSATION_CASES = [
         # chest pain got the out-of-scope decline. An order that was waiting
         # for its address must still be waiting afterwards.
         "turns": [
-            {"text": "order Ibuprofen 200mg Tablets", "checks": [("asks for an address", lambda r: "address" in r.lower())]},
+            # Paracetamol, not ibuprofen: since Nov 12 an ibuprofen order is refused once
+            # a baby is mentioned (see ibuprofen_is_not_sold_for_a_child), which is not
+            # what this scenario is about.
+            {"text": "order Paracetamol 500mg Tablets", "checks": [("asks for an address", lambda r: "address" in r.lower())]},
             {
                 "text": "I took 10 paracetamol tablets",
                 "checks": [
@@ -481,6 +484,36 @@ CONVERSATION_CASES = [
                 "text": "45 Safe Street, Pune",
                 "checks": [("the waiting order still completes afterwards", lambda r: "Order confirmed!" in r)],
                 "state_checks": [("exactly one real order", _order_count_is(1))],
+            },
+        ],
+    },
+    {
+        "name": "ibuprofen_is_not_sold_for_a_child",
+        # Fully deterministic. The ibuprofen text gives an adult dose only; an order
+        # waiting for its address was completed after "my baby ..." (Nov 12).
+        "turns": [
+            {"text": "order Ibuprofen 200mg Tablets", "checks": [("asks for an address", lambda r: "address" in r.lower())]},
+            {
+                "text": "my baby is 2 months old and has a fever",
+                "checks": [("tells them to see a doctor now", lambda r: "under 3 months" in r and "doctor" in r)],
+            },
+            {
+                "text": "45 Safe Street, Pune",
+                "checks": [("the order is refused, not placed", lambda r: "adult dose only" in r and "Order confirmed!" not in r)],
+                "state_checks": [("no order was placed", _order_count_is(0))],
+            },
+        ],
+    },
+    {
+        "name": "ibuprofen_question_about_a_child_is_answered_honestly",
+        "turns": [
+            {
+                "text": "can I give ibuprofen to my 5 year old",
+                "checks": [
+                    ("says the information is adult-only", lambda r: "adult dose only" in r),
+                    ("points to a pharmacist or doctor", lambda r: "pharmacist or doctor" in r),
+                    ("names the children's product", lambda r: "Children's Paracetamol Syrup" in r),
+                ],
             },
         ],
     },

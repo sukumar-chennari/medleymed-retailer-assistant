@@ -386,3 +386,28 @@ class TestPhrasingsAndBrandsThePatternsMissed:
 
     def test_a_heart_patient_is_also_kept_off_the_decongestant(self):
         assert self._refusal("I'm a heart patient", "col-002")
+
+
+class TestIbuprofenAndAChild:
+    """Real gap (Nov 12): the ibuprofen text gives an adult dose only, yet "order
+    ibuprofen for my 6 month old" went through. The reply to "can I give ibuprofen
+    to my 5 year old" also just switched to another product without answering."""
+
+    @staticmethod
+    def _refusal(text, product_id="fev-003"):
+        return ci.refusal_for(store.find_product(product_id), text)
+
+    @pytest.mark.parametrize("text", [
+        "for my 5 year old (child)", "it's for my son (child)", "for a child", "for my toddler", "for the baby",
+        "for my kids",
+    ])
+    def test_ibuprofen_is_refused_for_a_child(self, text):
+        refusal = self._refusal(text)
+        assert refusal and "a child" in refusal and "adult dose only" in refusal
+
+    @pytest.mark.parametrize("text", ["not for a child, for me", "I'm an adult, not a kid", "for myself"])
+    def test_an_adult_is_not_refused(self, text):
+        assert self._refusal(text) is None
+
+    def test_the_children_s_syrup_is_not_refused_for_a_child(self):
+        assert self._refusal("for my 5 year old (child)", "fev-004") is None

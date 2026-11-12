@@ -60,6 +60,8 @@ _CONDITIONS = {
     "blood_thinner": ("a blood thinner", r"\bwarfarin\b|\bblood[\s-]+thin(?:ners?|ning)\b|\banticoagulants?\b|\bclopidogrel\b|\bapixaban\b|\brivaroxaban\b|\bheparin\b"
                       # brand names people actually type (Nov 10)
                       r"|\b(?:eliquis|xarelto|coumadin|plavix|pradaxa|dabigatran|edoxaban|ticagrelor|brilinta|prasugrel)\b"),
+    # age_hints.py appends "(child)" for "my 5 year old", "my son", "6 months old"...
+    "child": ("a child", r"\(child\)|\b(?:child|children|kid|kids|toddler|baby|babies|infant|newborn)\b"),
     "gi_bleed": ("stomach bleeding", r"\b(?:stomach|gastric|gi|gastrointestinal|intestinal)\s+bleed(?:ing|s)?\b|\bbleeding\s+(?:in\s+(?:my\s+)?)?stomach\b"),
 }
 _COMPILED = {key: (label, re.compile(pattern, re.IGNORECASE)) for key, (label, pattern) in _CONDITIONS.items()}
@@ -77,6 +79,9 @@ _RULES = [
     ("nsaid_use", "fev-003", "exclude", "our product information says not to combine it with other anti-inflammatories"),
     ("blood_thinner", "fev-003", "exclude", _NOT_COVERED),
     ("gi_bleed", "fev-003", "exclude", _NOT_COVERED),
+    # The ibuprofen text gives an adult dose only (found Nov 12: an order for "my 6
+    # month old" went through).
+    ("child", "fev-003", "exclude", "our product information gives an adult dose only for it, so I can't confirm it is suitable for a child"),
     ("asthma", "fev-003", "note", _NOT_COVERED),
     ("heart", "col-002", "exclude", _NOT_RECOMMENDED),
     ("high_bp", "col-002", "exclude", _NOT_RECOMMENDED),
