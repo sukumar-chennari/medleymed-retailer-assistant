@@ -2145,3 +2145,10 @@ class TestPriceQuestionsAnswerWhatWasAsked:
     def test_a_strength_we_do_not_stock_is_not_priced_as_if_we_did(self):
         reply = _chat("s1", "how much for ibuprofen 400mg")
         assert reply.startswith("We don't carry that strength") and "$5.29" in reply
+
+
+class TestAgesAreNotQuantitiesRoute:
+    @pytest.mark.parametrize("text", ["order paracetamol 500mg for my 5 year old", "my 2 year old has a fever, I want paracetamol 500mg"])
+    def test_the_pending_quantity_is_one(self, text):
+        _chat("s1", text)
+        assert store.get_pending_order("s1")["quantity"] == 1

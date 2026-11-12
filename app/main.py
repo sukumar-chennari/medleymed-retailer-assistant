@@ -700,6 +700,10 @@ def _parse_quantity(rest: str) -> int | None:
     tools.start_order clamps them and says so."""
     if _AMBIGUOUS_QUANTITY_RE.search(rest):
         return None
+    # "5 year old" / "6 months old" / "I'm 30" is who the medicine is for, not how
+    # many to order ("order ibuprofen for my 5 year old" ordered 5, capped to 2;
+    # found Nov 12).
+    rest = age_hints.strip_ages(rest)
     # "-1" is not "1": 0 is reported by start_order as "wasn't valid, used 1"
     # instead of quietly ordering one as if that was what was asked.
     if re.search(r"(?:^|\s)-\d", rest):

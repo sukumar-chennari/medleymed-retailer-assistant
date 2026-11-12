@@ -557,3 +557,19 @@ class TestAddressLeadInsAndTrailers:
     def test_a_lead_in_alone_is_not_an_address(self, text):
         assert main._is_filler_only(text)
         assert not main._looks_like_a_first_time_address(text)
+
+
+class TestAnAgeIsNotAQuantity:
+    """Real bug (Nov 12): "order ibuprofen for my 5 year old" ordered FIVE (capped to
+    two) and "my 2 year old has a fever, I want ibuprofen" ordered two."""
+
+    @pytest.mark.parametrize("rest", [
+        "for my 5 year old", "for my 2 year old", "my 6 months old", "for my 10yo", "i'm 30", "for my 3 yr old",
+        "for my five year old",
+    ])
+    def test_an_age_leaves_the_default_quantity(self, rest):
+        assert main._parse_quantity(rest) == 1
+
+    @pytest.mark.parametrize("rest, expected", [("2 for my 5 year old", 2), ("for my 5 year old x3", 3), ("two for my 4 yo", 2)])
+    def test_a_real_quantity_next_to_an_age_still_counts(self, rest, expected):
+        assert main._parse_quantity(rest) == expected

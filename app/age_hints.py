@@ -49,6 +49,14 @@ _ADULT_AGE = 18
 _CHILD_BELOW = 12
 
 
+def strip_ages(text: str) -> str:
+    """The text with stated ages ("5 year old", "6 months old", "5yo", "I'm 30")
+    blanked out, so a number that is an age is not read as a quantity."""
+    for pattern in (_YEARS_OLD_RE, _INFANT_AGE_RE, _SHORT_AGE_RE, _IM_AGE_RE):
+        text = pattern.sub(" ", text)
+    return text
+
+
 def _number(raw: str) -> int | None:
     raw = raw.lower()
     return int(raw) if raw.isdigit() else _WORD_NUMBERS.get(raw)
