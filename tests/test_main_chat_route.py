@@ -2186,3 +2186,31 @@ class TestIbuprofenForAChildRoute:
         assert store.get_pending_order("s1") is None
         _chat("s1", "order ibuprofen")
         assert store.get_pending_order("s1")["product_id"] == "fev-003"
+
+
+class TestTwoEmailAddressesInOneMessage:
+    """Real gap (Nov 12): "bob@gmail.com and alice@x.org" sent the receipt to the
+    first address without asking which was meant."""
+
+    def _waiting_for_an_email(self):
+        store.save_address("demo_user", "10 High St, Leeds")
+        order = store.create_order("demo_user", "fev-001", "10 High St, Leeds", 1)
+        store.set_pending_email("s1", order["order_id"])
+
+    @pytest.mark.parametrize("text", [
+        "bob@gmail.com and alice@x.org", "bob@gmail.com, alice@x.org", "my email is bob@gmail.com or alice@x.org",
+    ])
+    def test_it_asks_which_and_sends_nothing(self, monkeypatch, text):
+        self._waiting_for_an_email()
+        sent = []
+        monkeypatch.setattr(tools, "send_confirmation_email", lambda *a, **k: sent.append(a) or "{}")
+        reply = _chat("s1", text)
+        assert "which one should I use" in reply and "bob@gmail.com" in reply and "alice@x.org" in reply
+        assert sent == [] and store.get_email("demo_user") in (None, "")
+        assert store.get_pending_email("s1") is not None   # still waiting for the answer
+
+    @pytest.mark.parametrize("text", ["bob@gmail.com", "BOB@gmail.com bob@gmail.com", "bob@gmail.com, bob@gmail.com"])
+    def test_one_address_repeated_is_still_one_address(self, text):
+        self._waiting_for_an_email()
+        reply = _chat("s1", text)
+        assert "I've sent the confirmation" in reply

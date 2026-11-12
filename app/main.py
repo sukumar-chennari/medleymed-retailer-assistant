@@ -108,6 +108,20 @@ def _extract_email(text: str) -> tuple[str | None, str]:
     return email, remainder
 
 
+def _distinct_emails(text: str) -> list[str]:
+    """Every different email address in the text, in the order typed."""
+    seen: dict[str, str] = {}
+    for match in EMAIL_RE.finditer(text):
+        address = match.group(0).rstrip(".")
+        seen.setdefault(address.lower(), address)
+    return list(seen.values())
+
+
+def _which_email_reply(emails: list[str]) -> str:
+    listed = ", ".join(emails[:-1]) + f" and {emails[-1]}"
+    return f"I see more than one email address ({listed}) — which one should I use? Please send just that one."
+
+
 def _looks_like_an_email(text: str) -> bool:
     return EMAIL_RE.search(text) is not None
 
@@ -2124,6 +2138,12 @@ def chat(req: ChatRequest):
             policy_reply := _policy_reply(text)
         ):
             reply = policy_reply
+            messages.append({"role": "user", "content": text})
+            messages.append({"role": "assistant", "content": reply})
+        elif text and not pending_product_id and not pending_address_confirmation and len(_distinct_emails(text)) > 1:
+            # Two addresses in one message: the receipt used to go to the first one
+            # without asking (found Nov 12). The waiting email question stays open.
+            reply = _which_email_reply(_distinct_emails(text))
             messages.append({"role": "user", "content": text})
             messages.append({"role": "assistant", "content": reply})
         elif text and not pending_product_id and not pending_address_confirmation and (
