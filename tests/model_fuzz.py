@@ -67,6 +67,11 @@ def run(sessions: int, seed: int, turns: int) -> list[tuple[str, list[str], str]
             reply = res.json().get("reply", "") if res.status_code == 200 else f"HTTP {res.status_code}"
             for problem in invariants._violations(session_id, message, reply, before, history):
                 violations.append((problem, history[:], reply[:160]))
+                # Printed the moment it is found: a run takes ~25 s per session, and
+                # one that stalls or is stopped used to lose every violation it had
+                # already seen (the Nov 9 run showed "violations so far 4" and never
+                # said what they were).
+                print(f"VIOLATION (session {sequence + 1}): {problem}\n    after: {history}\n    reply: {reply[:160]}", flush=True)
         print(f"session {sequence + 1}/{sessions} done, violations so far {len(violations)}, {int(time.time() - started)}s", flush=True)
     return violations
 
