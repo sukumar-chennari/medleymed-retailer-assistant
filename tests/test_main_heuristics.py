@@ -573,3 +573,40 @@ class TestAnAgeIsNotAQuantity:
     @pytest.mark.parametrize("rest, expected", [("2 for my 5 year old", 2), ("for my 5 year old x3", 3), ("two for my 4 yo", 2)])
     def test_a_real_quantity_next_to_an_age_still_counts(self, rest, expected):
         assert main._parse_quantity(rest) == expected
+
+
+class TestSoreThroatNote:
+    """Real gap (Nov 13, real model): "sore throat" got the cold list (cetirizine
+    "relieves runny nose...") as if it treated the throat; none of our product
+    information mentions throat relief."""
+
+    LIST = (
+        "Here's what I'd recommend:\n\n- Cetirizine 10mg Antihistamine Tablets (col-001) — Relieves runny nose.\n\n"
+        "Which one would you like to try?"
+    )
+
+    def _screen(self, user_texts, reply=None):
+        messages = [{"role": "user", "content": t} for t in user_texts]
+        reply = reply or self.LIST
+        messages.append({"role": "assistant", "content": reply})
+        return main._screen_recommendation("s-throat", reply, messages)
+
+    @pytest.mark.parametrize("texts", [
+        ["sore throat", "adult"], ["I have a sore throat and a runny nose", "myself"], ["my throat hurts", "adult"],
+        ["strep throat?", "adult"],
+    ])
+    def test_a_throat_recommendation_says_nothing_here_mentions_throat_relief(self, texts):
+        assert main.SORE_THROAT_NOTE in self._screen(texts)
+
+    @pytest.mark.parametrize("texts", [["runny nose", "adult"], ["blocked nose", "myself"], ["fever", "adult"]])
+    def test_other_symptoms_get_no_note(self, texts):
+        assert main.SORE_THROAT_NOTE not in self._screen(texts)
+
+    def test_it_is_added_once_and_only_to_a_recommendation(self):
+        once = self._screen(["sore throat", "adult"])
+        assert once.count(main.SORE_THROAT_NOTE) == 1
+        assert main.SORE_THROAT_NOTE not in self._screen(["sore throat"], reply="Is this cold for a child, or an adult?")
+
+    def test_an_old_throat_mention_does_not_decorate_a_later_unrelated_recommendation(self):
+        texts = ["sore throat", "thanks", "ok", "hello", "fever", "adult"]
+        assert main.SORE_THROAT_NOTE not in self._screen(texts)

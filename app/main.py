@@ -1149,6 +1149,13 @@ def _reply_for_receipt_request(session_id: str) -> str:
     return f"Sure — what email address should I send the confirmation for order {order['order_id']} to?"
 
 
+_SORE_THROAT_RE = re.compile(r"\bsore\s+throats?\b|\bthroat\s+(?:pain|infection|ache|hurts?)\b|\bstrep\s+throat\b", re.IGNORECASE)
+SORE_THROAT_NOTE = (
+    "A note on the sore throat: none of our product information mentions throat relief, so these may not ease it. "
+    "If it is severe or doesn't improve, please see a doctor or pharmacist."
+)
+
+
 def _screen_recommendation(session_id: str, reply: str, messages: list[dict]) -> str:
     """Applies what the customer has said about themselves to a recommendation
     — their conditions (see contraindications.py) and a high or long-lasting
@@ -1172,6 +1179,17 @@ def _screen_recommendation(session_id: str, reply: str, messages: list[dict]) ->
     note = red_flags.doctor_note(stated)
     if note and contraindications.is_recommendation(screened) and note not in screened:
         screened = f"{screened.rstrip()}\n\n{note}"
+
+    # A sore throat is listed as a cold symptom, but no product's information says
+    # anything about throat relief: the list (cetirizine for a "runny nose", ...) was
+    # shown as if it treated it (found Nov 13).
+    recent = "\n".join(user_texts[-3:] + [contraindications.stated_text([]).strip()])
+    if (
+        _SORE_THROAT_RE.search(recent)
+        and contraindications.is_recommendation(screened)
+        and SORE_THROAT_NOTE not in screened
+    ):
+        screened = f"{screened.rstrip()}\n\n{SORE_THROAT_NOTE}"
 
     if screened == reply:
         return reply
