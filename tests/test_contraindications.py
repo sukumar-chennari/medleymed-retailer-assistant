@@ -411,3 +411,39 @@ class TestIbuprofenAndAChild:
 
     def test_the_children_s_syrup_is_not_refused_for_a_child(self):
         assert self._refusal("for my 5 year old (child)", "fev-004") is None
+
+
+class TestWhoItIsForCanChangeMidConversation:
+    """Real bug (Nov 13, real model): after "fever" -> "child", asking "what about
+    for adults?" got ibuprofen recommended AND the note "Please be careful with
+    Ibuprofen: you mentioned a child". A later message that says adult / myself
+    ends the child condition."""
+
+    @staticmethod
+    def _refusal(text):
+        return ci.refusal_for(store.find_product("fev-003"), text)
+
+    @pytest.mark.parametrize("text", [
+        "my baby has a fever\nchild\nwhat about for adults?",
+        "my baby has a fever\nactually for myself",
+        "my son has a cold (child)\nfor me",
+        "child\nadult",
+    ])
+    def test_a_later_adult_message_lifts_it(self, text):
+        assert self._refusal(text) is None
+
+    @pytest.mark.parametrize("text", [
+        "adult\nchild",
+        "my baby has a fever",
+        "it's for my son (child)\norder ibuprofen",
+        "my baby has a fever\nactually for myself\nno wait, it's for the baby",
+        "child (child) and adult",          # one message mentioning both stays conservative
+    ])
+    def test_a_child_mentioned_last_or_alongside_still_blocks(self, text):
+        assert self._refusal(text), text
+
+    def test_the_sentence_that_screens_a_recommendation_follows_the_same_rule(self):
+        catalog = store.get_catalog()
+        reply = "For adults, Ibuprofen 200mg Tablets (fev-003) would be a good fit."
+        screened, excluded = ci.screen_reply(reply, "fever\nchild\nwhat about for adults?", catalog)
+        assert excluded == set() and "careful" not in screened.lower()

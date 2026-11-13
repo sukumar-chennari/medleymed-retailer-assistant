@@ -170,13 +170,32 @@ def _unnegated(pattern: re.Pattern, text: str, statement_only: bool = False) -> 
     return False
 
 
+# Who the medicine is for can change mid-conversation: "my baby has a fever" ... "what
+# about for adults?" is now about an adult. A LATER message that says adult/myself
+# ends the child condition (found Nov 13: after "child", "what about for adults?" still
+# warned that ibuprofen was "not for a child" while recommending it).
+_ADULT_CUE_RE = re.compile(r"\badults?\b|\bmyself\b|\bfor\s+me\b|\bgrown[\s-]?ups?\b|\bfor\s+yourself\b", re.IGNORECASE)
+
+
+def _child_still_applies(text: str) -> bool:
+    lines = text.split("\n")
+    child_at = [i for i, line in enumerate(lines) if _unnegated(_COMPILED["child"][1], line)]
+    if not child_at:
+        return False
+    adult_at = [i for i, line in enumerate(lines) if _ADULT_CUE_RE.search(line) and not _negated(line[: _ADULT_CUE_RE.search(line).start()][-_NEGATION_LOOKBACK:])]
+    return not adult_at or max(adult_at) <= max(child_at)
+
+
 def conditions_in(text: str) -> set[str]:
     """The condition keys the text states (negated mentions are ignored; for the
     current-medication keys a question is not a statement)."""
-    return {
+    found = {
         key for key, (_, pattern) in _COMPILED.items()
-        if _unnegated(pattern, text, statement_only=key in _STATEMENT_ONLY_KEYS)
+        if key != "child" and _unnegated(pattern, text, statement_only=key in _STATEMENT_ONLY_KEYS)
     }
+    if _child_still_applies(text):
+        found.add("child")
+    return found
 
 
 def allergic_product_ids(text: str) -> dict[str, str]:
