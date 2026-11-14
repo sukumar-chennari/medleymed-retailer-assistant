@@ -1375,6 +1375,9 @@ class _GuardrailMiddleware(AgentMiddleware):
             return {"messages": [AIMessage(content=final, id=last.id)]}
 
         leaked_tool = guardrails.leaked_tool_intent(reply_text, TOOL_NAMES)
+        if not leaked_tool and guardrails.is_tool_call_json(reply_text):
+            # A made-up tool ("hello") written out as JSON: nothing real was asked for.
+            leaked_tool = "decline_out_of_scope"
         if leaked_tool == "decline_out_of_scope":
             _log_guard(session_id, "leaked_tool_intent_decline", f"{reply_text!r}")
             final = guardrails.OUT_OF_SCOPE_REPLY

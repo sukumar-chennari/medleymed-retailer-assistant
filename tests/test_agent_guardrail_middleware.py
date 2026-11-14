@@ -623,3 +623,10 @@ class TestCurlyApostropheNegatesIntent:
 
     def test_a_plain_cancel_is_an_intent(self):
         assert agent._has_unnegated_intent("please cancel it", agent.CANCEL_INTENT_RE) is True
+
+
+class TestAMadeUpToolCallIsNeverShown:
+    def test_raw_json_for_an_unknown_tool_is_replaced_with_the_canned_reply(self):
+        mw = _middleware()
+        result = _after_agent(mw, '{"name": "hello", "parameters": {}}')
+        assert result == guardrails.OUT_OF_SCOPE_REPLY
