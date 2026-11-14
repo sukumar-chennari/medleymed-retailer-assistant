@@ -776,6 +776,10 @@ def _product_aliases(product: dict, catalog: list[dict]) -> list[str]:
     strength = _NAME_WITH_STRENGTH_RE.match(aliases[0])
     if strength:
         aliases.append(f"{strength.group(1)} {strength.group(2)}")
+        # "paracetamol 650" (no unit) names the same product (found Nov 14).
+        aliases.append(f"{strength.group(1)} {strength.group(2).removesuffix('mg')}")
+        if "extra strength" in aliases[0]:
+            aliases += [f"{strength.group(1)} extra strength", f"extra strength {strength.group(1)}"]
     for word in re.findall(r"[a-z]+", product["active_ingredient"].lower()):
         if len(word) >= 5 and sum(1 for p in catalog if word in p["active_ingredient"].lower()) == 1:
             aliases.append(word)
@@ -814,6 +818,8 @@ def _resolve_named_product_order(text: str) -> tuple[dict, int] | None:
     product, matched = next(iter(named.values()))
 
     rest = normalized.replace(matched, " ")
+    if "extra strength" in product["name"].lower():
+        rest = rest.replace("extra strength", " ")   # a name, not the "extra" quantity cue
     # A strength left over after the name ("ibuprofen 400mg") is a different
     # product than the one we matched.
     if _STRENGTH_RE.search(rest):
@@ -920,7 +926,7 @@ def _products_named_in(text: str) -> list[dict]:
         by_strength = [
             p for p in catalog
             if any(
-                any(ch.isdigit() for ch in alias) and re.search(rf"(?<![a-z]){re.escape(alias)}(?![a-z])", normalized)
+                (any(ch.isdigit() for ch in alias) or "extra strength" in alias) and re.search(rf"(?<![a-z]){re.escape(alias)}(?![a-z])", normalized)
                 for alias in _product_aliases(p, catalog)
             )
         ]

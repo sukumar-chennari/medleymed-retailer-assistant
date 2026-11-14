@@ -2233,3 +2233,34 @@ class TestBackingOutOfAWaitingOrder:
         store.set_pending_order("s1", "fev-003", 1)
         reply = _chat("s1", address)
         assert "Order confirmed!" in reply and f"Shipping to: {address}" in reply
+
+
+class TestNaturalNamesForTheExtraStrengthProduct:
+    """Real gap (Nov 14): "order paracetamol 650", "order extra strength paracetamol"
+    and "order paracetamol 650mg extra strength" fell through to the model (the word
+    "extra" was even read as the ambiguous "extra" quantity cue)."""
+
+    @pytest.fixture(autouse=True)
+    def _no_model(self, monkeypatch):
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+
+    @pytest.mark.parametrize("text, quantity", [
+        ("order paracetamol 650", 1), ("order paracetamol 650mg extra strength", 1), ("order paracetamol extra strength", 1),
+        ("order extra strength paracetamol", 1), ("order 2 extra strength paracetamol", 2), ("order 2 paracetamol 650", 2),
+    ])
+    def test_it_starts_an_order_for_the_650(self, text, quantity):
+        _chat("s1", text)
+        assert store.get_pending_order("s1") == {"product_id": "fev-002", "quantity": quantity}
+
+    @pytest.mark.parametrize("text", ["order paracetamol 500", "order paracetamol 500mg"])
+    def test_the_500_is_still_the_500(self, text):
+        _chat("s1", text)
+        assert store.get_pending_order("s1")["product_id"] == "fev-001"
+
+    def test_bare_paracetamol_is_still_ambiguous(self):
+        assert _chat("s1", "order paracetamol") == "from the model"
+        assert store.get_pending_order("s1") is None
+
+    @pytest.mark.parametrize("text", ["how much is paracetamol 650", "price of extra strength paracetamol"])
+    def test_the_price_names_the_one_product(self, text):
+        assert _chat("s1", text) == "Paracetamol Extra Strength 650mg costs $6.49."
