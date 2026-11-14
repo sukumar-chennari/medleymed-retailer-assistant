@@ -610,3 +610,23 @@ class TestSoreThroatNote:
     def test_an_old_throat_mention_does_not_decorate_a_later_unrelated_recommendation(self):
         texts = ["sore throat", "thanks", "ok", "hello", "fever", "adult"]
         assert main.SORE_THROAT_NOTE not in self._screen(texts)
+
+
+class TestMoreWaysOfBackingOut:
+    """Real gap (Nov 14): only "nevermind" (one word) backed out of an order waiting
+    for its address. "never mind", "stop", "forget it" went to the model, the
+    order stayed pending, and the next address-like message shipped it."""
+
+    @pytest.mark.parametrize("text", [
+        "never mind", "Never Mind!", "nevermind", "stop", "STOP", "please stop", "forget it", "forget that",
+        "leave it", "drop it", "I changed my mind", "changed my mind", "not interested", "no thanks", "not now",
+    ])
+    def test_declines(self, text):
+        assert main._declines(text), text
+
+    @pytest.mark.parametrize("text", [
+        "12 Baker Street, London", "I don't want that address", "yes please", "hello", "what is the price",
+        "forget about it and ship to 12 Baker Street, London",      # too long to be a bare decline
+    ])
+    def test_does_not_decline(self, text):
+        assert not main._declines(text), text

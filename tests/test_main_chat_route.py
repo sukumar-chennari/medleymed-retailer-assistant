@@ -2214,3 +2214,22 @@ class TestTwoEmailAddressesInOneMessage:
         self._waiting_for_an_email()
         reply = _chat("s1", text)
         assert "I've sent the confirmation" in reply
+
+
+class TestBackingOutOfAWaitingOrder:
+    @pytest.fixture(autouse=True)
+    def _no_model(self, monkeypatch):
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+
+    @pytest.mark.parametrize("text", ["never mind", "stop", "forget it", "I changed my mind", "not interested", "no thanks"])
+    def test_the_waiting_order_is_dropped(self, text):
+        store.set_pending_order("s1", "fev-003", 1)
+        reply = _chat("s1", text)
+        assert "won't place that order" in reply
+        assert store.get_pending_order("s1") is None
+
+    @pytest.mark.parametrize("address", ["10 Stop Lane, Leeds", "5 Bus Stop Road, Pune"])
+    def test_an_address_that_contains_stop_is_still_an_address(self, address):
+        store.set_pending_order("s1", "fev-003", 1)
+        reply = _chat("s1", address)
+        assert "Order confirmed!" in reply and f"Shipping to: {address}" in reply

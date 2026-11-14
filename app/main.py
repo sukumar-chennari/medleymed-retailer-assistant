@@ -611,11 +611,26 @@ DECLINE_WORDS = {"no", "nope", "nah", "skip", "cancel", "nevermind", "later"}
 MAX_DECLINE_WORDS = 6
 
 
+# Two-word and idiomatic ways of backing out. Only "nevermind" (one word) was known:
+# "never mind", "stop" and "forget it" with an order waiting for its address went to
+# the model, the order stayed pending, and the next address-like message shipped it
+# (found Nov 14). Deliberately NOT "don't want": "I don't want that address" rejects
+# the address, not the order.
+_DECLINE_PHRASE_RE = re.compile(
+    r"\bnot\s+now\b|\bnever\s*mind\b|\bforget\s+(?:it|that|this)\b|\bstop\b|\bleave\s+it\b|\bdrop\s+it\b|"
+    r"\b(?:i\s+)?changed\s+my\s+mind\b|\bnot\s+interested\b|\bno\s+thanks?\b",
+    re.IGNORECASE,
+)
+
+
 def _declines(text: str) -> bool:
     words = re.findall(r"[a-z']+", text.lower())
     if not words or len(words) > MAX_DECLINE_WORDS:
         return False
-    return any(w in DECLINE_WORDS for w in words) or bool(re.search(r"\bnot\s+now\b", text, re.IGNORECASE))
+    return (
+        any(w in DECLINE_WORDS for w in words)
+        or bool(_DECLINE_PHRASE_RE.search(text))
+    )
 
 
 def _looks_like_order_cancellation(text: str) -> bool:
