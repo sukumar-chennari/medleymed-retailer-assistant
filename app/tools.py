@@ -177,6 +177,15 @@ def save_address(address: str) -> str:
             "saved": False,
             "error": "That is an email address, not a shipping address — ask the user for their street address.",
         })
+    # Found by the same fuzz (Nov 14, "both of them" while an order waited for its
+    # address): the model called save_address("get_saved_address") — it wrote one of
+    # its own tool names where the address goes. A snake_case identifier, with or
+    # without a call's parentheses, is never an address.
+    if re.fullmatch(r"[A-Za-z]\w*_\w+\s*(?:\(.*\))?", address):
+        return json.dumps({
+            "saved": False,
+            "error": "That is not a shipping address — ask the user for their street address.",
+        })
     store.save_address("demo_user", address)
     return json.dumps({"saved": True, "address": address})
 

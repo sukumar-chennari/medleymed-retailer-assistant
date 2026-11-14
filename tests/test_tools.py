@@ -149,3 +149,24 @@ class TestSaveAddressRefusesAnEmail:
     @pytest.mark.parametrize("value", ["5 Mid Rd, Pune, a@b.com", "10 High St, Leeds", "hyderabad"])
     def test_an_address_that_merely_mentions_one_or_has_none_is_saved(self, isolated_db, value):
         assert json.loads(tools.save_address(value))["saved"] is True
+
+
+class TestSaveAddressRefusesAToolName:
+    """Real bug (fuzz of the real chat model, Nov 14): with an order waiting for its
+    address, "both of them" made the model call save_address("get_saved_address") —
+    one of its own tool names became the shipping address."""
+
+    @pytest.mark.parametrize("value", [
+        "get_saved_address", "check_order_status", "  cancel_order ", "get_saved_address()", "start_order(product_id='fev-001')",
+        "reorder_last", "Lookup_Symptom",
+    ])
+    def test_a_tool_name_is_not_saved_as_an_address(self, isolated_db, value):
+        result = json.loads(tools.save_address(value))
+        assert result["saved"] is False and "not a shipping address" in result["error"]
+        assert store.get_address("demo_user") in (None, "")
+
+    @pytest.mark.parametrize("value", [
+        "10 High St, Leeds", "hyderabad", "Flat 4_B, 22 MG Road", "Kolkata", "12 Baker Street, London (near the park)",
+    ])
+    def test_real_addresses_are_still_saved(self, isolated_db, value):
+        assert json.loads(tools.save_address(value))["saved"] is True
