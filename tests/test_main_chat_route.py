@@ -2282,3 +2282,37 @@ class TestAddressAnswersAreStoredWithoutTheChatter:
         reply = _chat("s1", "set my address as 7 Elm Rd, York please")
         assert "saved 7 Elm Rd, York as your shipping address" in reply
         assert store.get_address("demo_user") == "7 Elm Rd, York"
+
+
+class TestAddressStatementsWithNoOrderWaiting:
+    """Real gap (Nov 15): only "change/update/set my address to X" saved an address in
+    code. "my address is X", "new address: X" and "ship to X from now on" went to the
+    model."""
+
+    @pytest.fixture(autouse=True)
+    def _no_model(self, monkeypatch):
+        def boom(*args, **kwargs):
+            raise AssertionError("the model must not be reached")
+        monkeypatch.setattr(main, "run_turn", boom)
+
+    @pytest.mark.parametrize("text, saved", [
+        ("my address is 12 Baker Street, London", "12 Baker Street, London"),
+        ("my shipping address is: 12 Baker Street, London", "12 Baker Street, London"),
+        ("my new address is 5 Oak Lane, Leeds", "5 Oak Lane, Leeds"),
+        ("new address: 9 High St, Bath", "9 High St, Bath"),
+        ("Shipping address: 9 High St, Bath", "9 High St, Bath"),
+        ("ship to 9 High St, Bath from now on", "9 High St, Bath"),
+        ("please send everything to 9 High St, Bath going forward", "9 High St, Bath"),
+        ("my address is 12 Baker Street, London please", "12 Baker Street, London"),
+        ("my address is hyderabad", "hyderabad"),
+    ])
+    def test_it_is_saved_in_code(self, text, saved):
+        reply = _chat("s1", text)
+        assert f"saved {saved} as your shipping address" in reply
+        assert store.get_address("demo_user") == saved
+
+    @pytest.mark.parametrize("text", ["my address is wrong", "my address is not correct", "my address is the same", "my address is old"])
+    def test_a_comment_about_the_address_is_not_an_address(self, monkeypatch, text):
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        assert _chat("s1", text) == "from the model"
+        assert store.get_address("demo_user") in (None, "")

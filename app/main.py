@@ -872,8 +872,42 @@ _ADDRESS_QUERY_STARTS = {"what", "what's", "whats", "which", "show", "tell", "do
 _MAX_ADDRESS_QUERY_WORDS = 12
 
 
+# The other ways of handing over an address with no order waiting: "my address is X",
+# "new address: X", "ship to X from now on". Only "change/update/set my address to X"
+# was handled in code, so these went to the model (found Nov 15).
+_ADDRESS_STATEMENT_RES = (
+    re.compile(
+        r"^\s*(?:please\s+)?(?:my|the|our)\s+(?:(?:new|shipping|delivery|home|current)\s+)*address\s+"
+        r"(?:is|will\s+be|would\s+be|should\s+be)\s*:?\s+(?P<address>.+?)\s*$",
+        re.IGNORECASE,
+    ),
+    re.compile(r"^\s*(?:(?:new|shipping|delivery|home)\s+)+address\s*:\s*(?P<address>.+?)\s*$", re.IGNORECASE),
+    re.compile(
+        r"^\s*(?:please\s+)?(?:ship|send|deliver)\s+(?:(?:everything|it|my\s+orders?|orders?|them)\s+)?to\s+(?P<address>.+?)\s+"
+        r"(?:from\s+now\s+on|in\s+(?:the\s+)?future|going\s+forward|from\s+here\s+on|by\s+default)\s*[.!]?\s*$",
+        re.IGNORECASE,
+    ),
+)
+
+
+# "my address is wrong / old / the same": a comment about the address, not an address.
+_NOT_AN_ADDRESS_VALUE_WORDS = {
+    "wrong", "incorrect", "correct", "right", "fine", "ok", "okay", "old", "outdated", "new", "same", "different",
+    "changed", "missing", "invalid", "saved", "here", "there", "home", "work", "office", "unknown", "private", "secret",
+    "updated", "already", "on", "file", "set", "not", "no", "yes", "the", "a", "an", "and", "or", "it", "this", "that",
+}
+
+
 def _extract_address_change(text: str) -> str | None:
     match = _ADDRESS_CHANGE_RE.match(text)
+    if not match:
+        for pattern in _ADDRESS_STATEMENT_RES:
+            match = pattern.match(text)
+            if match:
+                words = re.findall(r"[a-z']+", match.group("address").lower())
+                if not any(ch.isdigit() for ch in match.group("address")) and all(w in _NOT_AN_ADDRESS_VALUE_WORDS for w in words):
+                    return None
+                break
     if not match:
         return None
     address = _strip_address_filler(match.group("address").strip())
