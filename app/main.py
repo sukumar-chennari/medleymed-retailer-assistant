@@ -156,12 +156,28 @@ ADDRESS_FILLER_RE = re.compile(r"^\s*" + _ADDRESS_LEAD_IN + r"[\s:,\-]+", re.IGN
 _ADDRESS_TRAILER_RE = re.compile(r"[\s,.!;]+(?:please|pls|plz|thanks|thank\s+you|thx|ty)[\s.!]*$", re.IGNORECASE)
 
 
+# The "no, ..." / "actually ..." that starts an answer to "ship to this address, or a
+# different one?": "no, send it to 5 Oak Lane, Leeds" was saved, and printed on the
+# receipt, as "Shipping to: no, send it to 5 Oak Lane, Leeds" (found Nov 15). "no" only
+# counts when a comma or a ship/send verb follows, so "No. 5 Oak St" keeps its "No.".
+_ADDRESS_ANSWER_WORDS_RE = re.compile(
+    r"^\s*(?:(?:actually|instead)[\s,.!]+"
+    # a street can be called "Well Street" or "Yes Lane": these only count with punctuation
+    r"|(?:nope|nah|well|ok|okay|yes|yeah|sure)\s*[,.!]\s*"
+    r"|no\s*,\s*|(?:no|nope|nah)\s+(?=(?:please\s+)?(?:ship|send|deliver)\b))+",
+    re.IGNORECASE,
+)
+
+
 def _strip_address_filler(text: str) -> str:
     """Naturally answering "should I ship to X, or give a different one?"
     tends to produce phrasing like "actually ship to 456 New Ave" rather
     than just the bare address — without this, that whole phrase gets saved
     and shown back verbatim in the order confirmation."""
-    return _ADDRESS_TRAILER_RE.sub("", ADDRESS_FILLER_RE.sub("", text)).strip()
+    text = _ADDRESS_ANSWER_WORDS_RE.sub("", text)
+    text = ADDRESS_FILLER_RE.sub("", text)
+    text = _ADDRESS_ANSWER_WORDS_RE.sub("", text)
+    return _ADDRESS_TRAILER_RE.sub("", text).strip()
 
 
 _ADDRESS_FILLER_ONLY_RE = re.compile(r"^\s*" + _ADDRESS_LEAD_IN + r"[\s:,\-]*$", re.IGNORECASE)
@@ -860,8 +876,8 @@ def _extract_address_change(text: str) -> str | None:
     match = _ADDRESS_CHANGE_RE.match(text)
     if not match:
         return None
-    address = match.group("address").strip()
-    return address if _looks_like_a_first_time_address(address) else None
+    address = _strip_address_filler(match.group("address").strip())
+    return address if address and _looks_like_a_first_time_address(address) else None
 
 
 def _is_address_query(text: str) -> bool:

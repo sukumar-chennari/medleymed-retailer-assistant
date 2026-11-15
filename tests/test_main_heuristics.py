@@ -630,3 +630,29 @@ class TestMoreWaysOfBackingOut:
     ])
     def test_does_not_decline(self, text):
         assert not main._declines(text), text
+
+
+class TestAnswerWordsBeforeAnAddress:
+    """Real bug (Nov 15): answering "ship to this address or a different one?" with
+    "no, send it to 5 Oak Lane, Leeds" saved, and printed on the receipt, the whole
+    sentence; "set my address as 7 Elm Rd, York please" kept the "please"."""
+
+    @pytest.mark.parametrize("text, expected", [
+        ("no, send it to 5 Oak Lane, Leeds", "5 Oak Lane, Leeds"),
+        ("nope, 5 Oak Lane, Leeds", "5 Oak Lane, Leeds"),
+        ("actually 5 Oak Lane, Leeds", "5 Oak Lane, Leeds"),
+        ("no send it to 5 Oak Lane", "5 Oak Lane"),
+        ("Okay, 5 Oak Lane", "5 Oak Lane"),
+        ("well, 4 Oak Rd", "4 Oak Rd"),
+        ("yes, ship to 5 Oak Lane, Leeds please", "5 Oak Lane, Leeds"),
+        ("7 Elm Rd, York please", "7 Elm Rd, York"),
+    ])
+    def test_stripped(self, text, expected):
+        assert main._strip_address_filler(text) == expected
+
+    @pytest.mark.parametrize("text", [
+        "No. 5 Oak St, Leeds", "No 5, Oak Street", "Nowhere Street 5, Leeds", "Nope Road 12", "Yes Street 3, Leeds",
+        "Well Street 4, Leeds", "10 Downing Street SW1A 2AA",
+    ])
+    def test_real_addresses_that_begin_with_such_words_are_untouched(self, text):
+        assert main._strip_address_filler(text) == text

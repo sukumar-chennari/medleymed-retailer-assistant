@@ -2264,3 +2264,21 @@ class TestNaturalNamesForTheExtraStrengthProduct:
     @pytest.mark.parametrize("text", ["how much is paracetamol 650", "price of extra strength paracetamol"])
     def test_the_price_names_the_one_product(self, text):
         assert _chat("s1", text) == "Paracetamol Extra Strength 650mg costs $6.49."
+
+
+class TestAddressAnswersAreStoredWithoutTheChatter:
+    def _placed_once(self):
+        store.save_address("demo_user", "12 Baker Street, London")
+        store.create_order("demo_user", "fev-003", "12 Baker Street, London", 1)
+
+    def test_no_send_it_to_x_after_the_address_question(self):
+        self._placed_once()
+        _chat("s1", "order ibuprofen")
+        reply = _chat("s1", "no, send it to 5 Oak Lane, Leeds")
+        assert "Shipping to: 5 Oak Lane, Leeds\n" in reply
+        assert store.get_address("demo_user") == "5 Oak Lane, Leeds"
+
+    def test_set_my_address_with_a_please(self):
+        reply = _chat("s1", "set my address as 7 Elm Rd, York please")
+        assert "saved 7 Elm Rd, York as your shipping address" in reply
+        assert store.get_address("demo_user") == "7 Elm Rd, York"
