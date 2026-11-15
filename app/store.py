@@ -140,6 +140,16 @@ def save_address(user_id: str, address: str) -> None:
         )
 
 
+def clear_address(user_id: str) -> None:
+    with _connect() as conn:
+        conn.execute("UPDATE users SET address = NULL WHERE user_id = ?", (user_id,))
+
+
+def clear_email(user_id: str) -> None:
+    with _connect() as conn:
+        conn.execute("UPDATE users SET email = NULL WHERE user_id = ?", (user_id,))
+
+
 def get_email(user_id: str) -> Optional[str]:
     user = get_user(user_id)
     return user["email"] if user else None

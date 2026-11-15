@@ -2316,3 +2316,54 @@ class TestAddressStatementsWithNoOrderWaiting:
         monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
         assert _chat("s1", text) == "from the model"
         assert store.get_address("demo_user") in (None, "")
+
+
+class TestRemovingSavedData:
+    """Real gap (Nov 15): there was no way to remove a saved address or email.
+    "delete my address" got "this demo only handles fever and cold", "forget my
+    email" got "what symptom is this for?"."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, isolated_db, monkeypatch):
+        # isolated_db is requested HERE: autouse fixtures run before pytestmark's, and
+        # this one writes to the store (my first version wrote 17 test orders, an
+        # address and an email into the real demo database; found and cleaned Nov 15).
+        def boom(*args, **kwargs):
+            raise AssertionError("the model must not be reached")
+        monkeypatch.setattr(main, "run_turn", boom)
+        store.save_address("demo_user", "12 Baker Street, London")
+        store.save_email("demo_user", "bob@gmail.com")
+        store.create_order("demo_user", "fev-001", "12 Baker Street, London", 1)
+
+    @pytest.mark.parametrize("text, address_kept, email_kept", [
+        ("delete my address", False, True), ("remove my shipping address", False, True),
+        ("forget my email", True, False), ("remove my email address", True, False),
+        ("forget my email please", True, False),
+        ("clear my data", False, False), ("erase my details", False, False), ("delete my account", False, False),
+    ])
+    def test_only_what_was_asked_is_removed(self, text, address_kept, email_kept):
+        reply = _chat("s1", text)
+        assert reply.startswith("Done — I've removed your saved")
+        assert (store.get_address("demo_user") is not None) == address_kept
+        assert (store.get_email("demo_user") is not None) == email_kept
+
+    def test_orders_are_never_removed_and_the_reply_says_so(self):
+        reply = _chat("s1", "clear my data")
+        assert "kept as order records" in reply
+        assert len(store.list_orders("demo_user")) == 1
+
+    def test_nothing_saved_is_reported_not_claimed_removed(self):
+        store.clear_address("demo_user")
+        reply = _chat("s1", "delete my address")
+        assert "didn't have a shipping address saved" in reply and "Done" not in reply
+
+    @pytest.mark.parametrize("text", ["what data do you store about me", "what information do you have on me"])
+    def test_what_is_stored_is_listed_from_the_real_data(self, text):
+        reply = _chat("s1", text)
+        assert "12 Baker Street, London" in reply and "bob@gmail.com" in reply and "Orders placed: 1" in reply
+
+    @pytest.mark.parametrize("text", ["delete my order", "remove the address from my order", "clear my cart", "forget it", "delete"])
+    def test_other_requests_are_left_alone(self, monkeypatch, text):
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        _chat("s1", text)
+        assert store.get_address("demo_user") == "12 Baker Street, London" and store.get_email("demo_user") == "bob@gmail.com"

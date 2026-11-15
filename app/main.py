@@ -1181,6 +1181,65 @@ def _email_to_save(text: str) -> str | None:
     return None
 
 
+# "delete my address" / "forget my email" / "clear my data": there was no way to remove a
+# saved address or email. The replies were a decline ("this demo only handles fever and
+# cold"), or for "forget my email", "what symptom is this for?" (found Nov 15). Orders
+# already placed are records and are NOT removed — the reply says so.
+_REMOVE_VERB_RE = re.compile(r"\b(?:delete|remove|erase|forget|clear|wipe)\b", re.IGNORECASE)
+_REMOVE_ADDRESS_RE = re.compile(r"\b(?:shipping\s+|delivery\s+|saved\s+|stored\s+|home\s+)?address(?:es)?\b", re.IGNORECASE)
+_REMOVE_EMAIL_RE = re.compile(r"\be-?mail(?:\s+address)?\b", re.IGNORECASE)
+_REMOVE_ALL_RE = re.compile(r"\b(?:data|details|information|info|everything|account|profile)\b", re.IGNORECASE)
+_DATA_QUERY_RE = re.compile(
+    r"\bwhat\s+(?:data|information|info|details)\b.{0,25}\b(?:store|stored|have|keep|hold|saved?)\b.{0,15}\b(?:about|on)\s+me\b",
+    re.IGNORECASE,
+)
+
+
+def _data_removal_reply(text: str) -> str | None:
+    words = re.findall(r"[a-z']+", text.lower())
+    if not words or len(words) > 10 or "?" in text or "@" in text:
+        return None
+    if not _REMOVE_VERB_RE.search(text) or not re.search(r"\b(?:my|the|our|saved|stored)\b", text, re.IGNORECASE):
+        return None
+    if _has_cancel_intent(text) or re.search(r"\borders?\b|\bmessages?\b|\bchat\b", text, re.IGNORECASE):
+        return None
+    wants_email = bool(_REMOVE_EMAIL_RE.search(text))
+    # "email address" is the email, not the shipping address
+    wants_address = bool(_REMOVE_ADDRESS_RE.search(_REMOVE_EMAIL_RE.sub(" ", text)))
+    wants_all = bool(_REMOVE_ALL_RE.search(text)) and not (wants_address or wants_email)
+    if not (wants_address or wants_email or wants_all):
+        return None
+    removed, absent = [], []
+    if wants_address or wants_all:
+        (removed if store.get_address("demo_user") else absent).append("shipping address")
+        store.clear_address("demo_user")
+    if wants_email or wants_all:
+        (removed if store.get_email("demo_user") else absent).append("email address")
+        store.clear_email("demo_user")
+    parts = []
+    if removed:
+        parts.append(f"Done — I've removed your saved {' and '.join(removed)}.")
+    if absent:
+        parts.append(f"I didn't have a {' or '.join(absent)} saved for you.")
+    if store.list_orders("demo_user"):
+        parts.append("Orders you've already placed are kept as order records — I can't delete those here.")
+    return " ".join(parts)
+
+
+def _data_query_reply(text: str) -> str | None:
+    if not _DATA_QUERY_RE.search(text):
+        return None
+    address, email = store.get_address("demo_user"), store.get_email("demo_user")
+    orders = store.list_orders("demo_user")
+    return (
+        "Here's what I have saved for you:\n"
+        f"- Shipping address: {address or 'none'}\n"
+        f"- Email address: {email or 'none'}\n"
+        f"- Orders placed: {len(orders)}\n\n"
+        'You can ask me to "delete my address" or "delete my email" at any time.'
+    )
+
+
 def _is_email_query(text: str) -> bool:
     words = re.findall(r"[a-z']+", text.lower())
     if not _words_ok(text) or "@" in text or words[0] not in _EMAIL_QUERY_STARTS:
@@ -2239,6 +2298,12 @@ def chat(req: ChatRequest):
             not pending_email_order_id and (email_to_save := _email_to_save(text))
         ):
             reply = _reply_for_email_save(email_to_save, text)
+            messages.append({"role": "user", "content": text})
+            messages.append({"role": "assistant", "content": reply})
+        elif text and not pending_product_id and not pending_address_confirmation and (
+            data_reply := (_data_removal_reply(text) or _data_query_reply(text))
+        ):
+            reply = data_reply
             messages.append({"role": "user", "content": text})
             messages.append({"role": "assistant", "content": reply})
         elif text and not pending_product_id and not pending_address_confirmation and _is_email_query(text):
