@@ -111,3 +111,15 @@ def test_a_failed_feedback_request_undoes_the_chosen_state():
 
 def test_an_unreadable_photo_is_reported_not_silently_dropped():
     assert "reader.onerror" in APP_JS
+
+
+def test_a_photo_in_a_chat_bubble_has_alt_text():
+    # Found Nov 16 by checking the live DOM: the <img> addBubble creates for an attached
+    # photo had no alt attribute, so a screen reader announced nothing useful (or the
+    # data URL). Behaviour verified in the in-app browser.
+    block = re.search(r'const img = document\.createElement\("img"\);(.*?)bubble\.appendChild\(img\);', APP_JS, re.S).group(1)
+    assert "img.alt =" in block
+
+
+def test_the_preview_image_in_the_page_also_has_alt_text():
+    assert re.search(r'<img[^>]*id="image-preview-img"[^>]*alt="[^"]+"', INDEX_HTML)

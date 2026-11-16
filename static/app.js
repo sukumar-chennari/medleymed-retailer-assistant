@@ -367,6 +367,9 @@ function addBubble(role, text, imageDataUrl, { feedback = role === "assistant" }
   if (imageDataUrl) {
     const img = document.createElement("img");
     img.src = imageDataUrl;
+    // Without an alt a screen reader announces the data URL (or nothing). The photo is
+    // the customer's own attachment, so say so (found Nov 16 in an accessibility sweep).
+    img.alt = role.startsWith("user") ? "Photo you attached" : "Attached photo";
     bubble.appendChild(img);
   }
   const textNode = document.createElement("span");
