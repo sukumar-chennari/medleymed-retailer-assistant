@@ -198,13 +198,19 @@ async function sendFeedback(rating, replyText, chosenBtn, otherBtn) {
   chosenBtn.disabled = true;
   otherBtn.disabled = true;
   try {
-    await fetch("/api/feedback", {
+    const res = await fetch("/api/feedback", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ session_id: sessionId, rating, reply_snippet: replyText.slice(0, 200) }),
     });
+    if (!res.ok) throw new Error(`Request failed (${res.status})`);
     loadMetrics();
   } catch (err) {
+    // Not recorded (server error or network failure): don't leave the button looking
+    // as if the rating was saved — undo it so it can be clicked again.
+    chosenBtn.classList.remove("chosen");
+    chosenBtn.disabled = false;
+    otherBtn.disabled = false;
     console.error("Failed to send feedback", err);
   }
 }
@@ -328,7 +334,11 @@ resetDemoButton.addEventListener("click", async () => {
 
   resetDemoButton.disabled = true;
   try {
-    await fetch("/api/reset-demo", { method: "POST" });
+    // Real bug (found Nov 16 in a real browser): a failed reset (HTTP 500) was treated as
+    // success — the chat was cleared and a new session started while the server still
+    // had every order, and no error was shown. fetch() only rejects on network failure.
+    const res = await fetch("/api/reset-demo", { method: "POST" });
+    if (!res.ok) throw new Error(`Request failed (${res.status})`);
     // Start a genuinely fresh conversation too — the server no longer
     // remembers the old session, so continuing it would be confusing.
     sessionId = newSessionId();
@@ -411,6 +421,13 @@ imageInput.addEventListener("change", () => {
     pendingImage = { b64, mediaType: file.type, dataUrl };
     imagePreviewImg.src = dataUrl;
     imagePreview.classList.remove("hidden");
+  };
+  reader.onerror = () => {
+    // The file could not be read (removed, permissions, cloud-only file): say so
+    // instead of silently attaching nothing.
+    imageInput.value = "";
+    openChat();
+    addBubble("assistant", "Sorry, I couldn't read that photo. Please try attaching it again.", null, { feedback: false });
   };
   reader.readAsDataURL(file);
 });

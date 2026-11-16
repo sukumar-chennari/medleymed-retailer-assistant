@@ -79,3 +79,35 @@ def test_text_input_maxlength_matches_the_backend_text_limit():
     match = re.search(r'id="text-input"[^>]*maxlength="(\d+)"', INDEX_HTML)
     assert match, "#text-input in static/index.html has no maxlength attribute"
     assert int(match.group(1)) == schemas.MAX_TEXT_LEN
+
+
+def _fetch_call_blocks(path: str) -> list[str]:
+    """The source around each `fetch("<path>"`: the assignment before it and the checks after."""
+    source = re.sub(r"//[^\n]*", "", APP_JS)
+    return [source[max(0, m.start() - 30): m.start() + 450] for m in re.finditer(rf'fetch\("{re.escape(path)}"', source)]
+
+
+def test_the_state_changing_calls_check_the_response_status():
+    # Real bug (found Nov 16 in a real browser): fetch() only rejects on a network
+    # failure, so a 500 from /api/reset-demo was treated as success — the chat was
+    # cleared and a new session started while the server still had every order, with
+    # no error shown. /api/feedback had the same blind spot: the 👍 looked saved when
+    # it was not. There is no JS runner here, so this keeps the checks from being
+    # removed again. (Behaviour was verified by hand in the in-app browser.)
+    for path in ("/api/reset-demo", "/api/feedback"):
+        blocks = _fetch_call_blocks(path)
+        assert blocks, f"no fetch of {path} found in static/app.js"
+        for block in blocks:
+            assert re.search(r"const res = await fetch\(", block), f"{path}: the response is not kept"
+            assert "if (!res.ok)" in block, f"{path}: the status is never checked"
+
+
+def test_a_failed_feedback_request_undoes_the_chosen_state():
+    source = re.sub(r"//[^\n]*", "", APP_JS)
+    catch_block = re.search(r"async function sendFeedback.*?catch \(err\) \{(.*?)\n  \}\n\}", source, re.S).group(1)
+    assert 'classList.remove("chosen")' in catch_block
+    assert catch_block.count("disabled = false") == 2
+
+
+def test_an_unreadable_photo_is_reported_not_silently_dropped():
+    assert "reader.onerror" in APP_JS
