@@ -2195,6 +2195,17 @@ def chat(req: ChatRequest):
             reply = "No problem — I won't place that order. Let me know if you change your mind."
             messages.append({"role": "user", "content": text})
             messages.append({"role": "assistant", "content": reply})
+        elif pending_address_confirmation and text and (named_switch := _resolve_named_product_order(text)):
+            # "order ibuprofen" / "actually paracetamol 650mg instead" while "ship to the
+            # address on file?" is open went to the model and left the OLD confirmation
+            # pending, so the customer's next "yes" shipped the product they had just
+            # said they did not want (found Nov 17). The new product replaces it.
+            store.clear_pending_address_confirmation(req.session_id)
+            switch_product, switch_quantity = named_switch
+            order = json.loads(tools.start_order(switch_product["id"], req.session_id, switch_quantity))
+            reply = _reply_for_start_order_result(order)
+            messages.append({"role": "user", "content": text})
+            messages.append({"role": "assistant", "content": reply})
         elif pending_address_confirmation and text:
             # Real bug, same trapping pattern already fixed for
             # pending_email_order_id/pending_product_id below but missing
