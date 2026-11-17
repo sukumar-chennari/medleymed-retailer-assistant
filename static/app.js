@@ -292,14 +292,21 @@ function renderCatalog(products) {
   });
 }
 
+// Search text and product text are compared in one plain form: phones and Macs type a
+// curly apostrophe, so "children’s" found nothing while "children's" found two (found
+// Nov 17 in a real browser), and a double space between words matched nothing either.
+function searchForm(text) {
+  return text.toLowerCase().replace(/[\u2018\u2019\u02bc]/g, "'").replace(/\s+/g, " ").trim();
+}
+
 function filterCatalog(query) {
-  const q = query.trim().toLowerCase();
+  const q = searchForm(query);
   if (!q) return allProducts;
   return allProducts.filter(
     (product) =>
-      product.name.toLowerCase().includes(q) ||
-      product.category.toLowerCase().includes(q) ||
-      product.active_ingredient.toLowerCase().includes(q)
+      searchForm(product.name).includes(q) ||
+      searchForm(product.category).includes(q) ||
+      searchForm(product.active_ingredient).includes(q)
   );
 }
 
