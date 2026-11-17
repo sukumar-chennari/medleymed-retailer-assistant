@@ -1067,7 +1067,7 @@ def _price_reply(text: str, shown_products: list[dict] | None = None) -> str | N
 # 12: "can I give ibuprofen to my 5 year old" got only "Children's Paracetamol Syrup
 # would be a good fit") or a made-up paediatric dose from the model.
 _IBUPROFEN_WORD_RE = re.compile(r"\b(?:ibuprofen|advil|brufen|nurofen|motrin|fev-003)\b", re.IGNORECASE)
-_CHILD_CUE_RE = re.compile(r"\(child\)|\b(?:child|children|kid|kids|toddler|baby|babies|infant|newborn)\b", re.IGNORECASE)
+_CHILD_CUE_RE = re.compile(contraindications.CHILD_CUE, re.IGNORECASE)
 
 
 def _ibuprofen_for_a_child_reply(text: str) -> str | None:

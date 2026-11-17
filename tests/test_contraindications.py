@@ -447,3 +447,62 @@ class TestWhoItIsForCanChangeMidConversation:
         reply = "For adults, Ibuprofen 200mg Tablets (fev-003) would be a good fit."
         screened, excluded = ci.screen_reply(reply, "fever\nchild\nwhat about for adults?", catalog)
         assert excluded == set() and "careful" not in screened.lower()
+
+
+class TestAChildrensProductNameIsNotAChild:
+    """Real bug in my Nov 12 change (found Nov 17 in a real browser): clicking "Ask
+    Assistant" on Children's Paracetamol Syrup put the word "Children's" in the
+    session, and an adult's later "order 2 ibuprofen" was refused with "you mentioned
+    a child"."""
+
+    @staticmethod
+    def _refusal(text):
+        return ci.refusal_for(store.find_product("fev-003"), text)
+
+    @pytest.mark.parametrize("text", [
+        "I'd like to order Children's Paracetamol Syrup\norder ibuprofen",
+        "show me the Children’s Cold & Cough Syrup\norder ibuprofen",
+        "do you have children's medicine\norder ibuprofen",
+        "ibuprofen vs Children's Paracetamol Syrup",
+        "what does the children's cough syrup cost",
+    ])
+    def test_the_product_name_alone_is_not_a_patient(self, text):
+        assert self._refusal(text) is None, text
+
+    @pytest.mark.parametrize("text", [
+        "for my children", "for children", "my children have a fever", "is it safe for children",
+        "children's paracetamol for my kid", "give children's syrup to my baby",
+    ])
+    def test_a_real_child_is_still_caught(self, text):
+        assert self._refusal(text), text
+
+    def test_main_uses_the_same_definition(self):
+        from app import main
+        assert main._ibuprofen_for_a_child_reply("ibuprofen vs Children's Paracetamol Syrup") is None
+        assert main._ibuprofen_for_a_child_reply("can children take ibuprofen")
+
+
+class TestAChildIsSeenEvenWhenTheAgeGlossWasSkipped:
+    """Real bug (found Nov 17): while an order is pending the "(child)" gloss is skipped
+    (an address must be stored exactly as typed), so "order ibuprofen for my 5 year old"
+    typed at that moment was not recognised as a child, and the "yes" that followed
+    ordered ibuprofen for a five-year-old."""
+
+    @staticmethod
+    def _refusal(text):
+        return ci.refusal_for(store.find_product("fev-003"), text)
+
+    @pytest.mark.parametrize("text", [
+        "order ibuprofen for my 5 year old", "for my 6 months old", "it is for my 8yo", "for my son",
+        "order ibuprofen for my daughter", "I'm 5",
+    ])
+    def test_a_stated_child_age_or_my_son_blocks_ibuprofen_without_the_gloss(self, text):
+        assert self._refusal(text), text
+
+    @pytest.mark.parametrize("text", [
+        "I'm 30, order ibuprofen", "my son is 4 and I'm 35", "for my husband", "12 Baker Street, London",
+        "order ibuprofen for my 14 year old", "7 Yo Street, Leeds", "I'm 5 minutes from the shop",
+        "my 5 year old has a fever\nactually for me, I'm an adult",
+    ])
+    def test_adults_addresses_and_teenagers_are_not_blocked(self, text):
+        assert self._refusal(text) is None, text

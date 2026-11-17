@@ -97,3 +97,18 @@ class TestRoute:
     def test_a_stated_age_works_as_the_answer_to_the_question_too(self):
         self._chat("s1", "I have a fever")
         assert "Children's Paracetamol Syrup" in self._chat("s1", "it's for my 3 year old")
+
+
+class TestStatesAChildWithoutTheGloss:
+    @pytest.mark.parametrize("text", [
+        "my 5 year old", "for my 6 months old", "my 10yo has a fever", "for my son", "my little daughter", "I'm 5",
+    ])
+    def test_child(self, text):
+        assert age_hints.states_a_child(text), text
+
+    @pytest.mark.parametrize("text", [
+        "", "I'm 30", "my wife", "my son and I", "my son is 4 and I'm 35", "my 15 year old", "for the whole family",
+        "7 Yo Street", "I'm 5 minutes from the shop", "I am 10 minutes away", "order ibuprofen",
+    ])
+    def test_not_clearly_a_child(self, text):
+        assert not age_hints.states_a_child(text), text

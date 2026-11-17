@@ -20,6 +20,8 @@ covered — ask a pharmacist" rather than judged. Dependency-free on purpose.
 import contextvars
 import re
 
+from app import age_hints
+
 _NEGATION_RE = re.compile(
     r"\b(?:no|not|never|without|nor|neither|isn['’]t|aren['’]t|don['’]t|doesn['’]t|didn['’]t|hasn['’]t|haven['’]t|free\s+of|history\s+of\s+no)\b|n['’]t\b",
     re.IGNORECASE,
@@ -37,6 +39,11 @@ def _negated(context: str) -> bool:
 
 
 _NEGATION_LOOKBACK = 25
+
+CHILD_CUE = (
+    r"\(child\)|\b(?:child|kid|kids|toddler|baby|babies|infant|newborn)\b"
+    r"|\bchildren\b(?![\'\u2019]s\s+(?:paracetamol|cold|cough|syrup|medicine|medication|product|fever))"
+)
 
 # condition -> (label shown to the customer, pattern)
 _CONDITIONS = {
@@ -61,7 +68,10 @@ _CONDITIONS = {
                       # brand names people actually type (Nov 10)
                       r"|\b(?:eliquis|xarelto|coumadin|plavix|pradaxa|dabigatran|edoxaban|ticagrelor|brilinta|prasugrel)\b"),
     # age_hints.py appends "(child)" for "my 5 year old", "my son", "6 months old"...
-    "child": ("a child", r"\(child\)|\b(?:child|children|kid|kids|toddler|baby|babies|infant|newborn)\b"),
+    # "Children's Paracetamol Syrup" / "children's medicine" name a PRODUCT, not the patient
+    # (found Nov 17: after "Ask Assistant" on the children's syrup, an adult's ibuprofen
+    # order was refused with "you mentioned a child").
+    "child": ("a child", CHILD_CUE),
     "gi_bleed": ("stomach bleeding", r"\b(?:stomach|gastric|gi|gastrointestinal|intestinal)\s+bleed(?:ing|s)?\b|\bbleeding\s+(?:in\s+(?:my\s+)?)?stomach\b"),
 }
 _COMPILED = {key: (label, re.compile(pattern, re.IGNORECASE)) for key, (label, pattern) in _CONDITIONS.items()}
@@ -179,7 +189,10 @@ _ADULT_CUE_RE = re.compile(r"\badults?\b|\bmyself\b|\bfor\s+me\b|\bgrown[\s-]?up
 
 def _child_still_applies(text: str) -> bool:
     lines = text.split("\n")
-    child_at = [i for i, line in enumerate(lines) if _unnegated(_COMPILED["child"][1], line)]
+    child_at = [
+        i for i, line in enumerate(lines)
+        if _unnegated(_COMPILED["child"][1], line) or age_hints.states_a_child(line)
+    ]
     if not child_at:
         return False
     adult_at = [i for i, line in enumerate(lines) if _ADULT_CUE_RE.search(line) and not _negated(line[: _ADULT_CUE_RE.search(line).start()][-_NEGATION_LOOKBACK:])]

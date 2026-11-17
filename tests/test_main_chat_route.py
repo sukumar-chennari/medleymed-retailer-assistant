@@ -2367,3 +2367,14 @@ class TestRemovingSavedData:
         monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
         _chat("s1", text)
         assert store.get_address("demo_user") == "12 Baker Street, London" and store.get_email("demo_user") == "bob@gmail.com"
+
+
+class TestAskingAboutTheChildrensProductDoesNotBlockAnAdult:
+    @pytest.mark.parametrize("product", ["Children's Paracetamol Syrup", "Children's Cold & Cough Syrup"])
+    def test_ask_assistant_then_an_adult_orders_ibuprofen(self, monkeypatch, product):
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        reply = _chat("s1", f"I'd like to order {product}")
+        assert "shipping address" in reply
+        reply = _chat("s1", "order 2 ibuprofen")
+        assert "you mentioned a child" not in reply
+        assert store.get_pending_order("s1") == {"product_id": "fev-003", "quantity": 2}

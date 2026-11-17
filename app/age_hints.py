@@ -25,8 +25,10 @@ _WORD_NUMBERS = {
 }
 _NUM = r"(\d{1,3}|" + "|".join(_WORD_NUMBERS) + r")"
 _YEARS_OLD_RE = re.compile(rf"\b{_NUM}[\s-]*(?:years?|yrs?|y/?o)[\s-]*old\b", re.IGNORECASE)
-_IM_AGE_RE = re.compile(rf"\b(?:i\s*'?\s*a?m|i\s+am|age[d]?|aged)\s+{_NUM}\b(?!\s*(?:kg|mg|cm|%|ml|days?|weeks?|months?|hours?))", re.IGNORECASE)
-_SHORT_AGE_RE = re.compile(r"\b(\d{1,3})\s*(?:yo|y\.o\.|yr|yrs)\b", re.IGNORECASE)
+_IM_AGE_RE = re.compile(rf"\b(?:i\s*'?\s*a?m|i\s+am|age[d]?|aged)\s+{_NUM}\b(?!\s*(?:kg|mg|cm|%|ml|days?|weeks?|months?|hours?|minutes?|mins?|miles?|km|blocks?|stops?|away))", re.IGNORECASE)
+_SHORT_AGE_RE = re.compile(
+    r"\b(\d{1,3})\s*(?:yo|y\.o\.|yr|yrs)\b(?!\s+(?:street|st|road|rd|lane|ln|avenue|ave|nagar|colony|marg))", re.IGNORECASE
+)
 _INFANT_AGE_RE = re.compile(rf"\b{_NUM}[\s-]*(?:months?|weeks?|days?)[\s-]*old\b", re.IGNORECASE)
 _TEEN_RE = re.compile(r"\b(?:teen|teens|teenage|teenager|adolescent)\b", re.IGNORECASE)
 _CHILD_RELATION_RE = re.compile(
@@ -92,6 +94,28 @@ def age_group(text: str) -> str | None:
     if adult and not child:
         return "adult"
     return None
+
+
+_MY_CHILD_RE = re.compile(
+    r"\bmy\s+(?:\w+\s+){0,2}?(?:son|daughter|grandson|granddaughter|nephew|niece)\b", re.IGNORECASE
+)
+
+
+def states_a_child(text: str) -> bool:
+    """True when the text itself says the patient is a child — a stated age under 12
+    ("my 5 year old", "6 months old", "5yo") or "my son/daughter" — without needing the
+    "(child)" gloss. While an order is pending the gloss is skipped (an address must be
+    stored exactly as typed), which left "order ibuprofen for my 5 year old" typed at that
+    moment unseen by the child check (found Nov 17). Conservative: any adult age or
+    relation in the same text makes it False."""
+    if not text or _MIXED_RE.search(text) or _ADULT_RELATION_RE.search(text) or _TEEN_RE.search(text):
+        return False
+    if _INFANT_AGE_RE.search(text):
+        return True
+    ages = _ages(text)
+    if ages:
+        return all(a < _CHILD_BELOW for a in ages)
+    return bool(_MY_CHILD_RE.search(text))
 
 
 def gloss(text: str) -> str:
