@@ -29,6 +29,22 @@ run entirely on-disk with no server or paid service involved.
   Chroma (run standalone with `python -m app.data_ingest`)
 - `app/retrieval.py` — vector search over the Chroma collection
 - `app/data/knowledge_base/*.md` — the RAG corpus (one file per catalog item)
+- `app/red_flags.py` — emergencies (overdose, a baby's fever, chest pain...) are
+  answered with a fixed "get care now" reply and never reach the ordinary flow
+- `app/contraindications.py` — conditions, medicines and allergies the customer
+  states (including "my 5 year old") are checked against what each product's own
+  information says; a ruled-out product is left out of a recommendation or its
+  order is refused, with the reason
+- `app/interactions.py`, `app/comparison.py`, `app/brands.py` — "can I take X and Y
+  together?", "X vs Y" and brands we don't stock, answered from the knowledge base
+  text or the catalog in code rather than from the model's general knowledge
+- `app/symptom_plan.py`, `app/age_hints.py` — a cough with a fever and a cold
+  ("several symptoms in one message") and who the medicine is for ("my son")
+- `app/spellfix.py`, `app/hinglish.py` — conservative spelling fixes and romanised
+  Hindi / Telugu (and Devanagari / Telugu script) symptom words, glossed into English
+  before the deterministic handlers see them
+- `app/safety_topics.py` — safety topics (pregnancy, alcohol, storage...) a reply
+  may only state if the knowledge base does
 - `app/store.py` — SQLite-backed app state (orders, sessions, addresses) —
   `app/data/app.db`, created automatically on first run
 - `app/main.py` — FastAPI routes and the deterministic order/address/email
@@ -108,15 +124,15 @@ module (`test_guardrails.py`, `test_tools*.py`, `test_data_ingest.py`,
 `test_agent*.py`, `test_main*.py`, `test_retrieval*.py`, `test_store.py`),
 plus `test_catalog_integrity.py` and `test_frontend_schema_sync.py` (which
 keeps the hand-copied limits in `static/` in step with `app/schemas.py`).
-Anything touching the database runs against an isolated temp DB (see
-`tests/conftest.py`'s `isolated_db` fixture), never the real
-`app/data/app.db` the live demo uses. Needs no *chat* model — but
+Every test runs against its own throw-away database (an autouse fixture in
+`tests/conftest.py`, which `isolated_db` builds on), never the real
+`app/data/app.db` the live demo uses — `test_database_isolation.py` proves it. Needs no *chat* model — but
 `test_retrieval.py`/`test_retrieval_search.py` do call the real, local
 embedding model (`nomic-embed-text`) against the real, already-ingested
 knowledge base, since unlike the chat model that call has no sampling
 anywhere in it (verified: the same query returns byte-identical results
 every time), so it's safe to assert on exactly — not flaky the way an LLM
-*generation* would be. Runs in a couple seconds:
+*generation* would be. Runs in well under a minute (about 35 s):
 
 ```bash
 python -m pytest tests/ -v
@@ -152,6 +168,21 @@ tool name) robust to the model's own wording, rather than exact text.
 Runs against an isolated temp database, never the real demo data. Both of
 these are intentionally slow and excluded from CI, the same reasoning as
 above.
+
+Two randomised checks sit beside those. `tests/test_state_invariants.py` is part of
+the normal suite: seeded random sessions (orders, addresses, emails, cancels,
+questions, junk) with the chat model stubbed out, and after EVERY turn it checks
+invariants — an order exists exactly when the reply says "Order confirmed!", the
+saved address is one the customer really gave, the safety rules hold, two
+sessions never see each other's state (`FUZZ_SEQUENCES` / `FUZZ_SEED` change the
+size and seed). `tests/model_fuzz.py` runs the same invariants through the REAL
+local chat model, which the stubbed version cannot reach (free-text answers, tool
+calls, the guardrail middleware): it needs Ollama, takes about 25 s per session,
+is not in CI, and prints each violation the moment it is found:
+
+```bash
+PYTHONPATH=. python tests/model_fuzz.py [sessions=25] [seed=1] [turns=7]
+```
 
 `.github/workflows/tests.yml` runs this same suite on every push/PR to
 `main` — it installs Ollama and pulls `nomic-embed-text` first, since
