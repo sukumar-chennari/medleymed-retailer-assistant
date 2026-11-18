@@ -33,7 +33,7 @@ class TestGloss:
 
     @pytest.mark.parametrize("text", [
         "I have a fever", "I have a cold", "my baby has a cough", "order Ibuprofen 200mg Tablets", "",
-        "mere bachhe ke liye dawai chahiye (child)", "the bach choir sings", "I need a sardine sandwich",
+        "mere bachhe ke liye dawai chahiye (child; I want)", "the bach choir sings", "I need a sardine sandwich",
     ])
     def test_english_text_and_already_glossed_text_are_unchanged(self, text):
         assert hinglish.gloss(text) == text
@@ -193,3 +193,30 @@ class TestRouteInOtherScripts:
         reply = self._chat("s1", address)
         assert f"Shipping to: {address}\n" in reply + "\n"
         assert store.get_address("demo_user") == address
+
+
+class TestShoppingWords:
+    """Found Nov 18: "ibuprofen ki kimat" and "mujhe 2 ibuprofen chahiye" reached the model,
+    while the same sentences in English are answered in code."""
+
+    @pytest.mark.parametrize("text, english", [
+        ("ibuprofen ki kimat", "price"), ("ibuprofen ki keemat kya hai", "price"), ("paracetamol ka daam", "price"),
+        ("ibuprofen kitne ka hai", "how much is it"),
+        ("mujhe ibuprofen chahiye", "I want"), ("ibuprofen dena", "give me"), ("ibuprofen de do", "give me"),
+        ("ibuprofen bhej do", "send me"),
+    ])
+    def test_glossed(self, text, english):
+        assert f"({english})" in hinglish.gloss(text) or f"; {english}" in hinglish.gloss(text)
+
+    @pytest.mark.parametrize("text", ["I want ibuprofen", "how much is ibuprofen", "give me ibuprofen", "price of ibuprofen", "12 Dam Road"])
+    def test_english_and_addresses_are_untouched(self, text):
+        assert hinglish.gloss(text) == text
+
+
+@pytest.mark.parametrize("text", [
+    "mere bachhe ke liye dawai chahiye", "ibuprofen ki kimat", "mujhe 2 ibuprofen chahiye", "ibuprofen bhej do",
+    "mujhe bukhar hai, dawai chahiye",
+])
+def test_glossing_twice_changes_nothing(text):
+    once = hinglish.gloss(text)
+    assert hinglish.gloss(once) == once

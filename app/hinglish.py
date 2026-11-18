@@ -40,6 +40,16 @@ _GLOSSARY += [
     (r"pil+alu|pil+ala|pil+avadu|pil+aki|pil+a\b|bidda\w*", "child"),
     (r"kapham|kaphamu", "wet cough with phlegm"),
 ]
+# Shopping words (found Nov 18: "ibuprofen ki kimat" and "mujhe 2 ibuprofen chahiye" reached the
+# model, while the same sentences in English are answered in code). Glossed into the English
+# the order and price handlers already understand.
+_GLOSSARY += [
+    (r"daa+m|k[ie]+mat|q[ie]+mat|kitni\s+k[ie]+mat", "price"),
+    (r"kitne\s+(?:ka|ke|ki)\s+(?:hai|hain)", "how much is it"),
+    (r"chaa?hiy[ea]|chaa?hie", "I want"),
+    (r"de\s*do|dedo|dena", "give me"),
+    (r"bhej\s*do|bhejo|bhej\s+dena", "send me"),
+]
 _COMPILED = [(re.compile(rf"\b(?:{pattern})\b", re.IGNORECASE), gloss) for pattern, gloss in _GLOSSARY]
 
 # Devanagari and Telugu SCRIPT. Plain substring matching: \b is unusable here
@@ -80,10 +90,10 @@ def gloss(text: str) -> str:
     lower = text.lower()
     added = []
     for pattern, english in _COMPILED:
-        if pattern.search(text) and english not in added and not re.search(rf"\b{re.escape(english)}\b", lower):
+        if pattern.search(text) and english not in added and not re.search(rf"\b{re.escape(english.lower())}\b", lower):
             added.append(english)
     for words, english in _SCRIPT_GLOSSARY:
-        if any(word in text for word in words) and english not in added and not re.search(rf"\b{re.escape(english)}\b", lower):
+        if any(word in text for word in words) and english not in added and not re.search(rf"\b{re.escape(english.lower())}\b", lower):
             added.append(english)
     if not added:
         return text

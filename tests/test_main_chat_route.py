@@ -2378,3 +2378,23 @@ class TestAskingAboutTheChildrensProductDoesNotBlockAnAdult:
         reply = _chat("s1", "order 2 ibuprofen")
         assert "you mentioned a child" not in reply
         assert store.get_pending_order("s1") == {"product_id": "fev-003", "quantity": 2}
+
+
+class TestHinglishShoppingSentences:
+    @pytest.fixture(autouse=True)
+    def _no_model(self, monkeypatch):
+        def boom(*args, **kwargs):
+            raise AssertionError("the model must not be reached")
+        monkeypatch.setattr(main, "run_turn", boom)
+
+    @pytest.mark.parametrize("text", ["ibuprofen ki kimat", "ibuprofen ki keemat kya hai", "ibuprofen kitne ka hai"])
+    def test_a_price_question_is_answered_from_the_catalog(self, text):
+        assert _chat("s1", text) == "Ibuprofen 200mg Tablets costs $5.29."
+
+    @pytest.mark.parametrize("text, quantity", [
+        ("mujhe ibuprofen chahiye", 1), ("mujhe 2 ibuprofen chahiye", 2), ("ibuprofen dena", 1),
+        ("ibuprofen bhej do", 1), ("2 ibuprofen bhej do", 2),
+    ])
+    def test_a_want_sentence_starts_the_order(self, text, quantity):
+        assert "shipping address" in _chat("s1", text)
+        assert store.get_pending_order("s1") == {"product_id": "fev-003", "quantity": quantity}
