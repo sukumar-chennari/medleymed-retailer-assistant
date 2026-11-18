@@ -278,8 +278,26 @@ def set_current_text(text: str) -> None:
     _current_text.set(text or "")
 
 
+# Text the SYSTEM puts inside the stored user message is not the customer's words:
+#   "[Image analysis: ...]"  what the photo-reading step saw — a photo of an ibuprofen box
+#                            carries the box's own warnings (ulcers, kidney, heart,
+#                            pregnancy, "keep away from children"); read as the customer's
+#                            conditions, ordering the medicine they had photographed was
+#                            refused with "you mentioned kidney problems" (found Nov 18);
+#   "[Detected a ... Matching catalog products: ...]" / "[Clarify: ...]"  hints injected for
+#                            the model, which list product descriptions such as "formulated
+#                            for children" and so made the child condition true.
+_SYSTEM_NOTE_RE = re.compile(
+    r"\[(?:Image analysis|Detected a|Clarify|Photo attached)\b.*?\](?=\s*(?:\n|$))", re.DOTALL | re.IGNORECASE
+)
+
+
+def without_system_notes(text: str) -> str:
+    return _SYSTEM_NOTE_RE.sub(" ", text or "")
+
+
 def stated_text(history_user_texts: list[str]) -> str:
-    return "\n".join([*history_user_texts, _current_text.get()])
+    return "\n".join(without_system_notes(t) for t in [*history_user_texts, _current_text.get()])
 
 
 _RECOMMENDING_RE = re.compile(

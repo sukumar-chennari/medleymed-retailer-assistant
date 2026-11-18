@@ -506,3 +506,84 @@ class TestAChildIsSeenEvenWhenTheAgeGlossWasSkipped:
     ])
     def test_adults_addresses_and_teenagers_are_not_blocked(self, text):
         assert self._refusal(text) is None, text
+
+
+LABEL_PHOTO = (
+    "what is this\n[Image analysis: Ibuprofen 200mg tablets. Warnings: not recommended for people with a history of "
+    "stomach ulcers, kidney problems, or heart conditions. Pregnant women should avoid ibuprofen. Keep away from "
+    "children. Do not take with blood thinners or other NSAIDs.]"
+)
+
+
+class TestAPhotoOfALabelIsNotTheCustomersMedicalHistory:
+    """Real bug (found Nov 18): the photo-reading step's "[Image analysis: ...]" is stored in
+    the history as part of the user's message. A photo of an ibuprofen box carries the
+    box's own warnings (ulcers, kidney, heart, pregnancy, children, blood thinners), which
+    were read as the customer's conditions: ordering the medicine they had just
+    photographed was refused with "you mentioned kidney problems"."""
+
+    @staticmethod
+    def _refusal(texts, product_id="fev-003"):
+        return ci.refusal_for(store.find_product(product_id), ci.stated_text(texts))
+
+    def test_the_label_text_states_no_condition(self):
+        assert ci.conditions_in(ci.stated_text([LABEL_PHOTO])) == set()
+
+    @pytest.mark.parametrize("product_id", ["fev-001", "fev-003", "col-002", "col-003"])
+    def test_no_product_is_refused_because_of_a_label_photo(self, product_id):
+        assert self._refusal([LABEL_PHOTO], product_id) is None
+
+    def test_what_the_customer_really_says_is_still_counted(self):
+        assert "stomach ulcer" in self._refusal([LABEL_PHOTO, "I have a stomach ulcer"])
+        assert "kidney problems" in self._refusal(["I have kidney disease, what is this\n[Image analysis: Ibuprofen 200mg tablets.]"])
+
+    def test_a_multi_line_analysis_is_removed_whole(self):
+        text = ci.stated_text(["x\n[Image analysis: line one\nkidney problems on line two]\nI am 30"])
+        assert "kidney" not in text and "I am 30" in text
+
+    def test_start_order_goes_through_after_a_label_photo(self):
+        store.save_session_messages("s-photo", [{"role": "user", "content": LABEL_PHOTO}])
+        ci.set_current_text("order Ibuprofen 200mg Tablets")
+        assert "error" not in json.loads(tools.start_order("fev-003", "s-photo"))
+
+    def test_start_order_is_still_refused_when_the_customer_states_a_condition_after_the_photo(self):
+        store.save_session_messages("s-photo2", [{"role": "user", "content": LABEL_PHOTO}, {"role": "user", "content": "I have a stomach ulcer"}])
+        ci.set_current_text("order Ibuprofen 200mg Tablets")
+        assert "error" in json.loads(tools.start_order("fev-003", "s-photo2"))
+
+    def test_the_completion_check_ignores_the_label_too(self):
+        from app import main
+        store.save_session_messages("s-photo3", [{"role": "user", "content": LABEL_PHOTO}])
+        ci.set_current_text("12 Baker Street, London")
+        assert main._refusal_at_completion("s-photo3", "fev-003") is None
+
+
+class TestInjectedModelHintsAreNotTheCustomersWords:
+    """The same fault through a second door (found Nov 18): the "[Detected a ... Matching
+    catalog products: ...]" hint stored in the user message lists product descriptions,
+    and the children's syrups' "formulated for children" made the child condition true for
+    the rest of the session."""
+
+    HINT = (
+        "I have a fever, what should I take\n[Detected a fever-related medicine/symptom mention. Matching catalog "
+        "products (don't call lookup_symptom again): {\"matched\": true, \"products\": [{\"id\": \"fev-004\", \"name\": "
+        "\"Children's Paracetamol Syrup\", \"description\": \"Liquid fever reducer formulated for children.\"}]}. "
+        "Present these as a recommendation and ask if they'd like to order one — do NOT call start_order yet unless "
+        "this message already contains clear ordering language (e.g. 'order X', 'buy X'); wait for their next "
+        "message to confirm.]"
+    )
+
+    def test_the_hint_block_states_no_condition(self):
+        assert ci.conditions_in(ci.stated_text([self.HINT])) == set()
+
+    def test_ibuprofen_is_not_refused_after_such_a_turn(self):
+        assert ci.refusal_for(store.find_product("fev-003"), ci.stated_text([self.HINT])) is None
+
+    def test_the_clarify_note_and_the_unreadable_photo_note_are_removed_too(self):
+        text = ci.stated_text(["my kid\n[Clarify: is this for a child or an adult?]", "[Photo attached — could not be read]"])
+        assert "Clarify" not in text and "Photo attached" not in text and "my kid" in text
+
+    def test_the_customers_own_words_in_the_same_message_still_count(self):
+        assert "a child" in ci.refusal_for(
+            store.find_product("fev-003"), ci.stated_text(["it's for my baby\n" + self.HINT.split("\n", 1)[1]])
+        )
