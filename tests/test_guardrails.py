@@ -538,3 +538,28 @@ class TestToolCallJsonForAToolThatDoesNotExist:
     ])
     def test_ordinary_text_is_not(self, text):
         assert not guardrails.is_tool_call_json(text), text
+
+
+class TestMorePleasantriesAreAnsweredInCode:
+    """Found Nov 18 against the real route: "good night", "gn", "tq", "thank u", "dhanyavaad",
+    "shukriya", "alvida", "namaste" all reached the model — slow and unpredictable for a
+    plain goodbye or hello."""
+
+    @pytest.mark.parametrize("text", [
+        "good night", "Good Night!", "gn", "tq", "thank u", "thank you so much", "dhanyavaad", "ok dhanyavad",
+        "shukriya", "alvida", "shubh ratri", "see you", "take care", "thankyou", "tysm", "goodnight",
+    ])
+    def test_goodbyes(self, text):
+        assert guardrails.deterministic_pleasantry_reply(text) == guardrails.BYE_REPLY
+
+    @pytest.mark.parametrize("text", ["namaste", "Namaskaram", "vanakkam", "salaam", "hola", "bonjour"])
+    def test_greetings(self, text):
+        assert guardrails.deterministic_pleasantry_reply(text) == guardrails.GREETING_REPLY
+
+    @pytest.mark.parametrize("text", [
+        "fever at night", "I can't sleep at night", "night shift worker with a cold", "good night, cancel my order",
+        "thank you, order it", "take care of my baby", "please take care of my cold", "what is the price, thanks",
+        "nahi", "haan", "ok",
+    ])
+    def test_real_requests_and_ambiguous_words_are_not_pleasantries(self, text):
+        assert guardrails.deterministic_pleasantry_reply(text) is None, text

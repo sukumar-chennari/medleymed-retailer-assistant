@@ -517,8 +517,23 @@ GREETING_WORDS = {
     "hi", "hii", "hiii", "hio", "hello", "helo", "hey", "hiya", "yo", "sup",
     "whatup", "whatsup", "wassup", "morning", "morinig", "mornign",
     "afternoon", "evening", "buddy",
+    # Hindi / Telugu / Tamil / other common openers (found Nov 18: they went to the model)
+    "namaste", "namaskar", "namaskaram", "vanakkam", "salaam", "salam", "hola", "bonjour", "hallo", "heya",
 }
-BYE_WORDS = {"thanks", "thank", "thx", "ty", "bye", "goodbye", "cya", "cheers"}
+BYE_WORDS = {
+    "thanks", "thank", "thx", "ty", "bye", "goodbye", "cya", "cheers",
+    # shorthand and romanised Hindi — "thank u", "tq", "dhanyavaad", "shukriya", "alvida", "gn" all
+    # reached the model, which is slow and unpredictable for a plain goodbye (found Nov 18)
+    "thankyou", "thanku", "tq", "tqs", "tysm", "thnx", "thnks", "dhanyavaad", "dhanyavad", "dhanyawad", "dhanyawaad",
+    "shukriya", "shukria", "alvida", "goodnight", "gn", "nite", "byee", "byeee",
+}
+# Two-word goodbyes. Only as whole phrases: "night" alone must stay a normal word ("fever at night").
+BYE_PHRASE_RES = tuple(
+    re.compile(pattern) for pattern in (
+        r"\bgood night\b", r"\btake care\b(?!\s+of\b)", r"\bsee (?:you|ya)\b", r"\bshubh ratri\b",
+        r"\bphir milenge\b", r"\bthank (?:u|you)\b",
+    )
+)
 
 # Maps every recognized time-of-day word (including its typo variants) to the
 # canonical period, so a message naming a period gets checked against the
@@ -612,7 +627,7 @@ def deterministic_pleasantry_reply(text: str, now: datetime.datetime | None = No
 
     if len(words) > MAX_PLEASANTRY_WORDS:
         return None
-    if any(w in BYE_WORDS for w in words):
+    if any(w in BYE_WORDS for w in words) or any(pattern.search(normalized) for pattern in BYE_PHRASE_RES):
         return BYE_REPLY
     if any(w in GREETING_WORDS for w in words):
         return _greeting_reply(words, now)
