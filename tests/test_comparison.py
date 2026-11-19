@@ -126,3 +126,50 @@ class TestRoute:
         assert self._chat("s1", "what is ibuprofen used for") == "from the model"
         reply = self._chat("s2", "can I take paracetamol and ibuprofen together")
         assert "how they compare" not in reply and "doesn't say whether" in reply
+
+
+class TestExactProductsNamedInAComparison:
+    """Found Nov 19: "which is stronger paracetamol 650 or ibuprofen" compared the 500mg
+    paracetamol ("For paracetamol I've used Paracetamol 500mg Tablets"), "paracetamol 500
+    vs 650" was not understood, and "compare ibuprofen and cold and flu" went to the model."""
+
+    @staticmethod
+    def _ids(text):
+        result = comparison.targets(text, store.get_catalog(), None)
+        return None if result is None else [p["id"] for p in result[0]]
+
+    @pytest.mark.parametrize("text, ids", [
+        ("which is stronger paracetamol 650 or ibuprofen", ["fev-002", "fev-003"]),
+        ("ibuprofen vs paracetamol 650", ["fev-003", "fev-002"]),
+        ("paracetamol 500 vs 650", ["fev-001", "fev-002"]),
+        ("paracetamol 500mg vs 650mg", ["fev-001", "fev-002"]),
+        ("compare ibuprofen and cold and flu", ["fev-003", "col-003"]),
+        ("compare the cold & flu and ibuprofen", ["col-003", "fev-003"]),
+        ("extra strength paracetamol vs ibuprofen", ["fev-002", "fev-003"]),
+        ("compare children's paracetamol syrup and paracetamol 500mg", ["fev-004", "fev-001"]),
+    ])
+    def test_the_named_products_are_the_ones_compared(self, text, ids):
+        assert self._ids(text) == ids
+
+    def test_no_default_product_note_when_the_strength_was_named(self):
+        _, notes = comparison.targets("which is stronger paracetamol 650 or ibuprofen", store.get_catalog(), None)
+        assert not any(n.startswith("For paracetamol") for n in notes)
+
+    @pytest.mark.parametrize("text, ids", [
+        ("paracetamol vs ibuprofen", ["fev-001", "fev-003"]),
+        ("difference between cetirizine and pseudoephedrine", ["col-001", "col-002"]),
+    ])
+    def test_unqualified_ingredients_keep_using_the_default_product(self, text, ids):
+        assert self._ids(text) == ids
+        _, notes = comparison.targets(text, store.get_catalog(), None)
+        assert (text == "paracetamol vs ibuprofen") == any("I've used" in n for n in notes)
+
+
+def test_the_route_compares_the_650_when_the_650_was_named(monkeypatch):
+    # end to end through /api/chat (the model must not be reached)
+    def boom(*args, **kwargs):
+        raise AssertionError("the model must not be reached")
+    monkeypatch.setattr(main, "run_turn", boom)
+    reply = TestClient(main.app).post("/api/chat", json={"session_id": "cmp", "text": "which is stronger paracetamol 650 or ibuprofen"}).json()["reply"]
+    assert "Paracetamol Extra Strength 650mg (fev-002)" in reply and "Ibuprofen 200mg Tablets (fev-003)" in reply
+    assert "(fev-001)" not in reply

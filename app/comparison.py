@@ -48,10 +48,54 @@ def _representative(ingredient: str, catalog: list[dict]) -> dict | None:
     return (adults or options or [None])[0]
 
 
+_NAME_WITH_STRENGTH_RE = re.compile(r"^([a-z]+)(?:\s+extra\s+strength)?\s+(\d+)mg\b")
+_GENERIC_TAIL_RE = re.compile(r"\s+(?:multi[- ]symptom|relief|tablets|syrup)\b.*$")
+
+
+def _aliases(product: dict) -> list[str]:
+    """Ways a customer names ONE product: its full name, "paracetamol 650" / "paracetamol
+    650mg", "extra strength paracetamol", and for "Cold & Flu Multi-Symptom Relief" the
+    "cold and flu" they actually type."""
+    name = product["name"].lower().replace("&", "and")
+    aliases = [name, product["name"].lower()]
+    strength = _NAME_WITH_STRENGTH_RE.match(name)
+    if strength:
+        ingredient, number = strength.group(1), strength.group(2)
+        aliases += [f"{ingredient} {number}mg", f"{ingredient} {number} mg", f"{ingredient} {number}"]
+        if "extra strength" in name:
+            aliases += [f"{ingredient} extra strength", f"extra strength {ingredient}"]
+    if "&" in product["name"]:
+        aliases.append(_GENERIC_TAIL_RE.sub("", name))
+    return sorted(set(aliases), key=len, reverse=True)
+
+
+def _named_products(text: str, catalog: list[dict]) -> list[tuple[int, dict]]:
+    """(position in the text, product) for every product named by one of its aliases. Found
+    Nov 19: "which is stronger paracetamol 650 or ibuprofen" compared the 500mg paracetamol,
+    "paracetamol 500 vs 650" and "compare ibuprofen and cold and flu" were not understood."""
+    lower = " ".join(text.lower().replace("&", " and ").split())
+    # "paracetamol 500 vs 650" -> "paracetamol 500mg vs paracetamol 650mg"
+    lower = re.sub(
+        r"\b([a-z]+)\s+(\d{3})\s*(?:mg)?\s*(?:vs\.?|versus|or|and|,)\s*(\d{3})\s*(?:mg)?\b", r"\1 \2mg vs \1 \3mg", lower
+    )
+    found: dict[str, tuple[int, dict]] = {}
+    for product in catalog:
+        for alias in _aliases(product):
+            match = re.search(rf"(?<![a-z0-9]){re.escape(alias)}(?![a-z0-9])", lower)
+            if match:
+                found.setdefault(product["id"], (match.start(), product))
+                break
+    # a longer name swallows the shorter one it contains ("paracetamol 650mg" also matches
+    # nothing else, but "children's paracetamol syrup" must not also yield an ingredient hit)
+    return sorted(found.values(), key=lambda item: item[0])
+
+
 def targets(text: str, catalog: list[dict], shown: list[dict] | None) -> tuple[list[dict], list[str]] | None:
     """(products to compare, notes) or None when two products cannot be told."""
     products: list[dict] = []
     notes: list[str] = []
+    named = _named_products(text, catalog)
+    named_ingredients = {p["active_ingredient"].lower() for _, p in named}
     for label, _classes, product_id in interactions.mentions(text, catalog):
         product = next((p for p in catalog if p["id"] == product_id), None) if product_id else None
         if product is None:
@@ -68,6 +112,16 @@ def targets(text: str, catalog: list[dict], shown: list[dict] | None) -> tuple[l
                 notes.append(f"For {ingredient.lower()} I've used {product['name']}.")
         if product not in products:
             products.append(product)
+    if named:
+        # What the customer named exactly wins over the ingredient's default product.
+        lower = text.lower()
+        rest = [p for p in products if p["active_ingredient"].lower() not in named_ingredients and p not in [n for _, n in named]]
+        ordered = [(pos, p) for pos, p in named]
+        for p in rest:
+            word = p["active_ingredient"].lower().split()[0]
+            ordered.append((lower.find(word) if word in lower else len(lower), p))
+        products = [p for _, p in sorted(ordered, key=lambda item: item[0])]
+        notes = [n for n in notes if not n.startswith("For ")]
     if len(products) >= 2:
         return products[:_MAX_PRODUCTS], notes
     if shown and len(shown) >= 2:
