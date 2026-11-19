@@ -114,3 +114,32 @@ class TestRoute:
     def test_brand_combination_questions_are_answered_without_the_model(self):
         assert self._chat("s1", "can I take Tylenol with Cold & Flu Multi-Symptom Relief").startswith("No —")
         assert "doesn't say whether" in self._chat("s2", "can I take Tylenol and Advil together")
+
+
+class TestColdAndFluByItsEverydayName:
+    """Found Nov 19: "is it ok to take cold and flu with paracetamol" — the very pair the
+    knowledge base warns about — was not recognised (only the full product name was), so it
+    went to the model instead of getting the knowledge base's own warning."""
+
+    @staticmethod
+    def _reply(text):
+        return it.combination_reply(text, store.get_catalog())
+
+    @pytest.mark.parametrize("text", [
+        "is it ok to take cold and flu with paracetamol", "can I take cold & flu and dolo",
+        "can i take cold and flu together with paracetamol 500mg",
+    ])
+    def test_the_paracetamol_warning_is_given(self, text):
+        reply = self._reply(text)
+        assert reply and reply.startswith("No —") and "accidental overdose" in reply, text
+
+    def test_the_children_s_cold_and_cough_syrup_still_gets_its_own_warning(self):
+        reply = self._reply("can i take the children's cold and cough syrup with cetirizine")
+        assert "Children's Cold & Cough Syrup" in reply and "antihistamine or cough suppressant" in reply
+
+    @pytest.mark.parametrize("text", ["can I take cold and flu with cetirizine", "can I take cold & flu and ibuprofen together"])
+    def test_a_pair_the_knowledge_base_does_not_cover_says_so(self, text):
+        assert "doesn't say whether" in self._reply(text)
+
+    def test_one_medicine_alone_is_not_a_combination(self):
+        assert self._reply("can I take cold and flu") is None

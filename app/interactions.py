@@ -74,6 +74,16 @@ def mentions(text: str, catalog: list[dict]) -> list[tuple[str, set[str], str | 
         if name in lower:
             found.append((product["name"], _product_classes(product), product["id"]))
             lower = lower.replace(name, " ")
+            continue
+        # "cold and flu" / "cold & flu" for "Cold & Flu Multi-Symptom Relief" (found Nov 19:
+        # "is it ok to take cold and flu with paracetamol" — the very pair the knowledge
+        # base warns about — was not recognised as a combination at all)
+        if "&" in name:
+            plain = re.sub(r"\s+(?:multi[- ]symptom|relief|tablets|syrup)\b.*$", "", name.replace("&", "and"))
+            spaced = lower.replace("&", "and")
+            if re.search(rf"(?<![a-z]){re.escape(plain)}(?![a-z])", spaced):
+                found.append((product["name"], _product_classes(product), product["id"]))
+                lower = re.sub(rf"(?<![a-z]){re.escape(plain)}(?![a-z])", " ", spaced)
     for product in catalog:
         if product["id"] in lower:
             found.append((product["name"], _product_classes(product), product["id"]))
