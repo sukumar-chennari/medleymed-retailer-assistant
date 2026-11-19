@@ -1392,22 +1392,38 @@ def _brand_availability_reply(text: str, session_id: str) -> str | None:
 # ordering 1 ...") and left the quantity unchanged. Re-using tools.start_order
 # keeps the clamp to the per-order limit, the ingredient/condition refusal and
 # the pending state all in one place.
+_QTY = r"(?P<qty>-\d{1,3}|\d{1,3}|(?:a\s+)?dozen|one|two|three|four|five|six|seven|eight|nine|ten|twice|double)"
 _QUANTITY_CHANGE_RE = re.compile(
     r"^\s*(?:(?:actually|no|wait|ok|okay|oh|sorry|hmm)[\s,.!]+)*"
     r"(?:make\s+(?:it|that|this)(?:\s+to)?|change\s+(?:it|that|this|the\s+quantity)\s+to|let'?s\s+do|just|only|"
     r"i\s+(?:want|need|meant|would\s+like)|i'd\s+like|x)\s*(?:be\s+)?"
-    r"(?P<qty>\d{1,3}|one|two|three|four|five|six|seven|eight|nine|ten|twice|double)\b"
+    + _QTY + r"\b"
     r"(?:\s+(?:of\s+(?:them|those|it)|please|instead|only|units?|boxes|packs|tablets))*[\s.!]*$",
+    re.IGNORECASE,
+)
+# "actually 2" and "2 please": the verb is left out. Needs an answer-word in front or "please"
+# behind, so a bare "2" (an address fragment, a menu pick) is not taken as a quantity.
+_BARE_QUANTITY_RES = (
+    re.compile(r"^\s*(?:(?:actually|no|wait|ok|okay|oh|sorry|hmm)[\s,.!]+)+" + _QTY + r"\b(?:\s+please)?[\s.!]*$", re.IGNORECASE),
+    re.compile(r"^\s*" + _QTY + r"\s+(?:please|pls|plz)[\s.!]*$", re.IGNORECASE),
+)
+# "double it" / "add one more": relative to what is waiting.
+_RELATIVE_QUANTITY_RE = re.compile(
+    r"^\s*(?:(?:ok(?:ay)?|and|yes|please|actually|sure)[\s,.!]+)*(?:(?P<double>double\s+(?:it|that|this))|"
+    r"(?:add\s+|and\s+)?(?:one|1)\s+more(?:\s+(?:one|please))?)[\s.!]*$",
     re.IGNORECASE,
 )
 
 
-def _quantity_change(text: str) -> int | None:
-    match = _QUANTITY_CHANGE_RE.match(text)
-    if not match:
-        return None
-    raw = match.group("qty").lower()
-    return int(raw) if raw.isdigit() else _NUMBER_WORDS[raw]
+def _quantity_change(text: str, current: int | None = None) -> int | None:
+    match = _QUANTITY_CHANGE_RE.match(text) or next((m for m in (r.match(text) for r in _BARE_QUANTITY_RES) if m), None)
+    if match:
+        raw = re.sub(r"^a\s+", "", match.group("qty").lower())
+        return int(raw) if re.fullmatch(r"-?\d+", raw) else _NUMBER_WORDS[raw]
+    relative = _RELATIVE_QUANTITY_RE.match(text)
+    if relative and current:
+        return current * 2 if relative.group("double") else current + 1
+    return None
 
 
 def _reply_for_quantity_change(session_id: str, product_id: str, quantity: int) -> str:
@@ -2095,7 +2111,7 @@ def chat(req: ChatRequest):
             messages.append({"role": "user", "content": text})
             messages.append({"role": "assistant", "content": reply})
         elif text and (pending_product_id or pending_address_confirmation) and (
-            (new_quantity := _quantity_change(text)) is not None
+            (new_quantity := _quantity_change(text, (pending_product_id or pending_address_confirmation).get("quantity", 1))) is not None
         ):
             pending = pending_product_id or pending_address_confirmation
             reply = _reply_for_quantity_change(req.session_id, pending["product_id"], new_quantity)

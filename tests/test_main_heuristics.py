@@ -656,3 +656,28 @@ class TestAnswerWordsBeforeAnAddress:
     ])
     def test_real_addresses_that_begin_with_such_words_are_untouched(self, text):
         assert main._strip_address_filler(text) == text
+
+
+class TestMoreWaysToChangeAWaitingQuantity:
+    """Found Nov 19: with an order waiting for its address, "actually 2", "2 please",
+    "make it a dozen", "double it" and "add one more" went to the model and changed nothing
+    (and "make it -1" was not recognised)."""
+
+    @pytest.mark.parametrize("text, current, expected", [
+        ("actually 2", 1, 2), ("no, 2", 1, 2), ("ok 3", 1, 3), ("2 please", 1, 2), ("two pls", 1, 2),
+        ("make it a dozen", 1, 12), ("make it dozen", 1, 12), ("make it -1", 1, -1),
+        ("double it", 1, 2), ("double that", 2, 4), ("add one more", 1, 2), ("one more", 1, 2), ("and one more please", 2, 3),
+        ("make it 2", 1, 2), ("just 1", 2, 1), ("x2", 1, 2),
+    ])
+    def test_changes(self, text, current, expected):
+        assert main._quantity_change(text, current) == expected
+
+    @pytest.mark.parametrize("text", [
+        "2", "12", "2 Baker Street", "12 Baker Street, London", "actually, I have a headache", "one more thing",
+        "double", "I want to know more", "more", "please", "5 Oak Lane, Leeds please",
+    ])
+    def test_things_that_are_not_a_quantity_change(self, text):
+        assert main._quantity_change(text, 1) is None, text
+
+    def test_a_relative_change_needs_a_current_quantity(self):
+        assert main._quantity_change("one more") is None

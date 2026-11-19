@@ -2398,3 +2398,33 @@ class TestHinglishShoppingSentences:
     def test_a_want_sentence_starts_the_order(self, text, quantity):
         assert "shipping address" in _chat("s1", text)
         assert store.get_pending_order("s1") == {"product_id": "fev-003", "quantity": quantity}
+
+
+class TestChangingAWaitingQuantityRoute:
+    @pytest.fixture(autouse=True)
+    def _no_model(self, monkeypatch):
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+
+    @pytest.mark.parametrize("text, quantity", [
+        ("actually 2", 2), ("2 please", 2), ("double it", 2), ("add one more", 2), ("one more", 2),
+    ])
+    def test_the_pending_order_quantity_changes(self, text, quantity):
+        _chat("s1", "order ibuprofen")
+        reply = _chat("s1", text)
+        assert reply.startswith(f"Got it — {quantity} x Ibuprofen 200mg Tablets")
+        assert store.get_pending_order("s1")["quantity"] == quantity
+
+    def test_a_dozen_is_capped_and_says_so(self):
+        _chat("s1", "order ibuprofen")
+        reply = _chat("s1", "make it a dozen")
+        assert "per-order limit of 2" in reply and store.get_pending_order("s1")["quantity"] == 2
+
+    def test_a_negative_quantity_says_it_was_not_valid(self):
+        _chat("s1", "order ibuprofen")
+        assert "wasn't valid" in _chat("s1", "make it -1")
+
+    def test_it_also_works_while_the_address_confirmation_is_open(self):
+        store.save_address("demo_user", "12 Baker Street, London")
+        _chat("s1", "order ibuprofen")
+        _chat("s1", "double it")
+        assert store.get_pending_address_confirmation("s1")["quantity"] == 2
