@@ -170,3 +170,42 @@ class TestCurlyApostropheNegation:
 
     def test_a_real_mention_after_a_curly_negation_still_escalates(self):
         assert red_flags.check("I didn’t have chest pain earlier but now I can’t breathe") == red_flags.EMERGENCY_REPLY
+
+
+class TestEverydayEmergencyPhrasings:
+    """Found Nov 20 by trying 59 ordinary ways of describing an emergency: 25 were NOT
+    recognised ("my chest hurts", "I think I'm having a heart attack", "she collapsed",
+    "turning blue", "stroke", "won't stop bleeding", "thinking of ending my life"...). The
+    bias must stay toward escalating."""
+
+    @pytest.mark.parametrize("text", [
+        "pain in my chest", "my chest hurts", "pain in chest radiating to arm", "squeezing pain across my chest",
+        "I think I'm having a heart attack", "my father is having a heart attack", "I'm having a stroke", "stroke",
+        "she collapsed", "he blacked out", "he is not responding", "he isn't breathing", "no pulse", "he is having a fit",
+        "severe allergic reaction", "blood in my stool", "black stools", "blood in the vomit",
+        "severe bleeding", "bleeding heavily", "won't stop bleeding", "I'm pregnant and bleeding",
+        "severe abdominal pain", "severe headache worst of my life", "this is the worst headache I've ever had",
+        "double vision and confusion", "weakness on one side of my body",
+        "thinking of ending my life", "I want to take my own life", "I feel like I'd be better off dead",
+        "turning blue", "baby not feeding and very sleepy", "my toddler is limp",
+    ])
+    def test_these_are_emergencies(self, text):
+        assert red_flags.check(text) == red_flags.EMERGENCY_REPLY or red_flags.check(text) == red_flags.INFANT_FEVER_REPLY, text
+
+    @pytest.mark.parametrize("text", [
+        "child swallowed ibuprofen tablets", "my son ate some tablets", "the baby swallowed a pill", "my daughter drank the cough syrup",
+    ])
+    def test_a_child_who_swallowed_medicine_is_a_poisoning(self, text):
+        assert red_flags.check(text) == red_flags.OVERDOSE_REPLY, text
+
+    @pytest.mark.parametrize("text", [
+        "I had a heart attack two years ago, can I take ibuprofen", "what is a stroke", "signs of a heart attack",
+        "history of stroke in my family", "my father had a stroke last year", "what does a heart attack feel like",
+        "no chest pain", "I don't have chest pain", "chest congestion", "my chest feels congested from the cold",
+        "a cut that bled a little", "my period is heavy this month", "no bleeding", "she is not responding to my texts",
+        "he is not responding to treatment", "my child ate breakfast", "my son took his medicine on time",
+        "can a child take paracetamol", "my toddler likes the syrup", "worst day of my life", "I have the worst cold",
+        "I took 2 paracetamol this morning", "headache and mild fever", "tight chest from coughing",
+    ])
+    def test_ordinary_messages_stay_ordinary(self, text):
+        assert red_flags.check(text) is None, text

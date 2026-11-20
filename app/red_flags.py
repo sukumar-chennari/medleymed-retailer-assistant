@@ -46,7 +46,7 @@ _MEDICINE_WORDS = (
     r"(?:tablets?|pills?|capsules?|syrup|bottle|bottles|pack|packs|strips?|doses?|medicine|medication|meds|"
     r"paracetamol|acetaminophen|ibuprofen|cetirizine|pseudoephedrine|guaifenesin|dextromethorphan|antihistamine)"
 )
-_TAKER = r"(?:i|he|she|they|we|my\s+\w+|the\s+(?:child|kid|baby|toddler))"
+_TAKER = r"(?:i|he|she|they|we|my\s+\w+|(?:the|a)\s+(?:child|kid|baby|toddler)|child|kid|baby|toddler)"
 _TOOK = r"(?:took|taken|swallowed|ate|eaten|drank|had|downed|popped)"
 
 _OVERDOSE_RES = [
@@ -56,6 +56,12 @@ _OVERDOSE_RES = [
     ),
     re.compile(r"\b(?:i|we)\s+(?:think|believe|am afraid)\s+(?:i|we|he|she|they)\s+overdosed\b", re.IGNORECASE),
     re.compile(rf"\b{_TOOK}\s+too\s+(?:many|much)\b", re.IGNORECASE),
+    # a CHILD who swallowed a medicine (an adult's "I took 2 paracetamol" is not this; the tablet count handles those)
+    re.compile(
+        r"\b(?:child|kid|baby|toddler|son|daughter)\s+(?:has\s+|had\s+)?(?:accidentally\s+)?(?:swallowed|ate|eaten|ingested|drank)\b"
+        rf".{{0,40}}\b(?:tablets?|pills?|capsules?|medicine|medication|syrup|{_MEDICINE_WORDS})",
+        re.IGNORECASE,
+    ),
     re.compile(rf"\b{_TOOK}\s+(?:a|the|an)\s+(?:whole|entire)\s+(?:bottle|pack|strip|box)\b", re.IGNORECASE),
     re.compile(rf"\b{_TOOK}\s+(?:all|the whole lot of)\s+(?:the|of the|my|his|her)\s+{_MEDICINE_WORDS}\b", re.IGNORECASE),
     re.compile(rf"\b{_TOOK}\s+(?:double|twice|triple|three times)\s+(?:the\s+)?(?:dose|amount|recommended)\b", re.IGNORECASE),
@@ -87,6 +93,36 @@ _EMERGENCY_RES = [
         r"\b(?:coughing|vomiting|throwing\s+up|spitting)\s+(?:up\s+)?blood\b",
         r"\bstiff\s+neck\b",
         r"\bsuicid\w*|\bwant\s+to\s+(?:die|kill\s+myself)\b",
+        # Found Nov 20: 25 of 59 everyday emergency phrasings were not recognised ("my chest
+        # hurts", "I think I'm having a heart attack", "she collapsed", "turning blue",
+        # "stroke", "won't stop bleeding"...). Present-tense, person-in-trouble wording only:
+        # "I had a heart attack two years ago" and "what is a stroke" must stay ordinary.
+        # chest
+        r"\b(?:pain|pressure|tightness|squeezing|crushing)\s+(?:in|on|across)\s+(?:my\s+|the\s+|his\s+|her\s+)?chest\b",
+        r"\bchest\s+(?:hurts|is\s+(?:hurting|tight|painful)|feels?\s+(?:tight|heavy|crushed|like))\b",
+        r"\b(?:having|getting|suffering)\s+(?:a\s+)?(?:heart\s+attack|stroke)\b|\bthink\w*\b.{0,30}\b(?:heart\s+attack|stroke)\b",
+        r"^\s*(?:a\s+)?stroke\s*[?!.]*\s*$",
+        # collapse / not responding / not breathing
+        r"\b(?:collapsed|collapsing|blacked\s+out|keeled\s+over)\b",
+        r"\b(?:not|isn'?t|won'?t|unable\s+to)\s+(?:responding|respond)\b(?!\s+to\s+(?:my\s+|the\s+|his\s+|her\s+)?(?:texts?|messages?|calls?|e-?mails?|dms?|treatment|medicine|medication|antibiotics?))"
+        r"|\b(?:not|isn'?t|won'?t|unable\s+to)\s+(?:wake\s+up|waking\s+up|breathing)\b|\bno\s+(?:pulse|response)\b",
+        r"\b(?:having|had|got)\s+a\s+fit\b",
+        # stroke signs, thunderclap headache, vision
+        r"\b(?:weakness|numbness)\s+on\s+one\s+side\b|\bone\s+side\b.{0,25}\b(?:weak|numb|droop\w*)\b",
+        r"\bworst\b.{0,20}\bheadache\b|\bheadache\b.{0,40}\bworst\b|\bthunderclap\b|\bdouble\s+vision\b|\bsudden\s+(?:loss\s+of\s+)?vision\b",
+        # allergy, bleeding, blood in stool / vomit, severe abdominal pain
+        r"\b(?:severe|serious|bad)\s+allergic\b",
+        r"\b(?:severe|heavy|heavily|uncontrolled|profuse)\s+bleeding\b|\bbleeding\s+(?:heavily|badly|profusely|a\s+lot)\b"
+        r"|\b(?:won'?t|can'?t|not)\s+stop\s+bleeding\b|\bbleeding\s+(?:won'?t|will\s+not)\s+stop\b",
+        r"\bpregnan\w*\b.{0,40}\bbleeding\b|\bbleeding\b.{0,40}\bpregnan\w*\b",
+        r"\bblood\s+in\s+(?:my\s+|the\s+|his\s+|her\s+)?(?:stool|stools|vomit|urine|poo)\b|\bblack\s+(?:tarry\s+)?(?:stool|stools|poo)\b",
+        r"\b(?:severe|unbearable|excruciating)\s+(?:abdominal|stomach|belly|tummy)\s+pain\b",
+        # self-harm
+        r"\b(?:end(?:ing)?\s+my\s+(?:own\s+)?life|take\s+my\s+own\s+life|kill\s+myself|hurt\s+myself|harm\s+myself|better\s+off\s+dead|"
+        r"don'?t\s+want\s+to\s+(?:live|be\s+alive))\b",
+        # a baby or child who is limp / not feeding / very sleepy / turning blue
+        r"\bturning\s+blue\b",
+        r"\b(?:baby|infant|newborn|toddler|child)\b.{0,40}\b(?:not\s+feeding|won'?t\s+feed|refus\w*\s+(?:feeds?|to\s+feed)|very\s+sleepy|too\s+sleepy|limp|floppy)\b",
     )
 ]
 
