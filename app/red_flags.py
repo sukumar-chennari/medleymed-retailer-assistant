@@ -62,7 +62,15 @@ _OVERDOSE_RES = [
         rf".{{0,40}}\b(?:tablets?|pills?|capsules?|medicine|medication|syrup|{_MEDICINE_WORDS})",
         re.IGNORECASE,
     ),
-    re.compile(rf"\b{_TOOK}\s+(?:a|the|an)\s+(?:whole|entire)\s+(?:bottle|pack|strip|box)\b", re.IGNORECASE),
+    re.compile(rf"\b{_TOOK}\s+(?:a|the|an|her|his|my|their|its)\s+(?:whole|entire)\s+(?:bottle|pack|strip|box)\b", re.IGNORECASE),
+    # Found Nov 20 with the phrasings below: "took a handful of tablets", a parent who "gave my baby
+    # double the dose" / "gave my child too much syrup", milligram amounts at once.
+    re.compile(rf"\b{_TOOK}\s+(?:a\s+)?(?:handful|fistful|bunch|load)\s+of\b", re.IGNORECASE),
+    re.compile(
+        r"\b(?:gave|given|giving)\s+(?:my|the|our)\s+(?:\w+\s+){0,3}?(?:baby|child|kid|toddler|son|daughter|infant|(?:year|month|week)s?[- ]old)\b"
+        r".{0,60}\b(?:too\s+much|too\s+many|double|twice|triple|(?:\d+|three|four|five)\s+times\s+(?:the|as)|an\s+extra|the\s+wrong|an\s+overdose)\b",
+        re.IGNORECASE,
+    ),
     re.compile(rf"\b{_TOOK}\s+(?:all|the whole lot of)\s+(?:the|of the|my|his|her)\s+{_MEDICINE_WORDS}\b", re.IGNORECASE),
     re.compile(rf"\b{_TOOK}\s+(?:double|twice|triple|three times)\s+(?:the\s+)?(?:dose|amount|recommended)\b", re.IGNORECASE),
     re.compile(r"\b(?:took|taken)\s+more\s+than\s+(?:the\s+)?(?:recommended|prescribed|directed|label|maximum|max)\b", re.IGNORECASE),
@@ -146,13 +154,43 @@ def _has_unnegated_match(pattern: re.Pattern, text: str) -> bool:
 _CURLY = str.maketrans({"\u2018": "'", "\u2019": "'"})
 
 
+_COUNT_WORDS = {
+    "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+    "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15, "sixteen": 16, "seventeen": 17,
+    "eighteen": 18, "nineteen": 19, "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50, "dozen": 12,
+}
+_COUNT_WORD_RE = re.compile(r"\b(?:a\s+)?(" + "|".join(_COUNT_WORDS) + r")\b", re.IGNORECASE)
+_AT_ONCE = r"(?:at\s+once|all\s+at\s+once|in\s+one\s+(?:go|sitting|hit)|in\s+one\s+dose)"
+# Several tablets in a single dose is already well past the label (one dose is one or two
+# tablets), without reaching the 8-in-a-day threshold.
+_AT_ONCE_THRESHOLD = 4
+_AT_ONCE_COUNT_RE = re.compile(
+    rf"\b{_TOOK}\s+(\d{{1,3}})\s+(?:\w+\s+){{0,3}}{_MEDICINE_WORDS}\b.{{0,40}}\b{_AT_ONCE}\b", re.IGNORECASE
+)
+_MG_RE = re.compile(rf"\b{_TOOK}\b.{{0,30}}?\b(\d{{4,5}})\s*mg\b(?P<tail>.{{0,30}})", re.IGNORECASE)
+_MG_DAILY_MAX = 4000      # the most any product here allows in 24 hours
+_MG_AT_ONCE = 3000
+
+
 def is_overdose(text: str) -> bool:
     text = text.translate(_CURLY)
     if any(_has_unnegated_match(p, text) for p in _OVERDOSE_RES):
         return True
-    for match in _TABLET_COUNT_RE.finditer(text):
-        before = text[max(0, match.start() - _NEGATION_LOOKBACK) : match.start()]
+    # "took ten paracetamol" counts like "took 10 paracetamol"
+    counted = _COUNT_WORD_RE.sub(lambda m: str(_COUNT_WORDS[m.group(1).lower()]), text)
+    for match in _TABLET_COUNT_RE.finditer(counted):
+        before = counted[max(0, match.start() - _NEGATION_LOOKBACK) : match.start()]
         if int(match.group(1)) >= _OVERDOSE_TABLET_THRESHOLD and not _NEGATION_RE.search(before):
+            return True
+    for match in _AT_ONCE_COUNT_RE.finditer(counted):
+        before = counted[max(0, match.start() - _NEGATION_LOOKBACK) : match.start()]
+        if int(match.group(1)) >= _AT_ONCE_THRESHOLD and not _NEGATION_RE.search(before):
+            return True
+    for match in _MG_RE.finditer(text):
+        before = text[max(0, match.start() - _NEGATION_LOOKBACK) : match.start()]
+        amount = int(match.group(1))
+        at_once = bool(re.search(_AT_ONCE, match.group("tail"), re.IGNORECASE))
+        if (amount >= _MG_DAILY_MAX or (at_once and amount >= _MG_AT_ONCE)) and not _NEGATION_RE.search(before):
             return True
     return False
 

@@ -209,3 +209,30 @@ class TestEverydayEmergencyPhrasings:
     ])
     def test_ordinary_messages_stay_ordinary(self, text):
         assert red_flags.check(text) is None, text
+
+
+class TestEverydayOverdosePhrasings:
+    """Found Nov 20: "took ten paracetamol", "I took a handful of tablets", "she swallowed her
+    whole bottle of tablets", "I took 3000 mg of paracetamol at once", and a parent who "gave my
+    baby double the dose" / "gave my child too much syrup" were not recognised as overdoses (only
+    the digit count of 8 or more was)."""
+
+    @pytest.mark.parametrize("text", [
+        "took ten paracetamol", "I took twenty tablets", "took a dozen pills", "I took a handful of tablets",
+        "she swallowed her whole bottle of tablets", "I took 3000 mg of paracetamol at once", "I took 5000 mg",
+        "took 5 paracetamol 650 in one go", "he took 4 tablets all at once",
+        "I accidentally gave my baby double the dose", "gave my child too much syrup", "I gave my 2 year old 3 times the dose",
+        "I gave my 6 month old twice the dose",
+    ])
+    def test_these_are_overdoses(self, text):
+        assert red_flags.check(text) == red_flags.OVERDOSE_REPLY, text
+
+    @pytest.mark.parametrize("text", [
+        "I took 2 paracetamol this morning", "took 1 tablet", "I take 2 tablets twice a day", "how many tablets can I take",
+        "what is the max dose", "can I take 2 tablets", "I took 4 tablets over a whole day", "what happens if I take too much",
+        "I took one tablet", "I took two tablets at once", "took 500mg", "I took 1000 mg", "I took 650mg at once",
+        "I gave my baby the right dose", "gave my child the syrup as directed", "I gave my son one tablet",
+        "I took 3 tablets in one go", "took six cold and flu tablets over two days", "I took one in the morning and one at night",
+    ])
+    def test_ordinary_dosing_stays_ordinary(self, text):
+        assert red_flags.check(text) is None, text
