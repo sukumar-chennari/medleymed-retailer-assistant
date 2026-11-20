@@ -2428,3 +2428,48 @@ class TestChangingAWaitingQuantityRoute:
         _chat("s1", "order ibuprofen")
         _chat("s1", "double it")
         assert store.get_pending_address_confirmation("s1")["quantity"] == 2
+
+
+class TestAnsweringTheEmailQuestion:
+    """Found Nov 20: after "reply with your email address if you'd like a confirmation", "I don't
+    have one" went to the model and left the question open, and "what email?" / "why do you need
+    my email" / "why?" got the model's improvisation."""
+
+    @pytest.fixture(autouse=True)
+    def _no_model(self, monkeypatch):
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+
+    def _order_placed_and_asked_for_an_email(self):
+        _chat("s1", "order ibuprofen")
+        reply = _chat("s1", "12 Baker Street, London")
+        assert "Order confirmed!" in reply and store.get_pending_email("s1") == "ord-0001"
+
+    @pytest.mark.parametrize("text", [
+        "I don't have one", "I dont have any", "I don't have an email", "no email", "I have no email",
+        "haven't got one", "not interested",
+    ])
+    def test_these_decline_the_email(self, text):
+        self._order_placed_and_asked_for_an_email()
+        reply = _chat("s1", text)
+        assert "without an email receipt" in reply
+        assert store.get_pending_email("s1") is None and store.get_email("demo_user") in (None, "")
+
+    @pytest.mark.parametrize("text", [
+        "what email?", "why do you need my email", "which email", "why?", "what for", "what is it for", "why do you need it",
+    ])
+    def test_a_question_about_the_email_is_answered_and_the_question_stays_open(self, text):
+        self._order_placed_and_asked_for_an_email()
+        reply = _chat("s1", text)
+        assert "only to send you the confirmation for order ord-0001" in reply and "optional" in reply
+        assert store.get_pending_email("s1") == "ord-0001"
+        # ...and the very next message can still answer it
+        assert "I've sent the confirmation for order ord-0001 to bob@gmail.com" in _chat("s1", "bob@gmail.com")
+
+    def test_an_email_in_the_same_message_still_wins(self):
+        self._order_placed_and_asked_for_an_email()
+        assert "to bob@gmail.com" in _chat("s1", "I don't have one but bob@gmail.com works")
+
+    def test_unrelated_words_do_not_decline(self):
+        self._order_placed_and_asked_for_an_email()
+        _chat("s1", "I don't have time")
+        assert store.get_pending_email("s1") == "ord-0001"

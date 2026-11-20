@@ -1494,7 +1494,18 @@ NOTHING_TO_CONFIRM_REPLY = (
 _EMAIL_PROMPT_MARKER = "your email address"
 _EMAIL_SKIP_RE = re.compile(
     r"\b(?:later|not\s+now|don'?t\s+(?:send|need|want)|do\s+not\s+(?:send|need|want)|no\s+need|nah|maybe\s+later|"
-    r"skip|pass|rather\s+not|without|not\s+needed|no\s+receipt)\b",
+    r"skip|pass|rather\s+not|without|not\s+needed|no\s+receipt|"
+    # "I don't have one" / "no email" / "I have no email": found Nov 20 — the first of these went
+    # to the model and left the question open
+    r"(?:i\s+)?(?:don'?t|do\s+not)\s+have\s+(?:one|any|an?\s+e-?mail|e-?mail)|(?:i\s+)?(?:have\s+)?no\s+e-?mail|"
+    r"haven'?t\s+got\s+(?:one|any)|not\s+interested)\b",
+    re.IGNORECASE,
+)
+# "what email?" / "why do you need my email": answered, and the question stays open.
+_EMAIL_WHY_RE = re.compile(
+    r"\b(?:what|which|why|how\s+come)\b.{0,30}\be-?mail\b|\be-?mail\b.{0,20}\b(?:for|why)\b\s*\??$|"
+    r"\bdo\s+you\s+(?:really\s+)?need\s+(?:my|an?|the)\s+e-?mail\b|"
+    r"^\s*(?:why|what\s+for|what\s+is\s+(?:it|that)\s+for|why\s+(?:do\s+you\s+need\s+(?:it|that)|is\s+(?:it|that)\s+needed))\s*\??\s*$",
     re.IGNORECASE,
 )
 _EMAIL_SEND_IT_RE = re.compile(r"\b(?:send|email|mail)\b.{0,25}\b(?:it|that|this|me|my\s+e-?mail|the\s+(?:receipt|confirmation))\b", re.IGNORECASE)
@@ -1520,6 +1531,11 @@ def _email_prompt_reply(text: str, session_id: str, order_id: str, messages: lis
     if _EMAIL_SKIP_RE.search(text) and not _EMAIL_SEND_IT_RE.search(text):
         store.clear_pending_email(session_id)
         return "No problem — the order's already confirmed without an email receipt. Anything else I can help with?"
+    if _EMAIL_WHY_RE.search(text):
+        return (
+            f"I'd use it only to send you the confirmation for order {order_id}. It's optional: reply with "
+            'your email address, or say "skip" and the order stays confirmed without one.'
+        )
     if _is_affirmative(text) or _EMAIL_SEND_IT_RE.search(text):
         email = store.get_email("demo_user")
         if email:
