@@ -587,3 +587,41 @@ class TestInjectedModelHintsAreNotTheCustomersWords:
         assert "a child" in ci.refusal_for(
             store.find_product("fev-003"), ci.stated_text(["it's for my baby\n" + self.HINT.split("\n", 1)[1]])
         )
+
+
+class TestConditionsStatedInHindi:
+    """Found Nov 23: "main garbhvati hoon", "mere gurde kharab hain", "mujhe dil ki bimari hai",
+    "mujhe pet ka alsar hai" and "main khoon patla karne ki dawai leta hoon" were not recognised,
+    so ibuprofen could still be ordered. Hindi puts the negation AFTER the condition. As with
+    the rest of the Hindi word list, a native speaker should review these."""
+
+    @staticmethod
+    def _refusal(text, product_id="fev-003"):
+        from app import age_hints, hinglish, spellfix
+        glossed = age_hints.gloss(hinglish.gloss(spellfix.correct(text)))
+        return ci.refusal_for(store.find_product(product_id), ci.stated_text([glossed]))
+
+    @pytest.mark.parametrize("text, reason", [
+        ("main garbhvati hoon", "pregnancy"), ("main garbh se hoon", "pregnancy"), ("garbhwati hoon", "pregnancy"),
+        ("mujhe pet ka alsar hai", "stomach ulcer"),
+        ("mere gurde kharab hain", "kidney problems"), ("mujhe kidney ki problem hai", "kidney problems"), ("mujhe gurde ki bimari hai", "kidney problems"),
+        ("mujhe dil ki bimari hai", "heart condition"), ("mujhe dil ka rog hai", "heart condition"),
+        ("main khoon patla karne ki dawai leta hoon", "blood thinner"),
+    ])
+    def test_ibuprofen_is_refused_for_these(self, text, reason):
+        refusal = self._refusal(text)
+        assert refusal and reason in refusal, (text, refusal)
+
+    @pytest.mark.parametrize("text", [
+        "main garbhvati nahi hoon", "mujhe kidney ki problem nahi hai", "mujhe dil ki bimari nahi hai", "mere gurde theek hain",
+        "mujhe bukhar hai", "mujhe sardi hai", "12 Dam Road, Hyderabad",
+    ])
+    def test_denials_and_unrelated_sentences_are_not_conditions(self, text):
+        assert self._refusal(text) is None, text
+
+    def test_a_hindi_blood_pressure_and_asthma_and_liver_statement_reaches_the_right_products(self):
+        assert self._refusal("mujhe ucch raktchap hai", "col-002")
+        assert self._refusal("mujhe dama hai", "col-005")
+        assert self._refusal("mujhe jigar ki bimari hai", "fev-001") is None      # liver is a note, not an exclusion
+        from app import hinglish
+        assert ci.concerns(ci.stated_text([hinglish.gloss("mujhe jigar ki bimari hai")])).get("fev-001")

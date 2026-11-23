@@ -71,6 +71,21 @@ _GLOSSARY += [
      r"ne\s+(?:dawai|dawa|dawaai|goli|goliyan)\s+(?:kha|nigal)\s+li\w*|tablets?\s+ekkuva\s+vesuk\w*", "took too much medicine"),
     (r"marna\s+chah\w*|mar\s+jaana\s+chah\w*|jeena\s+nahi|jeene\s+ki\s+ichha\s+nahi|aatmahatya|atmahatya|khudkushi|chanipovalani", "suicidal"),
 ]
+# Conditions the product-safety rules look for (found Nov 23: "main garbhvati hoon", "mere gurde
+# kharab hain", "mujhe dil ki bimari hai", "khoon patla karne ki dawai leta hoon" were not
+# recognised, so ibuprofen could still be ordered). Glossed into the English words the
+# contraindication patterns use. The Hindi negation comes after ("garbhvati nahi hoon").
+_GLOSSARY += [
+    (r"(?:garbh(?:vati|wati|avati|ini)?|garbh\s+se)" + _NOT_NEGATED, "pregnant"),
+    (r"(?:alsar|alser|pet\s+(?:mein|me|ka)\s+(?:ghav|zakhm|chhala|chala))" + _NOT_NEGATED, "stomach ulcer"),
+    (r"(?:gurd[ae]\s*(?:kharab|ki\s+bimari|ki\s+takleef|ki\s+problem|fail)|kidney\s+ki\s+(?:problem|bimari|takleef|dikkat|samasya)|kidney\s+kharab)" + _NOT_NEGATED, "kidney problems"),
+    (r"(?:dil\s+ki\s+(?:bimari|problem|takleef|dikkat)|dil\s+ka\s+(?:rog|marz|mareez|patient)|hriday\s+rog|heart\s+ki\s+(?:problem|bimari|takleef))" + _NOT_NEGATED, "heart problems"),
+    (r"(?:khoon\s+patla\s+karne\s+(?:ki|wali|vali)\s+(?:dawai|dawa|goli|dawaai)|khoon\s+ko\s+patla\s+karne)" + _NOT_NEGATED, "blood thinner"),
+    (r"(?:ucch\s+rakt\s*chaap|ucch\s+raktchap|bp\s+ki\s+(?:bimari|problem|takleef))" + _NOT_NEGATED, "high blood pressure"),
+    (r"(?:dama|damaa|saans\s+ki\s+bimari)" + _NOT_NEGATED, "asthma"),
+    (r"(?:jigar\s+(?:ki\s+(?:bimari|problem|takleef)|kharab)|liver\s+ki\s+(?:problem|bimari|takleef))" + _NOT_NEGATED, "liver problems"),
+    (r"roz(?:ana)?\s+(?:sharab|daru|daaru|alcohol)\s+(?:peeta|peeti|pita|pite)", "drinks alcohol daily"),
+]
 _COMPILED = [(re.compile(rf"\b(?:{pattern})\b", re.IGNORECASE), gloss) for pattern, gloss in _GLOSSARY]
 
 # Devanagari and Telugu SCRIPT. Plain substring matching: \b is unusable here
