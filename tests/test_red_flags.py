@@ -236,3 +236,56 @@ class TestEverydayOverdosePhrasings:
     ])
     def test_ordinary_dosing_stays_ordinary(self, text):
         assert red_flags.check(text) is None, text
+
+
+class TestHindiAndTeluguEmergencies:
+    """Found Nov 23: all 54 Hindi/Telugu emergency phrasings tried ("seene mein dard", "saans
+    nahi aa rahi", "behosh ho gaya", "dil ka daura", "khoon ki ulti", "marna chahta hoon"...)
+    were NOT recognised: the Hinglish layer knew symptom words only, so they went into the
+    ordinary fever/cold flow. As elsewhere, these word lists are best-effort and need a native
+    speaker's review."""
+
+    @pytest.mark.parametrize("text", [
+        "seene mein dard", "mere seene mein dard ho raha hai", "chhati mein dard", "chaati noppi", "chest mein dard",
+        "saans nahi aa rahi", "saans lene mein takleef", "saans lene mein dikkat", "dam ghut raha hai", "oopiri aadatam ledu",
+        "behosh ho gaya", "bebosh", "spruha ledu", "chakkar aakar gir gaya",
+        "dil ka daura", "heart attack aa gaya", "gundepotu",
+        "mirgi ka daura", "daura pad raha hai", "jhatke aa rahe hain",
+        "khoon ki ulti", "ulti mein khoon", "raktham vanthulu",
+        "bahut khoon beh raha hai", "khoon band nahi ho raha",
+        "main marna chahta hoon", "mujhe jeena nahi hai", "aatmahatya", "nenu chanipovalani anukuntunnanu",
+        "सीने में दर्द", "साँस लेने में तकलीफ", "बेहोश हो गया", "दिल का दौरा", "खून की उल्टी", "आत्महत्या",
+        "ఛాతీ నొప్పి", "ఊపిరి ఆడటం లేదు", "గుండెపోటు",
+    ])
+    def test_these_are_emergencies(self, text):
+        assert red_flags.check(text) == red_flags.EMERGENCY_REPLY, text
+
+    @pytest.mark.parametrize("text", [
+        "bahut zyada dawai kha li", "zyada goliyan kha li", "dawai ki bottle kha li", "bacche ne dawai kha li",
+        "bachhe ne goli nigal li", "tablets ekkuva vesukunna", "ज्यादा दवा खा ली",
+    ])
+    def test_these_are_overdoses(self, text):
+        assert red_flags.check(text) == red_flags.OVERDOSE_REPLY, text
+
+    @pytest.mark.parametrize("text", [
+        "chhati mein jakdan nahi hai", "seene mein dard nahi hai", "seene mein koi dard nahi", "dil ka daura nahi aaya",
+        "khoon ki ulti nahi hui", "mujhe bukhar hai", "mera bachha ko khansi hai", "sar dard aur chakkar", "gale mein dard hai aur khansi",
+        "sardi zukam hai", "naaku jvaram undi", "paracetamol chahiye", "ibuprofen ki kimat", "12 Dam Road, Hyderabad", "mere bete ko bukhar hai",
+        "dawai kitni goli leni hai",
+    ])
+    def test_ordinary_hinglish_stays_ordinary(self, text):
+        assert red_flags.check(text) is None, text
+
+    def test_it_is_seen_even_when_chat_did_not_gloss_the_message(self, monkeypatch):
+        # while an order waits for its address chat() skips the Hinglish gloss (an address is
+        # stored exactly as typed); the emergency check glosses for itself
+        from fastapi.testclient import TestClient
+        monkeypatch.setattr(config, "SMTP_CONFIGURED", False)
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kw: ("from the model", messages))
+        client = TestClient(main.app)
+        client.post("/api/chat", json={"session_id": "hi1", "text": "order paracetamol 500mg"})
+        assert store.get_pending_order("hi1") is not None
+        reply = client.post("/api/chat", json={"session_id": "hi1", "text": "mere seene mein dard ho raha hai"}).json()["reply"]
+        assert reply == red_flags.EMERGENCY_REPLY
+        assert store.get_pending_order("hi1") is not None          # nothing was ordered or cleared
+        assert store.list_orders("demo_user") == []

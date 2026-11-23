@@ -14,6 +14,8 @@ and nothing here ever recommends or orders a product.
 
 import re
 
+from app import hinglish
+
 EMERGENCY_NUMBERS = "112 in India, 911 in the US"
 
 OVERDOSE_REPLY = (
@@ -226,7 +228,10 @@ def check(text: str) -> str | None:
     """The fixed reply for a message describing an emergency, or None."""
     if not text:
         return None
-    text = text.translate(_CURLY)
+    # Hindi / Telugu (romanised or in script): glossed into the English words below. chat()
+    # glosses ordinary messages already; this also covers the moments it does not (an order
+    # is waiting for its address), when an emergency must still be seen.
+    text = hinglish.gloss(text.translate(_CURLY))
     if is_overdose(text):
         return OVERDOSE_REPLY
     if is_infant_fever(text):

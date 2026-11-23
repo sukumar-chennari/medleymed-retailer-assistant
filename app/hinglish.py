@@ -50,12 +50,43 @@ _GLOSSARY += [
     (r"de\s*do|dedo|dena", "give me"),
     (r"bhej\s*do|bhejo|bhej\s+dena", "send me"),
 ]
+# EMERGENCY words (found Nov 23: 54 of 54 Hindi / Telugu emergency phrasings — "seene mein dard",
+# "saans nahi aa rahi", "behosh ho gaya", "dil ka daura", "khoon ki ulti", "marna chahta hoon" —
+# were not recognised, so they went into the ordinary fever/cold flow). Glossed into the English
+# the red-flag check already understands. Spellings vary a lot, so the common ones are listed.
+# "chhati mein jakdan nahi hai" = "no chest tightness": Hindi puts the negation AFTER the symptom.
+_NOT_NEGATED = r"(?!\s+(?:\w+\s+)?(?:nahi|nahin|nhi|na)\b)"
+_GLOSSARY += [
+    (r"(?:(?:seene|seena|chh?aa?ti|chaati|chhaati|gunde|gundelo|chest)\s+(?:mein\s+|me\s+|main\s+|lo\s+)?(?:dard|noppi|nopi)|"
+     r"(?:seene|chh?aa?ti)\s+(?:mein\s+)?(?:jakdan|bhaari\s+pan))" + _NOT_NEGATED, "chest pain"),
+    (r"saa?ns\s+(?:nahi|na)\s+(?:aa|le|ro)\w*|saa?ns\s+(?:lene\s+mein|lene\s+me|lene\s+main)\s+(?:takleef|taklif|dikkat|problem|pareshani|mushkil)|"
+     r"dam\s+ghut\w*|saa?ns\s+phool\w*|oopiri\s+aa?da\w*\s+ledu|oopiri\s+(?:teesuk\w*)\s+kashta\w*", "trouble breathing"),
+    (r"be-?hosh\w*|bebosh\w*|spruha\s+ledu|chakkar\s+(?:aa\s*kar|aakar)\s+gir\w*", "unconscious"),
+    (r"(?:dil\s+ka\s+(?:daura|dora)|heart\s+attack\s+(?:aa|aaya|aayi|hua)\w*|gunde\s*potu|gunde\s+pot\w*)" + _NOT_NEGATED, "having a heart attack"),
+    (r"(?:mirgi|daura\s+pad\w*|jhatke\s+aa\w*|fits?\s+aa\w*)" + _NOT_NEGATED, "seizure"),
+    (r"(?:khoon\s+(?:ki|ke)\s+ulti\w*|ulti\s+(?:mein|me|main)\s+khoon|raktham\s+vanthu\w*)" + _NOT_NEGATED, "vomiting blood"),
+    (r"khoon\s+(?:band\s+nahi|nahi\s+ruk|beh\s+raha|bah\s+raha)\w*|(?:bahut|zyada|jyada)\s+khoon\b", "severe bleeding"),
+    (r"(?:bahut|zyada|jyada|jaada)\s+(?:zyada\s+|jyada\s+)?(?:dawai|dawa|dawaai|goli|goliyan|tablets?)\s+kha\s+li\w*|"
+     r"(?:dawai|dawa|dawaai)\s+ki\s+(?:poori\s+|puri\s+)?bottle\s+kha\s+li|(?:goli|goliyan|tablets?)\s+(?:bahut\s+)?(?:zyada|jyada)\s+kha\w*|"
+     r"ne\s+(?:dawai|dawa|dawaai|goli|goliyan)\s+(?:kha|nigal)\s+li\w*|tablets?\s+ekkuva\s+vesuk\w*", "took too much medicine"),
+    (r"marna\s+chah\w*|mar\s+jaana\s+chah\w*|jeena\s+nahi|jeene\s+ki\s+ichha\s+nahi|aatmahatya|atmahatya|khudkushi|chanipovalani", "suicidal"),
+]
 _COMPILED = [(re.compile(rf"\b(?:{pattern})\b", re.IGNORECASE), gloss) for pattern, gloss in _GLOSSARY]
 
 # Devanagari and Telugu SCRIPT. Plain substring matching: \b is unusable here
 # because the vowel signs inside these words are not "word" characters to the
 # re module, so a word boundary would fire in the middle of a word.
 _SCRIPT_GLOSSARY = [
+    # emergencies (Nov 23) — Devanagari and Telugu script
+    (("सीने में दर्द", "छाती में दर्द", "सीने में जकड़न", "ఛాతీ నొప్పి", "ఛాతి నొప్పి", "గుండె నొప్పి", "గుండెల్లో నొప్పి"), "chest pain"),
+    (("सांस नहीं", "साँस नहीं", "सांस लेने में तकलीफ", "साँस लेने में तकलीफ", "सांस लेने में दिक्कत", "दम घुट", "ఊపిరి ఆడటం లేదు", "ఊపిరి ఆడడం లేదు"), "trouble breathing"),
+    (("बेहोश", "స్పృహ లేదు", "స్పృహ తప్పి"), "unconscious"),
+    (("दिल का दौरा", "హార్ట్ అటాక్", "గుండెపోటు"), "having a heart attack"),
+    (("मिर्गी", "दौरा पड़"), "seizure"),
+    (("खून की उल्टी", "उल्टी में खून", "రక్తం వాంతులు", "రక్తపు వాంతులు"), "vomiting blood"),
+    (("खून बंद नहीं", "खून नहीं रुक", "बहुत खून"), "severe bleeding"),
+    (("ज्यादा दवा खा", "ज़्यादा दवा खा", "ज्यादा गोलियां खा", "ज़्यादा गोलियाँ खा", "दवा की बोतल खा"), "took too much medicine"),
+    (("आत्महत्या", "मरना चाहता", "मरना चाहती", "जीना नहीं"), "suicidal"),
     (("बुखार", "ज्वर"), "fever"),
     (("सिरदर्द", "सर दर्द", "सिर दर्द"), "headache"),
     (("बदन दर्द", "शरीर में दर्द", "बदन में दर्द"), "body ache"),
@@ -80,6 +111,28 @@ _SCRIPT_GLOSSARY = [
     (("పిల్లవాడు", "పిల్లలు", "పిల్ల", "బిడ్డ", "చిన్న పిల్ల"), "child"),
 ]
 
+
+
+# "1 mahine ke bachhe", "do hafte ka baby": a baby's age in Hindi. The under-3-months fever rule
+# only understood English ages, so "mere 1 mahine ke bachhe ko bukhar hai" got a product
+# recommendation instead of "see a doctor now" (found Nov 23). The age becomes English
+# ("1 month old") so every existing age check sees it.
+_HINDI_NUMBERS = {"ek": 1, "do": 2, "teen": 3, "char": 4, "chaar": 4, "paanch": 5, "panch": 5, "chhe": 6, "che": 6, "saat": 7, "aath": 8, "nau": 9, "das": 10}
+_HINDI_UNITS = {"mahine": "month", "mahina": "month", "maheene": "month", "hafte": "week", "hafta": "week", "haphte": "week", "din": "day", "dino": "day"}
+_HINDI_AGE_RE = re.compile(
+    r"\b(\d{1,2}|" + "|".join(_HINDI_NUMBERS) + r")\s+(" + "|".join(_HINDI_UNITS) + r")\s+(?:ka|ke|ki)\s+"
+    r"(?:bachh?[aei]\w*|bache|bachchi|beta|beti|shishu|baby|nawjaat\w*)\b",
+    re.IGNORECASE,
+)
+
+
+def _age_gloss(text: str) -> str | None:
+    match = _HINDI_AGE_RE.search(text)
+    if not match:
+        return None
+    raw, unit = match.group(1).lower(), _HINDI_UNITS[match.group(2).lower()]
+    number = int(raw) if raw.isdigit() else _HINDI_NUMBERS[raw]
+    return f"{number} {unit}{'s' if number != 1 else ''} old"
 
 
 def gloss(text: str) -> str:
