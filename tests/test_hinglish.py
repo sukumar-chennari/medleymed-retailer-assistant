@@ -220,3 +220,35 @@ class TestShoppingWords:
 def test_glossing_twice_changes_nothing(text):
     once = hinglish.gloss(text)
     assert hinglish.gloss(once) == once
+
+
+class TestABabysAgeInHindi:
+    """Found Nov 23: "mere 1 mahine ke bachhe ko bukhar hai" (my 1-month-old has a fever) got
+    a product recommendation, because the under-3-months rule only understood English ages."""
+
+    @pytest.mark.parametrize("text, age", [
+        ("mere 1 mahine ke bachhe ko bukhar hai", "1 month old"), ("do hafte ke bachhe ko bukhar", "2 weeks old"),
+        ("mera 10 din ka baby bukhar hai", "10 days old"), ("mera ek mahine ka beta bukhar mein hai", "1 month old"),
+        ("teen mahine ka bachha bukhar", "3 months old"),
+    ])
+    def test_the_age_is_glossed_into_english(self, text, age):
+        assert f"{age}" in hinglish.gloss(text)
+
+    @pytest.mark.parametrize("text", [
+        "mere 1 mahine ke bachhe ko bukhar hai", "do hafte ke bachhe ko bukhar", "mera 10 din ka baby bukhar hai",
+    ])
+    def test_a_baby_under_three_months_with_a_fever_gets_the_see_a_doctor_reply(self, text):
+        from app import red_flags
+        assert red_flags.check(text) == red_flags.INFANT_FEVER_REPLY
+
+    @pytest.mark.parametrize("text", [
+        "mera 6 mahine ka bachha bukhar hai", "mere 4 mahine ke bachhe ko bukhar", "mera 2 saal ka bachha bukhar",
+        "mere 1 mahine ke bachhe ko khansi hai",
+    ])
+    def test_an_older_child_or_no_fever_is_not_the_infant_reply(self, text):
+        from app import red_flags
+        assert red_flags.check(text) is None
+
+    def test_glossing_twice_changes_nothing(self):
+        once = hinglish.gloss("mere 1 mahine ke bachhe ko bukhar hai")
+        assert hinglish.gloss(once) == once

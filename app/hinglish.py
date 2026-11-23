@@ -142,6 +142,9 @@ def gloss(text: str) -> str:
         return text
     lower = text.lower()
     added = []
+    age = _age_gloss(text)
+    if age and age not in lower:
+        added.append(age)
     for pattern, english in _COMPILED:
         if pattern.search(text) and english not in added and not re.search(rf"\b{re.escape(english.lower())}\b", lower):
             added.append(english)
