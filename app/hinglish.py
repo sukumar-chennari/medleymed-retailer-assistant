@@ -150,6 +150,43 @@ def _age_gloss(text: str) -> str | None:
     return f"{number} {unit}{'s' if number != 1 else ''} old"
 
 
+# "3 din se bukhar hai" / "ek hafte se" / "kaafi din se" / Telugu "3 rojula nundi": how long.
+# Glossed into "for 3 days" etc. so the long-fever see-a-doctor note (found Nov 24: none of
+# these got it) sees it. A fever for 1-2 days gets no note, exactly as in English.
+_HINDI_DURATION_RE = re.compile(
+    r"\b(\d{1,2}|" + "|".join(_HINDI_NUMBERS) + r")\s+(din|dino|hafte|hafta|haphte|mahine|mahina|maheene)\s+se\b",
+    re.IGNORECASE,
+)
+_VAGUE_HINDI_DURATION_RE = re.compile(r"\b(?:kaafi|kafi|kai|bahut|kuch|bahot)\s+(?:din|dino)\s+se\b", re.IGNORECASE)
+_TELUGU_DURATION_RE = re.compile(
+    r"\b(?:(\d{1,2})\s+rojul[au]\s+nundi|(oka|rendu|moodu|naalugu|aidu)\s+vaar\w*\s+nundi|vaaram\s+nundi|vaaraniki\s+(?:paigaa|paiga))\b",
+    re.IGNORECASE,
+)
+_TELUGU_NUMBERS = {"oka": 1, "rendu": 2, "moodu": 3, "naalugu": 4, "aidu": 5}
+
+
+def _duration_gloss(text: str) -> str | None:
+    match = _HINDI_DURATION_RE.search(text)
+    if match:
+        raw, unit = match.group(1).lower(), match.group(2).lower()
+        number = int(raw) if raw.isdigit() else _HINDI_NUMBERS[raw]
+        if unit.startswith("din"):
+            return f"for {number} day{'s' if number != 1 else ''}"
+        if unit.startswith("ha") :
+            return f"for {number} week{'s' if number != 1 else ''}"
+        return f"for {number * 4} weeks"       # months
+    if _VAGUE_HINDI_DURATION_RE.search(text):
+        return "for several days"
+    match = _TELUGU_DURATION_RE.search(text)
+    if match:
+        if match.group(1):
+            number = int(match.group(1))
+            return f"for {number} day{'s' if number != 1 else ''}"
+        number = _TELUGU_NUMBERS.get((match.group(2) or "oka").lower(), 1)
+        return f"for {number} week{'s' if number != 1 else ''}"
+    return None
+
+
 def gloss(text: str) -> str:
     """The text with English glosses appended for any Hinglish words in it
     (unchanged when there are none, or the English word is already there)."""
@@ -160,6 +197,9 @@ def gloss(text: str) -> str:
     age = _age_gloss(text)
     if age and age not in lower:
         added.append(age)
+    duration = _duration_gloss(text)
+    if duration and duration not in lower:
+        added.append(duration)
     for pattern, english in _COMPILED:
         if pattern.search(text) and english not in added and not re.search(rf"\b{re.escape(english.lower())}\b", lower):
             added.append(english)

@@ -252,3 +252,37 @@ class TestABabysAgeInHindi:
     def test_glossing_twice_changes_nothing(self):
         once = hinglish.gloss("mere 1 mahine ke bachhe ko bukhar hai")
         assert hinglish.gloss(once) == once
+
+
+class TestHowLongInHindiAndTelugu:
+    """Found Nov 24: "mujhe 3 din se bukhar hai" (fever for 3 days), "ek hafte se bukhar" and the
+    Telugu "3 rojula nundi jvaram" got no see-a-doctor note, while "fever for 3 days" does.
+    Best-effort words; a native speaker should review them."""
+
+    @pytest.mark.parametrize("text, gloss", [
+        ("mujhe 3 din se bukhar hai", "for 3 days"), ("teen din se bukhar hai", "for 3 days"), ("5 din se bukhar hai", "for 5 days"),
+        ("ek hafte se bukhar hai", "for 1 week"), ("do hafte se bukhar", "for 2 weeks"), ("2 mahine se bukhar hai", "for 8 weeks"),
+        ("kaafi din se bukhar hai", "for several days"), ("bahut din se bukhar hai", "for several days"),
+        ("3 rojula nundi jvaram", "for 3 days"), ("oka vaaram nundi jvaram", "for 1 week"), ("rendu vaaraalu nundi jvaram", "for 2 weeks"),
+    ])
+    def test_the_duration_is_glossed_into_english(self, text, gloss):
+        assert gloss in hinglish.gloss(text)
+
+    @pytest.mark.parametrize("text", [
+        "mujhe 3 din se bukhar hai", "ek hafte se bukhar hai", "kaafi din se bukhar hai", "3 rojula nundi jvaram", "oka vaaram nundi jvaram",
+    ])
+    def test_a_long_fever_gets_the_doctor_note(self, text):
+        from app import red_flags
+        assert red_flags.doctor_note(hinglish.gloss(text)) == red_flags.DOCTOR_NOTE
+
+    @pytest.mark.parametrize("text", [
+        "mujhe bukhar hai", "1 din se bukhar hai", "do din se bukhar hai", "kal se bukhar hai", "2 rojula nundi jvaram",
+        "mujhe 3 din se sar dard hai",
+    ])
+    def test_a_short_duration_or_no_fever_gets_none(self, text):
+        from app import red_flags
+        assert red_flags.doctor_note(hinglish.gloss(text)) is None
+
+    def test_glossing_twice_changes_nothing(self):
+        once = hinglish.gloss("mujhe 3 din se bukhar hai")
+        assert hinglish.gloss(once) == once
