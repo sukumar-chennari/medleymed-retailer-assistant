@@ -165,6 +165,26 @@ _TELUGU_DURATION_RE = re.compile(
 _TELUGU_NUMBERS = {"oka": 1, "rendu": 2, "moodu": 3, "naalugu": 4, "aidu": 5}
 
 
+# "10 goliyan kha li" / "das goliyan kha li": how many tablets were swallowed. The 8-or-more
+# overdose rule only read English ("I took 10 tablets") — found Nov 24. The count carries into
+# "took N tablets" so that rule sees it.
+_HINDI_BIG_NUMBERS = {**_HINDI_NUMBERS, "gyarah": 11, "barah": 12, "pandrah": 15, "bees": 20, "tees": 30, "chalis": 40, "pachas": 50, "pachaas": 50}
+_HINDI_PILL_COUNT_RE = re.compile(
+    r"\b(\d{1,3}|" + "|".join(_HINDI_BIG_NUMBERS) + r")\s+(?:goli|goliyan|goliya|tablets?|tab|capsules?)\s+"
+    r"(?:ek\s+saath\s+)?(?:kha|khai|khayi|khaayi|nigal)\w*",
+    re.IGNORECASE,
+)
+
+
+def _pill_count_gloss(text: str) -> str | None:
+    match = _HINDI_PILL_COUNT_RE.search(text)
+    if not match:
+        return None
+    raw = match.group(1).lower()
+    number = int(raw) if raw.isdigit() else _HINDI_BIG_NUMBERS[raw]
+    return f"took {number} tablets"
+
+
 def _duration_gloss(text: str) -> str | None:
     match = _HINDI_DURATION_RE.search(text)
     if match:
@@ -200,6 +220,9 @@ def gloss(text: str) -> str:
     duration = _duration_gloss(text)
     if duration and duration not in lower:
         added.append(duration)
+    pills = _pill_count_gloss(text)
+    if pills and pills not in lower:
+        added.append(pills)
     for pattern, english in _COMPILED:
         if pattern.search(text) and english not in added and not re.search(rf"\b{re.escape(english.lower())}\b", lower):
             added.append(english)

@@ -286,3 +286,30 @@ class TestHowLongInHindiAndTelugu:
     def test_glossing_twice_changes_nothing(self):
         once = hinglish.gloss("mujhe 3 din se bukhar hai")
         assert hinglish.gloss(once) == once
+
+
+class TestHowManyTabletsInHindi:
+    """Found Nov 24: "10 goliyan kha li" (swallowed 10 tablets) was not an overdose, because the
+    8-or-more rule only read English. Best-effort Hindi; needs a native speaker's review."""
+
+    @pytest.mark.parametrize("text, gloss", [
+        ("10 goliyan kha li", "took 10 tablets"), ("das goliyan kha li", "took 10 tablets"), ("maine 12 tablets kha li", "took 12 tablets"),
+        ("bees goliyan kha li", "took 20 tablets"), ("maine ek saath 15 goliyan khayi", "took 15 tablets"),
+        ("bacche ne 10 goliyan kha li", "took 10 tablets"), ("maine 30 tablets nigal li", "took 30 tablets"),
+    ])
+    def test_the_count_is_glossed_into_english(self, text, gloss):
+        assert gloss in hinglish.gloss(text)
+
+    @pytest.mark.parametrize("text", ["10 goliyan kha li", "das goliyan kha li", "8 goliyan kha li", "bacche ne 10 goliyan kha li"])
+    def test_eight_or_more_is_an_overdose(self, text):
+        from app import red_flags
+        assert red_flags.check(text) == red_flags.OVERDOSE_REPLY
+
+    @pytest.mark.parametrize("text", ["2 goliyan kha li", "maine 1 goli khayi", "teen goliyan kha li", "7 goliyan kha li", "2 goli subah 2 shaam", "paracetamol chahiye"])
+    def test_fewer_is_not(self, text):
+        from app import red_flags
+        assert red_flags.check(text) is None
+
+    def test_glossing_twice_changes_nothing(self):
+        once = hinglish.gloss("10 goliyan kha li")
+        assert hinglish.gloss(once) == once
