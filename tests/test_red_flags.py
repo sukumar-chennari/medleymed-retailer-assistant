@@ -289,3 +289,24 @@ class TestHindiAndTeluguEmergencies:
         assert reply == red_flags.EMERGENCY_REPLY
         assert store.get_pending_order("hi1") is not None          # nothing was ordered or cleared
         assert store.list_orders("demo_user") == []
+
+
+class TestLongFeverWithoutANumber:
+    """Found Nov 24: "feverish for the past week", "fever for a few days", "fever all week" and
+    "fever for days now" got no see-a-doctor note, while "fever for 3 days" did."""
+
+    @pytest.mark.parametrize("text", [
+        "feverish for the past week", "fever for a few days", "fever all week", "I've had a fever for days now",
+        "fever since last week", "I have had fever for several days", "fever for the last week",
+        "fever over the past few days", "fever for over a week", "this whole week I have had a fever",
+    ])
+    def test_the_doctor_note_is_added(self, text):
+        assert red_flags.doctor_note(text) == red_flags.DOCTOR_NOTE, text
+
+    @pytest.mark.parametrize("text", [
+        "fever for a couple of days", "fever since this morning", "fever started yesterday", "I have a fever",
+        "fever for two days", "fever last night", "fever for a day", "fever for 2 days",
+        "a few days ago I felt fine but now I have a fever", "fever for a few hours", "fever 100",
+    ])
+    def test_a_short_or_unrelated_duration_gets_none(self, text):
+        assert red_flags.doctor_note(text) is None, text

@@ -286,7 +286,20 @@ def _high_temperature(text: str) -> bool:
     return False
 
 
+# Durations with no number ("feverish for the past week", "for a few days", "all week", "for
+# days now", "since last week"): found Nov 24, none of these got the see-a-doctor note, while
+# "for 3 days" did. "a couple of days" is two days and is deliberately not here.
+_VAGUE_LONG_RE = re.compile(
+    r"\b(?:for|over|during)\s+(?:the\s+)?(?:past|last)\s+(?:week|few\s+days|several\s+days|\d+\s+days)\b|"
+    r"\b(?:a\s+few|few|several|many)\s+days\b(?!\s+ago\b)|\ball\s+week\b|\bthis\s+whole\s+week\b|\bfor\s+(?:days|weeks|ages)\b|"
+    r"\bsince\s+last\s+(?:week|month)\b|\bfor\s+over\s+a\s+week\b",
+    re.IGNORECASE,
+)
+
+
 def _long_fever(text: str) -> bool:
+    if _VAGUE_LONG_RE.search(text):
+        return True
     for match in _DURATION_RE.finditer(text):
         raw, unit = match.group(1).lower(), match.group(2).lower()
         if unit.startswith("week"):
