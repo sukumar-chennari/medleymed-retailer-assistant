@@ -152,6 +152,21 @@ _EMERGENCY_RES = [
         r"\b(?:fever|feverish|temperature|baby|infant|newborn)\b.{0,40}\b(?:not\s+drinking|won'?t\s+drink|refus\w+\s+to\s+drink|refus\w+\s+(?:all\s+)?(?:fluids|drinks))\b",
         r"\bdrool\w*\b.{0,40}\b(?:swallow\w*|breath\w*)\b|\b(?:difficulty|trouble|can'?t)\s+swallow\w*\b.{0,40}\bdrool\w*",
         r"\b(?:fever|headache)\b.{0,50}\b(?:light\s+(?:hurts|hurting)|sensitive\s+to\s+(?:the\s+)?light|photophobia)\b|\b(?:light\s+hurts|photophobia)\b",
+        # Found Nov 25 (reactions to a medicine, and signs that need urgent care): yellow eyes or skin,
+        # swelling of the face / lips / tongue, hives with a throat or breathing symptom, wheezing,
+        # "can't catch my breath", about to faint, can't pass urine, slurred or lost speech, a
+        # numb or drooping half of the face, arm or jaw pain with sweating or nausea.
+        r"\bjaundice\b|\byellow(?:ing|ed)?\s+(?:eyes|skin)\b|\b(?:eyes|skin)\s+(?:have\s+|has\s+|are\s+|is\s+)?(?:turned\s+|turning\s+|gone\s+)?yellow\b",
+        r"\bswelling\s+(?:of|in|around)\s+(?:the\s+|my\s+|his\s+|her\s+)?(?:face|lips|tongue|throat|mouth|eyes)\b",
+        r"\bhives\b.{0,40}\b(?:throat|breath\w*|swelling|swollen|face|lips|tongue)\b|\b(?:throat|breath\w*|swelling|swollen|face|lips|tongue)\b.{0,40}\bhives\b",
+        r"\bwheez(?:e|es|ing)\b|\b(?:can'?t|cannot|unable\s+to)\s+catch\s+(?:my|his|her|their)\s+breath\b|\bgasping\b",
+        r"\b(?:about\s+to|going\s+to|feel\s+like\s+(?:i'?m\s+|i\s+am\s+)?going\s+to)\s+(?:faint|pass\s+out|black\s+out|collapse)\b|\b(?:feel(?:ing)?|very|really)\s+faint\b",
+        r"\b(?:can'?t|cannot|unable\s+to|haven'?t\s+been\s+able\s+to)\s+(?:pass\s+urine|pee|urinate|wee)\b(?!\s+(?:in\s+public|in\s+front|at\s+work|at\s+school))",
+        r"\bspeech\s+(?:is\s+|has\s+become\s+|got\s+)?slurred\b|\b(?:trouble|difficulty)\s+speaking\b|\b(?:can'?t|cannot|unable\s+to)\s+speak\b",
+        r"\b(?:half|one\s+side)\s+(?:of\s+)?(?:my|his|her|the)?\s*(?:face|body)\b.{0,15}\b(?:numb|weak|droop\w*|paralys\w*)\b|\bnumb(?:ness)?\s+(?:in|on)\s+(?:my\s+|his\s+|her\s+|the\s+)?(?:face|arm)\b",
+        r"\b(?:pain|ache)\s+(?:in|down|radiating\s+to|spreading\s+to)\s+(?:my\s+|his\s+|her\s+|the\s+)?(?:left\s+)?(?:arm|jaw)\b.{0,40}\b(?:sweat\w*|nausea|breath\w*|chest)\b"
+        r"|\b(?:sweat\w*|nausea)\b.{0,40}\b(?:arm|jaw)\s+pain\b|\bjaw\s+pain\b.{0,30}\bsweat",
+        r"\b(?:palpitations?|heart\s+(?:is\s+)?(?:racing|pounding|fluttering)|racing\s+heart|irregular\s+heartbeat|fast\s+heartbeat)\b.{0,50}\b(?:faint\w*|dizz\w+|chest|short\s+of\s+breath|sweat\w*|pain)\b",
         r"\b(?:can'?t|cannot|unable\s+to|won'?t)\s+(?:touch|put|bring|bend)\b.{0,25}\bchin\b.{0,12}\bchest\b|\bchin\s+to\s+(?:his\s+|her\s+|my\s+|the\s+)?chest\b|\bneck\s+(?:is\s+)?stiff\b",
         r"\b(?:baby|infant|newborn|toddler|child)\b.{0,40}\b(?:not\s+feeding|won'?t\s+feed|refus\w*\s+(?:feeds?|to\s+feed)|very\s+sleepy|too\s+sleepy|limp|floppy)\b",
     )

@@ -370,3 +370,33 @@ class TestDangerSignsThatGoWithAFever:
     ])
     def test_ordinary_messages_stay_ordinary(self, text):
         assert red_flags.check(text) in (None,), text
+
+
+class TestReactionsAndUrgentSigns:
+    """Found Nov 25 (after taking a medicine, and signs that need urgent care): yellow eyes or
+    skin, swelling of the face / lips / tongue, hives with a throat or breathing symptom,
+    wheezing, "can't catch my breath", about to faint, can't pass urine, slurred or lost speech,
+    half the face numb, arm or jaw pain with sweating or nausea — none was recognised."""
+
+    @pytest.mark.parametrize("text", [
+        "my eyes have turned yellow after paracetamol", "yellow skin and eyes after taking tablets", "jaundice", "dark urine and yellow eyes",
+        "hives all over and itchy throat after cetirizine", "swelling of the face after taking the tablet",
+        "wheezing after ibuprofen", "I'm wheezing and can't catch my breath",
+        "I feel like I'm going to pass out", "I'm very dizzy and about to faint", "feeling very faint and sweaty",
+        "can't pass urine", "I haven't been able to pee",
+        "trouble speaking", "my speech is slurred after the tablet", "half my face is numb",
+        "cold sweat and nausea with arm pain", "jaw pain and sweating", "pain in my left arm and I'm sweating",
+        "my heart is pounding and I feel faint", "palpitations and chest pain after cold medicine",
+    ])
+    def test_these_are_emergencies(self, text):
+        assert red_flags.check(text) == red_flags.EMERGENCY_REPLY, text
+
+    @pytest.mark.parametrize("text", [
+        "yellow tablets", "the tablet is yellow", "a yellow label", "my skin is dry", "I have hives", "itchy hives on my arm",
+        "hives on my arm after eating prawns", "swelling on my ankle", "swollen glands", "my heart rate is 70",
+        "I exercise and my heart is racing a bit", "palpitations", "I spoke to him", "I can speak Hindi", "I feel dizzy",
+        "I feel a bit faint when I stand up fast", "my arm hurts from the gym", "arm pain from lifting", "jaw pain after the dentist",
+        "the faint smell of mint", "wheat allergy", "I can't pee in public toilets", "I can't pass the exam",
+    ])
+    def test_ordinary_messages_stay_ordinary(self, text):
+        assert red_flags.check(text) is None, text
