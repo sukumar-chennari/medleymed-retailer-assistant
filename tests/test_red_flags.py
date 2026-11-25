@@ -334,3 +334,39 @@ class TestMoreWaysToSayAnInfantHasAFever:
     ])
     def test_durations_older_children_and_unrelated_words_do_not(self, text):
         assert red_flags.check(text) != red_flags.INFANT_FEVER_REPLY, text
+
+
+class TestDangerSignsThatGoWithAFever:
+    """Found Nov 25: 17 of 20 danger signs that go with a fever were not recognised — a rash that
+    doesn't fade, purple spots, fever with confusion / hard to wake, a bulging soft spot, no wet
+    nappies, "can't keep fluids down", drooling with trouble swallowing, light hurting the eyes,
+    "can't touch chin to chest", a temperature of 41. The product note itself already lists a
+    rash that doesn't fade, confusion and a stiff neck as reasons for emergency care."""
+
+    @pytest.mark.parametrize("text", [
+        "fever and a rash that doesn't fade", "purple spots and fever", "fever with blotchy skin", "fever and confusion",
+        "very drowsy and hard to wake with a fever", "my child has fever and is not drinking", "fever and not peeing at all",
+        "can't keep any fluids down", "my baby has a bulging soft spot", "my child is having trouble waking up",
+        "fever and severe headache with light hurting eyes", "fever and difficulty swallowing drooling", "no wet nappies for 8 hours",
+        "fever with a sore neck and can't touch chin to chest", "he won't wake up", "I can't wake him",
+        "my dad has fever and is hard to wake", "baby has not peed for 12 hours",
+    ])
+    def test_these_are_emergencies(self, text):
+        assert red_flags.check(text) in (red_flags.EMERGENCY_REPLY, red_flags.INFANT_FEVER_REPLY), text
+
+    @pytest.mark.parametrize("text", [
+        "fever of 41", "temperature is 41", "fever 41.5", "temperature 105.9", "fever 106 F", "fever 41 C", "temp 42",
+    ])
+    def test_a_temperature_of_41_c_or_105_8_f_is_an_emergency_not_just_a_note(self, text):
+        assert red_flags.check(text) == red_flags.EMERGENCY_REPLY, text
+
+    @pytest.mark.parametrize("text", [
+        "41 years old with a fever", "I am 41 and have a fever", "fever and 41 mg", "my 41 year old father has a fever",
+        "fever 41 days", "fever 40", "fever 39.5", "temperature 104", "fever of 103",
+        "I am confused about the dosage", "I'm not drinking alcohol these days", "my child is not drinking enough milk but no fever",
+        "the rash is itchy", "a rash on my arm", "I feel drowsy after the cold tablet", "I'm sleepy", "light roast coffee",
+        "fever for 2 days", "headache and fever", "my neck is sore from sleeping", "I haven't peed since the morning but I'm fine",
+        "hard to wake up in the morning", "I can't wake up early",
+    ])
+    def test_ordinary_messages_stay_ordinary(self, text):
+        assert red_flags.check(text) in (None,), text

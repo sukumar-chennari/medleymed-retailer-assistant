@@ -132,6 +132,27 @@ _EMERGENCY_RES = [
         r"don'?t\s+want\s+to\s+(?:live|be\s+alive))\b",
         # a baby or child who is limp / not feeding / very sleepy / turning blue
         r"\bturning\s+blue\b",
+        # Found Nov 25: 17 of 20 danger signs that go with a fever were not recognised (a rash that
+        # does not fade, purple spots, confusion or a hard-to-wake person with a fever, a bulging
+        # soft spot, no wet nappies, "can't keep fluids down", drooling with trouble swallowing,
+        # light hurting the eyes with a fever / headache, "can't touch chin to chest"). Each is
+        # specific enough not to fire on an ordinary message; the product note itself already
+        # lists a rash that doesn't fade, confusion and a stiff neck as reasons for emergency care.
+        r"\brash\b.{0,40}\b(?:doesn'?t|does\s+not|won'?t|not)\s+(?:fade|go\s+away|blanch|disappear)\b|\bnon-?blanching\b|\bglass\s+test\b",
+        r"\bpurple\s+(?:spots|rash|blotches|patches|marks)\b|\bpetechia\w*\b|\bblotchy\s+(?:skin|rash|and\s+cold)\b",
+        r"\b(?:fever|feverish|temperature)\b.{0,40}\b(?:confus\w+|drowsy|hard\s+to\s+wake|difficult\s+to\s+wake|can'?t\s+(?:be\s+)?wake\w*|lethargic|floppy|limp)\b"
+        r"|\b(?:confus\w+|drowsy|lethargic|floppy|limp)\b.{0,40}\b(?:fever|feverish|temperature)\b",
+        r"\b(?:hard|difficult|trouble|struggling)\s+to\s+(?:wake|rouse)\s+(?:him|her|them|my\s+\w+|the\s+\w+|baby|child)\b"
+        r"|\b(?:can'?t|cannot|won'?t)\s+(?:be\s+)?(?:woken|wake\s+(?:him|her|them|my\s+\w+|the\s+\w+|baby|child))\b"
+        r"|\bwon'?t\s+wake\s+up\b|\bnot\s+waking\s+up\b"
+        r"|\b(?:child|baby|toddler|son|daughter|dad|mum|mom|father|mother|patient)\b.{0,40}\b(?:trouble|difficulty|hard|struggling)\s+(?:to\s+)?wak\w+\b",
+        r"\b(?:bulging|sunken)\s+(?:soft\s+spot|fontanelle|fontanel)\b",
+        r"\bno\s+wet\s+(?:nappies|diapers)\b|\b(?:not|hasn'?t|haven'?t)\s+(?:peed|urinated|passed\s+urine|had\s+a\s+wee)\b.{0,30}\b(?:all\s+day|for\s+(?:\d+|a|an)\s+(?:hours?|day)|since\s+yesterday|in\s+\d+\s+hours)\b"
+        r"|\bnot\s+(?:peeing|urinating)\s+(?:at\s+all|much)\b|\bno\s+urine\b|\bcan'?t\s+keep\s+(?:any\s+)?(?:fluids?|water|liquids?)\s+down\b",
+        r"\b(?:fever|feverish|temperature|baby|infant|newborn)\b.{0,40}\b(?:not\s+drinking|won'?t\s+drink|refus\w+\s+to\s+drink|refus\w+\s+(?:all\s+)?(?:fluids|drinks))\b",
+        r"\bdrool\w*\b.{0,40}\b(?:swallow\w*|breath\w*)\b|\b(?:difficulty|trouble|can'?t)\s+swallow\w*\b.{0,40}\bdrool\w*",
+        r"\b(?:fever|headache)\b.{0,50}\b(?:light\s+(?:hurts|hurting)|sensitive\s+to\s+(?:the\s+)?light|photophobia)\b|\b(?:light\s+hurts|photophobia)\b",
+        r"\b(?:can'?t|cannot|unable\s+to|won'?t)\s+(?:touch|put|bring|bend)\b.{0,25}\bchin\b.{0,12}\bchest\b|\bchin\s+to\s+(?:his\s+|her\s+|my\s+|the\s+)?chest\b|\bneck\s+(?:is\s+)?stiff\b",
         r"\b(?:baby|infant|newborn|toddler|child)\b.{0,40}\b(?:not\s+feeding|won'?t\s+feed|refus\w*\s+(?:feeds?|to\s+feed)|very\s+sleepy|too\s+sleepy|limp|floppy)\b",
     )
 ]
@@ -207,8 +228,38 @@ def is_overdose(text: str) -> bool:
     return False
 
 
+_EXTREME_C = 41.0      # 105.8 F: hyperpyrexia, not a "see a doctor soon"
+_EXTREME_F = 105.8
+
+
+def _extreme_temperature(text: str) -> bool:
+    """A temperature of 41 C / 105.8 F or more. Same unit rules as _high_temperature."""
+    for match in _TEMP_RE.finditer(text):
+        value = float(match.group(1))
+        unit = (match.group(2) or "").lower()
+        if unit.startswith("c"):
+            if _EXTREME_C <= value <= 43:
+                return True
+        elif unit.startswith("f"):
+            if _EXTREME_F <= value <= 110:
+                return True
+        elif "." in match.group(1):
+            if _EXTREME_C <= value <= 43 or _EXTREME_F <= value <= 110:
+                return True   # no unit: nobody has a 41.5 F fever or a 105.9 C one, so the number says which
+        elif _EXTREME_F <= value <= 110:
+            return True
+        elif 41 <= value <= 43:
+            # a whole 41-43 is also an age or a dose ("I am 41", "41 mg"): only right after a fever word
+            number = int(value)
+            if re.search(rf"\b(?:fever|temperature|temp)\s*(?:of|is|was|at|:)?\s*{number}\b(?!\s*(?:years?|yo|y/o|mg|ml|kg|%|days?|weeks?|months?))", text, re.IGNORECASE):
+                return True
+    return False
+
+
 def is_emergency(text: str) -> bool:
     text = text.translate(_CURLY)  # "can’t breathe" typed on a phone
+    if _FEVER_RE.search(text) and _extreme_temperature(text):
+        return True
     return any(_has_unnegated_match(p, text) for p in _EMERGENCY_RES)
 
 
