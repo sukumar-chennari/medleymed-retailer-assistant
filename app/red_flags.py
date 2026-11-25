@@ -136,7 +136,17 @@ _EMERGENCY_RES = [
     )
 ]
 
-_FEVER_RE = re.compile(r"\b(?:fever|feverish|temperature|temp|hot\s+to\s+the\s+touch|burning\s+up)\b", re.IGNORECASE)
+_FEVER_RE = re.compile(
+    r"\b(?:fever|feverish|temperature|temp|hot\s+to\s+the\s+touch|burning\s+up|warm\s+to\s+the\s+touch)\b|"
+    r"\b(?:feels?|feeling|running)\s+(?:a\s+)?(?:very\s+|really\s+|so\s+)?(?:warm|hot)\b",
+    re.IGNORECASE,
+)
+_BABY_WORD_RE = re.compile(r"\b(?:baby|babies|infant|newborn|bub|little\s+one|son|daughter)\b", re.IGNORECASE)
+_UNDER_AGE_RE = re.compile(
+    r"\b(?:under|less\s+than|younger\s+than|below)\s+(?:the\s+age\s+of\s+)?(\d|one|two|three)\s*months?\b", re.IGNORECASE
+)
+_DURATION_AFTER_RE = re.compile(r"\s*(?:now|already|so\s+far|ago|into|long|straight|in\s+a\s+row)\b", re.IGNORECASE)
+_DURATION_BEFORE_RE = re.compile(r"\b(?:for|since|past|last|over|about|almost|nearly)\s+(?:the\s+)?(?:last\s+|past\s+)?$", re.IGNORECASE)
 _NEWBORN_RE = re.compile(r"\bnewborn\b", re.IGNORECASE)
 _AGE_RE = re.compile(
     r"\b(\d{1,2}|one|two|three|four|a|an)\s*[- ]?\s*(day|days|week|weeks|month|months)[- ]?\s*(?:old)?\b",
@@ -219,7 +229,23 @@ def is_infant_fever(text: str) -> bool:
             # unless the text says old.
             if re.search(r"old", match.group(0), re.IGNORECASE) and (unit.startswith("day") or number <= 12):
                 return True
+            # ...or a baby is named and the number is not a duration: "my infant has a fever, she is
+            # 7 weeks", "my baby (6 weeks) has a high temperature" (found Nov 25).
+            nearby = text[max(0, match.start() - 45): match.end() + 45]
+            if (
+                _BABY_WORD_RE.search(nearby)
+                and (unit.startswith("day") or number <= 12)
+                and not _DURATION_BEFORE_RE.search(text[: match.start()])
+                and not _DURATION_AFTER_RE.match(text[match.end():])
+            ):
+                return True
         elif unit.startswith("month") and number < 3:
+            return True
+    # "baby under 3 months with fever": the age is a ceiling, and 3 months is still under it
+    under = _UNDER_AGE_RE.search(text)
+    if under and _BABY_WORD_RE.search(text):
+        raw = under.group(1).lower()
+        if (int(raw) if raw.isdigit() else {"one": 1, "two": 2, "three": 3}[raw]) <= 3:
             return True
     return False
 

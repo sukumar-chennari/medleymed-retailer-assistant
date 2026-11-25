@@ -310,3 +310,27 @@ class TestLongFeverWithoutANumber:
     ])
     def test_a_short_or_unrelated_duration_gets_none(self, text):
         assert red_flags.doctor_note(text) is None, text
+
+
+class TestMoreWaysToSayAnInfantHasAFever:
+    """Found Nov 25: "baby is 10 days old and feels warm", "my infant has a fever, she is 7 weeks",
+    "my baby (6 weeks) has a high temperature" and "baby under 3 months with fever" were not
+    recognised as a fever in a baby under 3 months (the age had to say "old", and "under 3
+    months" counted 3 as not under 3)."""
+
+    @pytest.mark.parametrize("text", [
+        "baby is 10 days old and feels warm", "my infant has a fever, she is 7 weeks", "my baby (6 weeks) has a high temperature",
+        "baby under 3 months with fever", "baby less than 2 months feels hot", "my newborn is hot to the touch",
+        "my baby is 6 weeks old and has a fever", "my 11 week old has a fever",
+    ])
+    def test_these_get_the_see_a_doctor_now_reply(self, text):
+        assert red_flags.check(text) == red_flags.INFANT_FEVER_REPLY, text
+
+    @pytest.mark.parametrize("text", [
+        "my 4 month old has a fever", "my 1 year old has a fever", "I have had a fever for 3 weeks", "my baby has had a fever for 5 days",
+        "my baby has a fever since 2 days", "my son has had fever for the past 2 weeks", "my son is 5 and has fever for 3 days",
+        "my baby is fine but I have a fever, 3 days now", "my daughter is 10 weeks into her course and I have fever",
+        "the soup feels hot", "my baby is fine, I have a fever for 3 days",
+    ])
+    def test_durations_older_children_and_unrelated_words_do_not(self, text):
+        assert red_flags.check(text) != red_flags.INFANT_FEVER_REPLY, text
