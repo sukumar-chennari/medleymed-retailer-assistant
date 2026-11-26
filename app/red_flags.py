@@ -288,7 +288,10 @@ def _extreme_temperature(text: str) -> bool:
 # messages through the detector: 16 were escalated). Every guard is narrow on purpose: it removes
 # only the part that is not about a person in trouble, so a real emergency in the same message
 # ("my dog is fine but I can't breathe", "chest pain, 12 Baker Street") still escalates.
-_STREET_TYPES = r"(?:road|rd|street|st|lane|ln|avenue|ave|nagar|colony|marg|close|crescent|drive|circle|chowk|layout|enclave|plaza|sector|block)"
+_STREET_TYPES = (
+    r"(?:road|rd|street|st|lane|ln|avenue|ave|nagar|colony|marg|close|crescent|drive|circle|chowk|layout|enclave|plaza|sector|block|"
+    r"corner|square|market|bazaar|path|highway|gardens?|apartments?|residency|villa|heights|towers?)"
+)
 _ADDRESS_PARTS_RE = re.compile(
     rf"\b\d+[a-z]?(?:[-/]\d+)?\s+(?:[a-z']+\s+){{0,3}}{_STREET_TYPES}\b[^,.;]*|\b(?:[a-z']+\s+){{0,3}}{_STREET_TYPES}\s+\d+[a-z]?\b",
     re.IGNORECASE,

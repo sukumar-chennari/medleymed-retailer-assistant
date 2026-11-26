@@ -20,7 +20,7 @@ covered — ask a pharmacist" rather than judged. Dependency-free on purpose.
 import contextvars
 import re
 
-from app import age_hints
+from app import age_hints, red_flags
 
 _NEGATION_RE = re.compile(
     r"\b(?:no|not|never|without|nor|neither|isn['’]t|aren['’]t|don['’]t|doesn['’]t|didn['’]t|hasn['’]t|haven['’]t|free\s+of|history\s+of\s+no)\b|n['’]t\b",
@@ -42,7 +42,7 @@ _NEGATION_LOOKBACK = 25
 
 CHILD_CUE = (
     r"\(child\)|\b(?:child|kid|kids|toddler|baby|babies|infant|newborn)\b"
-    r"|\bchildren\b(?![\'\u2019]s\s+(?:paracetamol|cold|cough|syrup|medicine|medication|product|fever))"
+    r"|\bchildren\b(?![\'\u2019]s\s+(?:paracetamol|cold|cough|syrup|medicine|medication|product|fever|park|hospital|ward|school|welfare|day|home|clinic|centre|center|museum|library|road|street|lane))"
 )
 
 # condition -> (label shown to the customer, pattern)
@@ -57,7 +57,8 @@ _CONDITIONS = {
     "thyroid": ("a thyroid condition", r"\bthyroid\b|\bhyperthyroid\w*|\bhypothyroid\w*|\bgraves\b"),
     "pregnant": ("pregnancy", r"\bpregnan\w*|\bexpecting\b|\btrimester\b"),
     "asthma": ("asthma", r"\basthma\w*|\bemphysema\b|\bcopd\b"),
-    "smoker": ("a smoker's cough", r"\bsmoker\w*|\bsmoking\b|\bi\s+smoke\b"),
+    # not "non-smoker", and not "I quit smoking" / "stopped smoking" / "gave up smoking" (found Nov 26)
+    "smoker": ("a smoker's cough", r"(?<!non-)\bsmoker\w*|(?<!quit )(?<!quitting )(?<!stopped )(?<!up )\bsmoking\b|\bi\s+smoke\b"),
     "liver": ("liver problems", r"\bliver\s+(?:problems?|disease|damage|issues?)\b|\bcirrhosis\b|\bhepatitis\b"),
     "alcohol": ("regular alcohol use", r"\bdrinks?\s+(?:alcohol\s+)?(?:daily|regularly|heavily|a\s+lot)\b|\bheavy\s+drinker\b|\balcoholic\b|\bdrink\s+(?:alcohol\s+)?every\s+day\b"),
     "maoi": ("an MAOI antidepressant", r"\bmaoi\b|\bphenelzine\b|\bselegiline\b|\btranylcypromine\b|\bmoclobemide\b"),
@@ -169,10 +170,16 @@ def _same_message_before(text: str, start: int) -> str:
     return text[max(0, start - _NEGATION_LOOKBACK): start].rsplit("\n", 1)[-1]
 
 
+_NOW_FINE_RE = re.compile(r"^\s*(?:is|are|was|were)\s+(?:fine|ok|okay|healthy|normal|gone|cured|better|under\s+control)\b", re.IGNORECASE)
+
+
 def _unnegated(pattern: re.Pattern, text: str, statement_only: bool = False) -> bool:
     for match in pattern.finditer(text):
         before = _same_message_before(text, match.start())
         if _negated(before):
+            continue
+        # "my asthma is fine thanks": the condition is named but described as not a problem
+        if _NOW_FINE_RE.match(text[match.end(): match.end() + 30]):
             continue
         if statement_only and _QUESTION_PREFIX_RE.search(before):
             continue
@@ -296,8 +303,16 @@ def without_system_notes(text: str) -> str:
     return _SYSTEM_NOTE_RE.sub(" ", text or "")
 
 
+def without_addresses(text: str) -> str:
+    """A street address is not the customer's medical history: "Child Welfare Road 6", "Baby Street 2",
+    "22 Asthma Lane", "Thyroid Street 7" each read as a condition (found Nov 26), and the address is
+    stored in the history, so a customer who lives on Baby Street would have been refused ibuprofen at
+    the last step with "you mentioned a child"."""
+    return red_flags._ADDRESS_PARTS_RE.sub(" ", text or "")
+
+
 def stated_text(history_user_texts: list[str]) -> str:
-    return "\n".join(without_system_notes(t) for t in [*history_user_texts, _current_text.get()])
+    return "\n".join(without_addresses(without_system_notes(t)) for t in [*history_user_texts, _current_text.get()])
 
 
 _RECOMMENDING_RE = re.compile(

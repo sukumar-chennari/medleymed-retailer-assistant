@@ -625,3 +625,40 @@ class TestConditionsStatedInHindi:
         assert self._refusal("mujhe jigar ki bimari hai", "fev-001") is None      # liver is a note, not an exclusion
         from app import hinglish
         assert ci.concerns(ci.stated_text([hinglish.gloss("mujhe jigar ki bimari hai")])).get("fev-001")
+
+
+class TestAnAddressOrAFigureOfSpeechIsNotAMedicalCondition:
+    """Found Nov 26 by running 92 ordinary shop messages through the condition rules: 37 produced a
+    condition. The costly ones: street addresses with a condition word in them ("Child Welfare Road 6",
+    "Baby Street 2", "22 Asthma Lane", "Thyroid Street 7", "Ulcer Avenue 3") — the address is stored in the
+    history, so a customer living there would be refused ibuprofen at the last step with "you mentioned a
+    child". Also "I'm a non-smoker", "I quit smoking years ago", "my asthma is fine thanks"."""
+
+    @staticmethod
+    def _conditions(text):
+        return ci.conditions_in(ci.stated_text([text]))
+
+    @pytest.mark.parametrize("text", [
+        "22 Asthma Lane", "Pregnant Pause Cafe Road 5", "Thyroid Street 7", "41 Smoker's Corner, Delhi", "Ulcer Avenue 3",
+        "Child Welfare Road 6", "Children's Park Road, Mumbai", "Baby Street 2, Leeds", "10 Kidney Road, Pune",
+        "9 Liver Street, Birmingham", "Alcohol Road 2", "Heart Lake Road, Hyderabad",
+        "I'm a non-smoker", "I quit smoking years ago", "I stopped smoking", "I gave up smoking last year",
+        "my asthma is fine thanks", "my kidneys are healthy", "my ulcer is gone",
+    ])
+    def test_no_condition(self, text):
+        assert self._conditions(text) == set(), text
+
+    @pytest.mark.parametrize("text, condition", [
+        ("I smoke", "smoker"), ("I am a smoker", "smoker"), ("I have a smoker's cough", "smoker"), ("I have asthma", "asthma"),
+        ("my asthma is bad", "asthma"), ("I'm pregnant", "pregnant"), ("I have a stomach ulcer", "ulcer"),
+        ("I have kidney disease", "kidney"), ("I have thyroid problems", "thyroid"), ("it is for my baby (child)", "child"),
+        ("I have asthma, 12 Baker Street", "asthma"), ("I have a stomach ulcer, flat 4 Heart Lane 5", "ulcer"),
+        ("I smoke and live at Baby Street 2", "smoker"),
+    ])
+    def test_a_real_statement_next_to_an_address_still_counts(self, text, condition):
+        assert condition in self._conditions(text), text
+
+    def test_a_customer_living_on_baby_street_can_still_order_ibuprofen(self):
+        store.save_session_messages("s-addr", [{"role": "user", "content": "order ibuprofen"}, {"role": "user", "content": "Baby Street 2, Leeds"}])
+        ci.set_current_text("")
+        assert "error" not in json.loads(tools.start_order("fev-003", "s-addr"))
