@@ -97,6 +97,7 @@ _EMERGENCY_RES = [
         r"\bblue\s+(?:lips|face|skin)\b",
         r"\b(?:seizure|seizures|convulsion|convulsions|convulsing|fitting)\b",
         r"\b(?:unconscious|unresponsive|passed\s+out|fainted|not\s+waking)\b",
+        r"\bface\s+(?:is\s+|has\s+|looks?\s+)?(?:droop\w*|sagging|lopsided|uneven)\b",
         r"\b(?:face\s+droop\w*|slurred\s+speech|sudden\s+(?:weakness|numbness|confusion))\b",
         r"\b(?:anaphyla\w*|swollen\s+(?:face|lips|tongue|throat)|throat\s+(?:is\s+)?(?:closing|swelling)"
         r"|(?:face|lips|tongue|throat)\s+(?:is|are|feels?|got|getting)\s+(?:swollen|swelling))\b",
@@ -191,9 +192,16 @@ _AGE_RE = re.compile(
 _WORD_NUMBERS = {"a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4}
 
 
+_CLAUSE_END_RE = re.compile(r"[.,;!?]|\b(?:and|but|then|so|also)\b", re.IGNORECASE)
+
+
 def _has_unnegated_match(pattern: re.Pattern, text: str) -> bool:
     for match in pattern.finditer(text):
         before = text[max(0, match.start() - _NEGATION_LOOKBACK) : match.start()]
+        # A negation only reaches to the end of its own clause: "he can't move his arm AND his
+        # speech is slurred" must still see the slurred speech (found Nov 26; it was cancelled
+        # by the "can't" before the "and").
+        before = _CLAUSE_END_RE.split(before)[-1]
         if not _NEGATION_RE.search(before):
             return True
     return False
@@ -271,8 +279,57 @@ def _extreme_temperature(text: str) -> bool:
     return False
 
 
+# Context that makes an emergency word NOT an emergency (found Nov 26 by running 152 ordinary shop
+# messages through the detector: 16 were escalated). Every guard is narrow on purpose: it removes
+# only the part that is not about a person in trouble, so a real emergency in the same message
+# ("my dog is fine but I can't breathe", "chest pain, 12 Baker Street") still escalates.
+_STREET_TYPES = r"(?:road|rd|street|st|lane|ln|avenue|ave|nagar|colony|marg|close|crescent|drive|circle|chowk|layout|enclave|plaza|sector|block)"
+_ADDRESS_PARTS_RE = re.compile(
+    rf"\b\d+[a-z]?(?:[-/]\d+)?\s+(?:[a-z']+\s+){{0,3}}{_STREET_TYPES}\b[^,.;]*|\b(?:[a-z']+\s+){{0,3}}{_STREET_TYPES}\s+\d+[a-z]?\b",
+    re.IGNORECASE,
+)
+_ANIMAL_RE = re.compile(r"\b(?:my|the|our)\s+(?:dog|cat|puppy|kitten|pet|horse|bird|parrot|cow|goat|rabbit)\b", re.IGNORECASE)
+_PERSON_RE = re.compile(
+    r"\b(?:i|i'm|i've|me|my\s+(?:son|daughter|baby|husband|wife|mother|father|mom|mum|dad|child|kid|brother|sister|friend)|he|she|they|him|her|we)\b",
+    re.IGNORECASE,
+)
+_HISTORY_MARK_RE = re.compile(
+    r"\b(?:(?:years?|months?|decades?)\s+ago|last\s+year|in\s+the\s+past|history\s+of|used\s+to\s+have|when\s+i\s+was\s+(?:a\s+)?(?:kid|child|young))\b",
+    re.IGNORECASE,
+)
+_CLAUSE_SPLIT_RE = re.compile(r"[.,;!?]|\b(?:and|but|now|however|though|while|so|then)\b", re.IGNORECASE)
+_GENERAL_QUESTION_RE = re.compile(
+    r"^\s*(?:what|why|how)\s+(?:causes?|is|are|does|do)\b|\b(?:signs?|symptoms?|causes?|meaning)\s+of\b",
+    re.IGNORECASE,
+)
+_FIGURE_OF_SPEECH_RE = re.compile(r"\b(?:die|dying)\s+(?:laughing|of\s+(?:embarrassment|shame|laughter|boredom))\b|\bdead\s+tired\b|\bkill\s+for\b", re.IGNORECASE)
+
+
+def _present_tense_part(text: str) -> str:
+    """The text without clauses about the past ("I had chest pain years ago", "history of stroke")."""
+    pieces = re.split(r"([.,;!?]|\b(?:and|but|now|however|though|while|so|then)\b)", text, flags=re.IGNORECASE)
+    kept = [piece for piece in pieces if not _HISTORY_MARK_RE.search(piece)]
+    return "".join(kept)
+
+
+def _clean_for_emergency_check(text: str) -> str | None:
+    """The text with non-emergency context removed, or None when the whole message is about
+    something else (a pet, a general question with no person in it)."""
+    if _GENERAL_QUESTION_RE.search(text) and not _PERSON_RE.search(text):
+        return None
+    if _ANIMAL_RE.search(text) and not _PERSON_RE.search(text):
+        return None
+    text = _ADDRESS_PARTS_RE.sub(" ", text)
+    text = _FIGURE_OF_SPEECH_RE.sub(" ", text)
+    return _present_tense_part(text)
+
+
 def is_emergency(text: str) -> bool:
     text = text.translate(_CURLY)  # "can’t breathe" typed on a phone
+    cleaned = _clean_for_emergency_check(text)
+    if cleaned is None:
+        return False
+    text = cleaned
     if _FEVER_RE.search(text) and _extreme_temperature(text):
         return True
     return any(_has_unnegated_match(p, text) for p in _EMERGENCY_RES)

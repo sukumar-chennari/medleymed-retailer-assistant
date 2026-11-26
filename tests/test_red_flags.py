@@ -400,3 +400,51 @@ class TestReactionsAndUrgentSigns:
     ])
     def test_ordinary_messages_stay_ordinary(self, text):
         assert red_flags.check(text) is None, text
+
+
+class TestContextThatIsNotAnEmergency:
+    """Found Nov 26 by running 152 ordinary shop messages through the detector: 16 were escalated.
+    Addresses ("7 Jaundice Avenue", "Collapsed Bridge Road 5"), a pet ("my dog is wheezing"), a past
+    event ("I had chest pain years ago"), a general question ("what causes chest pain", "signs of a
+    heart attack") and an idiom ("I want to die laughing") are not a person in trouble. Every guard
+    is narrow: a real emergency in the SAME message must still escalate."""
+
+    @pytest.mark.parametrize("text", [
+        "Collapsed Bridge Road 5", "7 Jaundice Avenue", "12 Stroke Road, Kolkata", "Pulse Street 7, Chennai",
+        "I had chest pain years ago", "my father had a stroke last year", "history of stroke in my family",
+        "what causes chest pain", "what is jaundice", "signs of a heart attack",
+        "my dog is wheezing", "I want to die laughing",
+    ])
+    def test_not_an_emergency(self, text):
+        assert red_flags.check(text) is None, text
+
+    @pytest.mark.parametrize("text", [
+        "chest pain, 12 Baker Street", "I took too many tablets, 12 Baker Street",
+        "my father had a stroke last year and now he can't move his arm and his speech is slurred",
+        "history of stroke but now my face is drooping",
+        "I had chest pain years ago and now it is back, chest pain right now",
+        "my dog is fine but I can't breathe", "what causes chest pain? I have chest pain now",
+        "I want to die", "pain in my chest", "she collapsed",
+    ])
+    def test_a_real_emergency_in_the_same_message_still_escalates(self, text):
+        assert red_flags.check(text) is not None, text
+
+
+class TestANegationEndsWithItsClause:
+    """Found Nov 26: "he can't move his arm and his speech is slurred" missed the slurred speech
+    because the "can't" before the "and" cancelled it (the lookback ignored clause breaks); and
+    "my face is drooping" was not a pattern at all."""
+
+    @pytest.mark.parametrize("text", [
+        "he can't walk and his speech is slurred", "no fever but she is unconscious", "I don't smoke but my chest hurts",
+        "my face is drooping", "his face looks lopsided", "he can't move his arm and his speech is slurred",
+    ])
+    def test_the_later_symptom_still_counts(self, text):
+        assert red_flags.check(text) == red_flags.EMERGENCY_REPLY, text
+
+    @pytest.mark.parametrize("text", [
+        "no chest pain and no fever", "I don't have chest pain, just a cold", "no seizures and no stiff neck",
+        "he is not unconscious and not confused", "no chest pain, no breathlessness", "I can breathe normally and have no chest pain",
+    ])
+    def test_a_negated_symptom_is_still_negated(self, text):
+        assert red_flags.check(text) is None, text
