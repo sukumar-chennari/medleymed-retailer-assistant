@@ -67,7 +67,7 @@ _OVERDOSE_RES = [
     re.compile(rf"\b{_TOOK}\s+(?:a|the|an|her|his|my|their|its)\s+(?:whole|entire)\s+(?:bottle|pack|strip|box)\b", re.IGNORECASE),
     # Found Nov 20 with the phrasings below: "took a handful of tablets", a parent who "gave my baby
     # double the dose" / "gave my child too much syrup", milligram amounts at once.
-    re.compile(rf"\b{_TOOK}\s+(?:a\s+)?(?:handful|fistful|bunch|load)\s+of\b", re.IGNORECASE),
+    re.compile(rf"\b{_TOOK}\s+(?:a\s+)?(?:handful|fistful|bunch|load)\s+of\s+(?:\w+\s+){{0,2}}{_MEDICINE_WORDS}\b", re.IGNORECASE),
     re.compile(
         r"\b(?:gave|given|giving)\s+(?:my|the|our)\s+(?:\w+\s+){0,3}?(?:baby|child|kid|toddler|son|daughter|infant|(?:year|month|week)s?[- ]old)\b"
         r".{0,60}\b(?:too\s+much|too\s+many|double|twice|triple|(?:\d+|three|four|five)\s+times\s+(?:the|as)|an\s+extra|the\s+wrong|an\s+overdose)\b",
@@ -102,7 +102,8 @@ _EMERGENCY_RES = [
         r"\b(?:anaphyla\w*|swollen\s+(?:face|lips|tongue|throat)|throat\s+(?:is\s+)?(?:closing|swelling)"
         r"|(?:face|lips|tongue|throat)\s+(?:is|are|feels?|got|getting)\s+(?:swollen|swelling))\b",
         r"\b(?:coughing|vomiting|throwing\s+up|spitting)\s+(?:up\s+)?blood\b",
-        r"\bstiff\s+neck\b",
+        r"\bstiff\s+neck\b(?!\s+(?:from|after|because|due\s+to)\b)",
+        r"\b(?:fever|feverish|temperature)\b.{0,40}\bstiff\s+neck\b|\bstiff\s+neck\b.{0,40}\b(?:fever|feverish|temperature)\b",
         r"\bsuicid\w*|\bwant\s+to\s+(?:die|kill\s+myself)\b",
         # Found Nov 20: 25 of 59 everyday emergency phrasings were not recognised ("my chest
         # hurts", "I think I'm having a heart attack", "she collapsed", "turning blue",
@@ -161,14 +162,15 @@ _EMERGENCY_RES = [
         r"\bswelling\s+(?:of|in|around)\s+(?:the\s+|my\s+|his\s+|her\s+)?(?:face|lips|tongue|throat|mouth|eyes)\b",
         r"\bhives\b.{0,40}\b(?:throat|breath\w*|swelling|swollen|face|lips|tongue)\b|\b(?:throat|breath\w*|swelling|swollen|face|lips|tongue)\b.{0,40}\bhives\b",
         r"\bwheez(?:e|es|ing)\b|\b(?:can'?t|cannot|unable\s+to)\s+catch\s+(?:my|his|her|their)\s+breath\b|\bgasping\b",
-        r"\b(?:about\s+to|going\s+to|feel\s+like\s+(?:i'?m\s+|i\s+am\s+)?going\s+to)\s+(?:faint|pass\s+out|black\s+out|collapse)\b|\b(?:feel(?:ing)?|very|really)\s+faint\b",
+        r"\b(?:about\s+to|going\s+to|feel\s+like\s+(?:i'?m\s+|i\s+am\s+)?going\s+to)\s+(?:faint|pass\s+out|black\s+out|collapse)\b|(?<!sometimes )(?<!occasionally )\b(?:feel(?:ing)?|very|really)\s+faint\b(?!\s+(?:sometimes|when|if|after|a\s+bit|a\s+little|slightly|at\s+times|occasionally))",
         r"\b(?:can'?t|cannot|unable\s+to|haven'?t\s+been\s+able\s+to)\s+(?:pass\s+urine|pee|urinate|wee)\b(?!\s+(?:in\s+public|in\s+front|at\s+work|at\s+school))",
-        r"\bspeech\s+(?:is\s+|has\s+become\s+|got\s+)?slurred\b|\b(?:trouble|difficulty)\s+speaking\b|\b(?:can'?t|cannot|unable\s+to)\s+speak\b",
+        r"\bspeech\s+(?:is\s+|has\s+become\s+|got\s+)?slurred\b|\b(?:trouble|difficulty)\s+speaking\b(?!\s+(?:in\s+public|to\b|with\b|about\b|up\b|english|hindi|telugu|tamil|the\s+language))"
+        r"|\b(?:can'?t|cannot|unable\s+to)\s+speak\b(?!\s+(?:in\s+public|to\b|with\b|about\b|up\b|english|hindi|telugu|tamil|the\s+language|loudly))",
         r"\b(?:half|one\s+side)\s+(?:of\s+)?(?:my|his|her|the)?\s*(?:face|body)\b.{0,15}\b(?:numb|weak|droop\w*|paralys\w*)\b|\bnumb(?:ness)?\s+(?:in|on)\s+(?:my\s+|his\s+|her\s+|the\s+)?(?:face|arm)\b",
         r"\b(?:pain|ache)\s+(?:in|down|radiating\s+to|spreading\s+to)\s+(?:my\s+|his\s+|her\s+|the\s+)?(?:left\s+)?(?:arm|jaw)\b.{0,40}\b(?:sweat\w*|nausea|breath\w*|chest)\b"
         r"|\b(?:sweat\w*|nausea)\b.{0,40}\b(?:arm|jaw)\s+pain\b|\bjaw\s+pain\b.{0,30}\bsweat",
         r"\b(?:palpitations?|heart\s+(?:is\s+)?(?:racing|pounding|fluttering)|racing\s+heart|irregular\s+heartbeat|fast\s+heartbeat)\b.{0,50}\b(?:faint\w*|dizz\w+|chest|short\s+of\s+breath|sweat\w*|pain)\b",
-        r"\b(?:can'?t|cannot|unable\s+to|won'?t)\s+(?:touch|put|bring|bend)\b.{0,25}\bchin\b.{0,12}\bchest\b|\bchin\s+to\s+(?:his\s+|her\s+|my\s+|the\s+)?chest\b|\bneck\s+(?:is\s+)?stiff\b",
+        r"\b(?:can'?t|cannot|unable\s+to|won'?t)\s+(?:touch|put|bring|bend)\b.{0,25}\bchin\b.{0,12}\bchest\b|\bchin\s+to\s+(?:his\s+|her\s+|my\s+|the\s+)?chest\b|\bneck\s+(?:is\s+)?stiff\b(?!\s+(?:from|after|because|due\s+to)\b)",
         r"\b(?:baby|infant|newborn|toddler|child)\b.{0,40}\b(?:not\s+feeding|won'?t\s+feed|refus\w*\s+(?:feeds?|to\s+feed)|very\s+sleepy|too\s+sleepy|limp|floppy)\b",
     )
 ]
@@ -224,6 +226,7 @@ _AT_ONCE_COUNT_RE = re.compile(
     rf"\b{_TOOK}\s+(\d{{1,3}})\s+(?:\w+\s+){{0,3}}{_MEDICINE_WORDS}\b.{{0,40}}\b{_AT_ONCE}\b", re.IGNORECASE
 )
 _MG_RE = re.compile(rf"\b{_TOOK}\b.{{0,30}}?\b(\d{{4,5}})\s*mg\b(?P<tail>.{{0,30}})", re.IGNORECASE)
+_SUPPLEMENT_RE = re.compile(r"\b(?:vitamin|supplement|calcium|magnesium|zinc|omega|iron|protein|creatine|biotin|collagen)\b", re.IGNORECASE)
 _MG_DAILY_MAX = 4000      # the most any product here allows in 24 hours
 _MG_AT_ONCE = 3000
 
@@ -247,7 +250,9 @@ def is_overdose(text: str) -> bool:
         amount = int(match.group(1))
         at_once = bool(re.search(_AT_ONCE, match.group("tail"), re.IGNORECASE))
         if (amount >= _MG_DAILY_MAX or (at_once and amount >= _MG_AT_ONCE)) and not _NEGATION_RE.search(before):
-            return True
+            # a supplement is not this module's concern: "3000 mg of vitamin C at once"
+            if not _SUPPLEMENT_RE.search(text):
+                return True
     return False
 
 
