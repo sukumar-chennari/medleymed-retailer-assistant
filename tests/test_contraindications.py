@@ -662,3 +662,41 @@ class TestAnAddressOrAFigureOfSpeechIsNotAMedicalCondition:
         store.save_session_messages("s-addr", [{"role": "user", "content": "order ibuprofen"}, {"role": "user", "content": "Baby Street 2, Leeds"}])
         ci.set_current_text("")
         assert "error" not in json.loads(tools.start_order("fev-003", "s-addr"))
+
+
+class TestAQuestionAboutAMedicineIsNotTheCustomersCondition:
+    """Found Nov 27: "what is a blood thinner", "can pregnant women take cetirizine", "do you sell blood
+    thinners", "is ibuprofen safe for asthma" each counted as the customer's OWN condition, and would
+    refuse an ibuprofen order later in the session. A question that names no person is about the
+    medicine; a statement always has a person in it, so anything with one is kept."""
+
+    @staticmethod
+    def _conditions(text):
+        return ci.conditions_in(ci.stated_text([text]))
+
+    @pytest.mark.parametrize("text", [
+        "what is a blood thinner", "can pregnant women take cetirizine", "do you sell blood thinners", "is ibuprofen safe for asthma",
+        "what is thyroid", "what are antidepressants", "can children take ibuprofen", "is it safe for people with kidney problems?",
+        "can ulcer patients take ibuprofen", "are decongestants bad for high blood pressure", "does ibuprofen cause ulcers?",
+    ])
+    def test_a_general_question_states_no_condition(self, text):
+        assert self._conditions(text) == set(), text
+
+    @pytest.mark.parametrize("text, condition", [
+        ("I have asthma", "asthma"), ("I have asthma, is ibuprofen safe?", "asthma"), ("can I take ibuprofen, I have a stomach ulcer", "ulcer"),
+        ("is it safe? my wife is pregnant", "pregnant"), ("my son has asthma", "asthma"), ("pregnant", "pregnant"), ("asthma", "asthma"),
+        ("I'm on blood thinners", "blood_thinner"), ("is ibuprofen ok for me, I take warfarin", "blood_thinner"),
+        ("she is pregnant, can she take it?", "pregnant"), ("does it work for my kidney problems?", "kidney"),
+    ])
+    def test_a_statement_with_a_person_in_it_still_counts(self, text, condition):
+        assert condition in self._conditions(text), text
+
+    def test_asking_in_general_does_not_block_a_later_ibuprofen_order(self):
+        store.save_session_messages("s-q", [{"role": "user", "content": "what is a blood thinner"}, {"role": "user", "content": "can pregnant women take cetirizine"}])
+        ci.set_current_text("order Ibuprofen 200mg Tablets")
+        assert "error" not in json.loads(tools.start_order("fev-003", "s-q"))
+
+    def test_but_stating_it_afterwards_does(self):
+        store.save_session_messages("s-q2", [{"role": "user", "content": "what is a blood thinner"}, {"role": "user", "content": "I'm on warfarin"}])
+        ci.set_current_text("order Ibuprofen 200mg Tablets")
+        assert "error" in json.loads(tools.start_order("fev-003", "s-q2"))

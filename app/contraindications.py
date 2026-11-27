@@ -311,8 +311,29 @@ def without_addresses(text: str) -> str:
     return red_flags._ADDRESS_PARTS_RE.sub(" ", text or "")
 
 
+# A question that names no person is about the medicine, not about the customer: "what is a blood
+# thinner", "can pregnant women take cetirizine", "do you sell blood thinners", "is ibuprofen safe for
+# asthma" each counted as the customer's own condition and would refuse their order later (found
+# Nov 27). A statement always has a person in it ("I have asthma", "my wife is pregnant"), so
+# anything with one is kept, question or not.
+_QUESTION_START_RE = re.compile(
+    r"^\s*(?:what|why|how|is|are|can|could|does|do|should|will|would|which|who|tell\s+me|explain|show|list|any)\b", re.IGNORECASE
+)
+_PERSON_WORD_RE = re.compile(
+    r"\b(?:i|i'm|i've|i'd|i'll|me|my|mine|myself|we|our|us|he|she|they|his|her|him|them|himself|herself|"
+    r"son|daughter|baby|child|kid|husband|wife|mother|father|mom|mum|dad|friend|patient|brother|sister|grandmother|grandfather)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_a_question_about_the_medicine(text: str) -> bool:
+    stripped = text.strip()
+    return (stripped.endswith("?") or bool(_QUESTION_START_RE.match(stripped))) and not _PERSON_WORD_RE.search(stripped)
+
+
 def stated_text(history_user_texts: list[str]) -> str:
-    return "\n".join(without_addresses(without_system_notes(t)) for t in [*history_user_texts, _current_text.get()])
+    texts = [without_addresses(without_system_notes(t)) for t in [*history_user_texts, _current_text.get()]]
+    return "\n".join(t for t in texts if not _is_a_question_about_the_medicine(t))
 
 
 _RECOMMENDING_RE = re.compile(
