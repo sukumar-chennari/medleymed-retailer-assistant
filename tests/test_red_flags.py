@@ -448,3 +448,27 @@ class TestANegationEndsWithItsClause:
     ])
     def test_a_negated_symptom_is_still_negated(self, text):
         assert red_flags.check(text) is None, text
+
+
+class TestHighTemperatureNumbers:
+    """Found Nov 27 (reading the least-tested lines): "fever of 40 degrees", "temperature 40 degree" and a
+    bare "fever 40" — a high fever in Celsius, very common here — got no see-a-doctor note, and a decimal
+    Fahrenheit with no unit ("fever 103.5") was read as an impossible 103.5 C and missed."""
+
+    @pytest.mark.parametrize("text", [
+        "fever of 40 degrees", "temperature 40 degree", "fever 40", "fever 40.2", "fever 42 degrees", "fever 103.5",
+        "fever 40 degrees celsius", "temperature is 40 C", "fever of 40°C", "fever 104 F", "temperature 104°F",
+        "fever 104 degrees", "I have fever 104", "my temp is 104.5 F", "fever is 104 fahrenheit", "fever 39.5 celsius",
+        "103 F fever", "fever of 103", "fever 39.8 C", "temperature 39.5",
+    ])
+    def test_a_high_fever_gets_the_see_a_doctor_note(self, text):
+        assert red_flags.doctor_note(text) is not None, text
+
+    @pytest.mark.parametrize("text", [
+        "fever 38", "fever 38.5 C", "fever 101 F", "fever 102.2", "fever 39 C", "fever 39.0", "temperature 98.6",
+        "fever of 100 degrees", "fever 100.4 F", "temperature 37.5", "fever 102",
+        "I am 40 and have a fever", "fever and 40 mg", "fever 40 days", "I am 40 years old with a fever",
+        "my 40 year old husband has a fever", "fever for 40 minutes", "fever and 41 mg", "40 people have a fever",
+    ])
+    def test_a_lower_temperature_an_age_or_a_dose_gets_none(self, text):
+        assert red_flags.doctor_note(text) is None, text

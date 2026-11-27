@@ -436,10 +436,22 @@ def _high_temperature(text: str) -> bool:
             if _HIGH_FEVER_F <= value <= 110:
                 return True
         elif "." in match.group(1):
-            if _HIGH_FEVER_C <= value <= 43:
+            # a decimal with no unit: 39.4-43 is Celsius, 103-110 is Fahrenheit ("fever 103.5" used to
+            # be read as an impossible 103.5 C and missed; found Nov 27)
+            if _HIGH_FEVER_C <= value <= 43 or _HIGH_FEVER_F <= value <= 110:
                 return True
         elif _HIGH_FEVER_F <= value <= 110:
             return True
+        elif 40 <= value <= 43:
+            # a whole 40-43 is also an age or a dose ("I am 40", "40 mg"): it is a Celsius fever only
+            # right after a fever word ("fever 40", "temperature of 40") or before "degrees"
+            number = int(value)
+            if re.search(
+                rf"\b(?:fever|temperature|temp|bukhar)\s*(?:of|is|was|at|:)?\s*{number}\b(?!\s*(?:years?|yo|y/o|mg|ml|kg|%|days?|weeks?|months?))"
+                rf"|\b{number}\s*(?:degrees?|deg|°)",
+                text, re.IGNORECASE,
+            ):
+                return True
     return False
 
 
