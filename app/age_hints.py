@@ -31,11 +31,21 @@ _SHORT_AGE_RE = re.compile(
 )
 _INFANT_AGE_RE = re.compile(rf"\b{_NUM}[\s-]*(?:months?|weeks?|days?)[\s-]*old\b", re.IGNORECASE)
 _TEEN_RE = re.compile(r"\b(?:teen|teens|teenage|teenager|adolescent)\b", re.IGNORECASE)
+# "son-in-law", "boy friend" and "Boy Scouts Street" are not a child (found Nov 27: 14 of 24 adult
+# phrasings were classed as children).
 _CHILD_RELATION_RE = re.compile(
-    r"\b(?:son|daughter|boy|girl|newborn|little\s+one|little\s+boy|little\s+girl|grandson|granddaughter|nephew|niece)\b", re.IGNORECASE
+    r"\b(?:(?:son|daughter)\b(?![\s-]*in[\s-]*law)|boy\b(?!\s*friend|\s+scouts?)|girl\b(?!\s*friend|\s+guides?)|newborn|little\s+one|"
+    r"little\s+boy|little\s+girl|grandson|granddaughter|nephew|niece)",
+    re.IGNORECASE,
+)
+# a stated age after the relation: "my nephew is 25", "my daughter is 35", "the girl next door is 25"
+_RELATION_AGE_RE = re.compile(
+    r"\b(?:son|daughter|nephew|niece|grandson|granddaughter|boy|girl|kid|child)\b(?:\s+[\w'-]+){0,3}?\s+(?:is|was|turned|turns)\s+(\d{1,3})\b"
+    r"(?!\s*(?:kg|mg|cm|%|ml|days?|weeks?|months?|hours?|minutes?|mins?|times))",
+    re.IGNORECASE,
 )
 _ADULT_RELATION_RE = re.compile(
-    r"\b(?:husband|wife|mother|mom|mum|mama|father|dad|papa|grandmother|grandfather|grandma|grandpa|grandparents?|"
+    r"\b(?:(?:son|daughter|brother|sister)[\s-]*in[\s-]*law|husband|wife|mother|mom|mum|mama|father|dad|papa|grandmother|grandfather|grandma|grandpa|grandparents?|"
     r"elderly|senior|aunt|uncle|boyfriend|girlfriend)\b",
     re.IGNORECASE,
 )
@@ -72,6 +82,8 @@ def _ages(text: str) -> list[int]:
             if n is not None:
                 ages.append(n)
     for match in _SHORT_AGE_RE.finditer(text):
+        ages.append(int(match.group(1)))
+    for match in _RELATION_AGE_RE.finditer(text):
         ages.append(int(match.group(1)))
     return [a for a in ages if 0 < a < 120]
 

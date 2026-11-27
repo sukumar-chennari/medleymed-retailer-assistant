@@ -112,3 +112,32 @@ class TestStatesAChildWithoutTheGloss:
     ])
     def test_not_clearly_a_child(self, text):
         assert not age_hints.states_a_child(text), text
+
+
+class TestAnAdultRelativeIsNotAChild:
+    """Found Nov 27: 14 of 24 adult phrasings were classed as children — "my son-in-law has a fever",
+    "my daughter-in-law has a cold", "my boy friend has a fever", "12 Boy Scouts Street", and any "my
+    nephew is 25" / "my daughter is 35" (the age after a relation word was not read), so an adult was
+    sent to the children's products."""
+
+    @pytest.mark.parametrize("text", [
+        "my son-in-law has a fever", "my daughter-in-law has a cold", "my son in law has a cough", "my daughter in law has a fever",
+        "my nephew is 25 and has a fever", "my niece is 30 and has a cold", "my grandson is 22 and has a fever",
+        "my girlfriend has a fever", "my son is 30 years old and has a fever",
+        "my daughter is 35 and has a cold", "my son is 40", "my daughter is 19 and has a cough", "the girl next door is 25 and has a fever",
+    ])
+    def test_these_are_adults(self, text):
+        assert age_hints.age_group(text) == "adult", text
+        assert not age_hints.states_a_child(text), text
+
+    @pytest.mark.parametrize("text", ["12 Boy Scouts Street", "my husband and my son have a cold", "I am 25 and my son is 3", "Sonia has a fever", "my boy friend has a fever", "my girl friend has a cold"])
+    def test_not_clearly_a_child(self, text):
+        assert age_hints.age_group(text) != "child", text
+
+    @pytest.mark.parametrize("text", [
+        "my son has a fever", "my daughter has a cough", "my 5 year old has a fever", "my grandson has a cold", "my little girl has a cold",
+        "my boy has a fever", "my newborn has a cough", "my 8 month old has a cold", "my nephew is 6 and has a fever", "my niece is 4 and has a cold",
+        "my son is 5 and has a fever", "my daughter is 7", "the boy next door is 8 and has a cold", "my son turned 3 and has a fever", "my boy is 11",
+    ])
+    def test_real_children_are_still_children(self, text):
+        assert age_hints.age_group(text) == "child", text
