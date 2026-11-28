@@ -2529,3 +2529,61 @@ class TestMoreThanOneProductInAnOrder:
         reply = _chat("s1", "give me ibuprofen and cetirizine")
         assert "one product per order" in reply and "Cetirizine 10mg Antihistamine Tablets" in reply
         assert store.get_pending_order("s1")["product_id"] == "fev-003"
+
+
+class TestCancellingOneOfSeveralOrders:
+    """Found Nov 28: with three orders, "cancel the ibuprofen order", "cancel the second one", "cancel order
+    number 2" and "cancel the last one" all asked "which one?" or went to the model, and "cancel ord-2" said it
+    did not exist. They now resolve when exactly ONE order matches — and nothing is cancelled when the message
+    says what to KEEP ("cancel all except ibuprofen") or still matches more than one order."""
+
+    @pytest.fixture(autouse=True)
+    def _three_orders(self, isolated_db, monkeypatch):    # isolated_db first: it re-points the store
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        store.save_address("demo_user", "10 High St, Leeds")
+        store.create_order("demo_user", "fev-001", "10 High St, Leeds", 1)    # ord-0001 paracetamol
+        store.create_order("demo_user", "fev-003", "10 High St, Leeds", 2)    # ord-0002 ibuprofen
+        store.create_order("demo_user", "col-001", "10 High St, Leeds", 1)    # ord-0003 cetirizine
+
+    @staticmethod
+    def _cancelled():
+        return sorted(o["order_id"] for o in store.list_orders("demo_user") if o["status"] == "cancelled")
+
+    @pytest.mark.parametrize("text, cancelled", [
+        ("cancel the first one", ["ord-0001"]), ("cancel the second order", ["ord-0002"]), ("cancel the 3rd one", ["ord-0003"]),
+        ("cancel #3", ["ord-0003"]), ("cancel the last one", ["ord-0003"]),
+        ("cancel order number 2", ["ord-0002"]), ("cancel ord-2", ["ord-0002"]), ("cancel ORD-0002", ["ord-0002"]), ("cancel order 3", ["ord-0003"]),
+        ("cancel the ibuprofen order", ["ord-0002"]), ("cancel the order for ibuprofen", ["ord-0002"]), ("cancel my cetirizine", ["ord-0003"]),
+        ("cancel the paracetamol", ["ord-0001"]), ("cancel the 2 ibuprofen", ["ord-0002"]),
+    ])
+    def test_it_cancels_exactly_the_one_named(self, text, cancelled):
+        reply = _chat("s1", text)
+        assert "has been cancelled" in reply and "couldn't find" not in reply, reply
+        assert self._cancelled() == cancelled
+
+    @pytest.mark.parametrize("text", [
+        "cancel all except ibuprofen", "cancel everything but the last one", "cancel all but ord-0002", "cancel everything apart from the paracetamol",
+        "keep ord-0001 and cancel the rest", "cancel the others, not the cetirizine", "don't cancel ord-0001, cancel ord-0002",
+    ])
+    def test_an_exception_never_cancels_the_order_to_keep(self, text):
+        _chat("s1", text)
+        assert self._cancelled() == []
+
+    @pytest.mark.parametrize("text", ["cancel the paracetamol and the cetirizine", "cancel the most expensive order", "cancel my oldest order"])
+    def test_a_message_that_still_matches_more_than_one_asks_which(self, text):
+        reply = _chat("s1", text)
+        assert "Which one would you like to cancel?" in reply
+        assert self._cancelled() == []
+
+    def test_a_position_that_does_not_exist_says_so(self):
+        reply = _chat("s1", "cancel the fifth one")
+        assert "only have 3 active orders" in reply and self._cancelled() == []
+
+    def test_an_unknown_short_id_is_reported_once_with_its_full_form(self):
+        reply = _chat("s1", "cancel ord-9")
+        assert reply == "I couldn't find an order with the ID ord-0009."
+
+    def test_a_cancelled_order_is_not_offered_again(self):
+        _chat("s1", "cancel the first one")
+        reply = _chat("s1", "cancel the first one")      # now ord-0002 is the first ACTIVE one
+        assert self._cancelled() == ["ord-0001", "ord-0002"]

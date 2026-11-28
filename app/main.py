@@ -1612,12 +1612,25 @@ def _cancel_request(text: str) -> tuple[str, list[str]] | None:
         return None
     if words[0] in _QUESTION_WORDS or not _has_cancel_intent(text):
         return None
+    # "cancel all except ibuprofen", "cancel everything but ord-0002", "keep the last one": an exception
+    # means the named order is the one to KEEP. Never act on those; the model asks.
+    if _CANCEL_EXCEPTION_RE.search(text):
+        return None
     ids = [m.lower() for m in _ORDER_ID_IN_TEXT_RE.findall(text)]
-    # "cancel order 2" / "cancel order #0002" name ord-0002 too.
-    ids += [f"ord-{int(n):04d}" for n in re.findall(r"\border\s*#?\s*(\d{1,4})\b(?!\s*(?:days?|weeks?|hours?|times?))", text, re.IGNORECASE)]
+    # "cancel order 2" / "cancel order #0002" / "cancel order number 2" name ord-0002 too, and so does the
+    # short "ord-2" (found Nov 28: "order number 2" asked which one; "ord-2" said it did not exist).
+    ids += [f"ord-{int(n):04d}" for n in re.findall(r"\border\s*(?:number|no\.?|num)?\s*#?\s*(\d{1,4})\b(?!\s*(?:days?|weeks?|hours?|times?))", text, re.IGNORECASE)]
+    # one form for every id: "ord-2" and "ord-0002" are the same order (and not two requests)
+    ids = [f"ord-{int(i.split('-')[1]):04d}" if re.fullmatch(r"ord-\d+", i) else i for i in ids]
     ids = list(dict.fromkeys(ids))
     if ids:
         return "ids", ids
+    # "cancel the second one" / "cancel the ibuprofen order" / "cancel the last one": no word "order" needed
+    # when a position or a product is named.
+    if _ORDINAL_RE.search(text) or _named_active_orders(text):
+        return "named", []
+    if re.search(r"\b(?:the\s+)?(?:last|latest|most\s+recent)\s+one\b", text, re.IGNORECASE):
+        return "last", []
     if "order" not in words and "orders" not in words and "purchase" not in words:
         return None
     if _SCOPE_ALL_RE.search(text):
@@ -1625,6 +1638,37 @@ def _cancel_request(text: str) -> tuple[str, list[str]] | None:
     if _SCOPE_LAST_RE.search(text):
         return "last", []
     return "default", []
+
+
+# Naming WHICH order: a position ("the first one", "the second order", "#3") or a product ("the
+# ibuprofen order"). Resolved against the active orders only, and asked about again whenever
+# more than one order matches.
+_CANCEL_EXCEPTION_RE = re.compile(r"\b(?:except|but|apart\s+from|other\s+than|besides|excluding|without|keep|leave|not\s+the)\b", re.IGNORECASE)
+_ORDINAL_WORDS = {"first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5, "1st": 1, "2nd": 2, "3rd": 3, "4th": 4, "5th": 5}
+_ORDINAL_RE = re.compile(
+    r"\b(?:the\s+)?(first|second|third|fourth|fifth|1st|2nd|3rd|4th|5th)\s+(?:one|order|purchase)\b|#\s*(\d{1,2})\b",
+    re.IGNORECASE,
+)
+_GENERIC_NAME_WORDS = {"tablets", "tablet", "syrup", "relief", "strength", "extra", "multi", "symptom", "antihistamine", "decongestant", "expectorant", "suppressant", "children", "children's"}
+
+
+def _active_orders(order_rows: list[dict] | None = None) -> list[dict]:
+    rows = order_rows if order_rows is not None else store.list_orders("demo_user")
+    return sorted((o for o in rows if o["status"] != "cancelled"), key=lambda o: o["order_id"])
+
+
+def _named_active_orders(text: str) -> list[dict]:
+    """Active orders whose PRODUCT the text names ("cancel the ibuprofen order", "cancel my cetirizine")."""
+    lower = " ".join(text.lower().replace("\u2019", "'").replace("&", "and").split())
+    catalog = {p["id"]: p for p in store.get_catalog()}
+    matched = []
+    for order in _active_orders():
+        product = catalog.get(order["product_id"])
+        words = {w for w in re.findall(r"[a-z']+", order["product_name"].lower()) if len(w) >= 5 and w not in _GENERIC_NAME_WORDS}
+        aliases = set(_product_aliases(product, list(catalog.values()))) if product else set()
+        if any(re.search(rf"(?<![a-z]){re.escape(w)}(?![a-z])", lower) for w in words | aliases):
+            matched.append(order)
+    return matched
 
 
 def _cancel_one(order_id: str) -> str:
@@ -1636,7 +1680,22 @@ def _cancel_one(order_id: str) -> str:
     return f"I couldn't find an order with the ID {order_id}."
 
 
-def _reply_for_cancel_request(kind: str, ids: list[str]) -> str:
+def _resolve_named_cancel(active: list[dict], text: str) -> str | None:
+    """The reply for "cancel the second one" / "cancel the ibuprofen order", or None when it is still
+    ambiguous (the caller then lists the orders and asks)."""
+    ordinal = _ORDINAL_RE.search(text)
+    if ordinal:
+        position = _ORDINAL_WORDS.get((ordinal.group(1) or "").lower()) or int(ordinal.group(2))
+        if 1 <= position <= len(active):
+            return _cancel_one(active[position - 1]["order_id"])
+        return f"You only have {len(active)} active order{'s' if len(active) != 1 else ''}, so there is no number {position}."
+    named = _named_active_orders(text)
+    if len(named) == 1:
+        return _cancel_one(named[0]["order_id"])
+    return None
+
+
+def _reply_for_cancel_request(kind: str, ids: list[str], text: str = "") -> str:
     if kind == "ids":
         return "\n\n".join(_cancel_one(order_id) for order_id in ids)
     active = sorted(
@@ -1648,6 +1707,10 @@ def _reply_for_cancel_request(kind: str, ids: list[str]) -> str:
         return "\n\n".join(_cancel_one(o["order_id"]) for o in active)
     if kind == "last" or len(active) == 1:
         return _cancel_one(active[-1]["order_id"])
+    if kind == "named":
+        picked = _resolve_named_cancel(active, text)
+        if picked is not None:
+            return picked
     listing = "\n".join(f"- {o['order_id']}: {o['product_name']} (x{o['quantity']})" for o in active)
     return (
         f"You have {len(active)} active orders:\n{listing}\n\n"
@@ -2308,7 +2371,7 @@ def chat(req: ChatRequest):
         ):
             # Before the pending-email branches: "cancel my last order" is
             # usually said right after an order was placed with no email yet.
-            reply = _reply_for_cancel_request(*cancel_request)
+            reply = _reply_for_cancel_request(*cancel_request, text)
             messages.append({"role": "user", "content": text})
             messages.append({"role": "assistant", "content": reply})
         elif text and not pending_product_id and _is_plain_reorder_request(text):
