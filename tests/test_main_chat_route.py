@@ -2587,3 +2587,53 @@ class TestCancellingOneOfSeveralOrders:
         _chat("s1", "cancel the first one")
         reply = _chat("s1", "cancel the first one")      # now ord-0002 is the first ACTIVE one
         assert self._cancelled() == ["ord-0001", "ord-0002"]
+
+
+class TestReorderingAParticularPastOrder:
+    """Found Nov 28: with three past orders, "reorder my paracetamol" and "order the same ibuprofen again" started
+    an order for the MOST RECENT order's product (the cetirizine) — the wrong medicine — and "reorder ord-0002",
+    "reorder the first one" and "same as my second order" went to the model. The order is now picked by its id,
+    its position or its product, over all past orders, with the product and quantity it had."""
+
+    @pytest.fixture(autouse=True)
+    def _three_orders(self, isolated_db, monkeypatch):
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+        store.save_address("demo_user", "10 High St, Leeds")
+        store.create_order("demo_user", "fev-001", "10 High St, Leeds", 1)    # ord-0001 paracetamol
+        store.create_order("demo_user", "fev-003", "10 High St, Leeds", 2)    # ord-0002 ibuprofen x2
+        store.create_order("demo_user", "col-001", "10 High St, Leeds", 1)    # ord-0003 cetirizine
+
+    @pytest.mark.parametrize("text, product_id, quantity", [
+        ("reorder the ibuprofen one", "fev-003", 2), ("reorder ord-0002", "fev-003", 2), ("reorder ord-2", "fev-003", 2),
+        ("reorder my paracetamol", "fev-001", 1), ("order the same as ord-0002", "fev-003", 2),
+        ("same as my second order", "fev-003", 2), ("reorder the first one", "fev-001", 1), ("repeat the ibuprofen order", "fev-003", 2),
+        ("order the same ibuprofen again", "fev-003", 2), ("reorder the cetirizine", "col-001", 1),
+        ("reorder 1 of the ibuprofen", "fev-003", 1), ("reorder the 2nd one", "fev-003", 2), ("reorder order number 1", "fev-001", 1),
+    ])
+    def test_the_named_order_is_the_one_repeated(self, text, product_id, quantity):
+        reply = _chat("s1", text)
+        assert reply.startswith("Reordering ord-"), reply
+        assert store.get_pending_address_confirmation("s1") == {"product_id": product_id, "quantity": quantity}
+
+    @pytest.mark.parametrize("text", ["reorder", "same as last time", "order the same again", "order the cetirizine again"])
+    def test_no_particular_order_keeps_the_old_behaviour_the_last_one(self, text):
+        _chat("s1", text)
+        assert store.get_pending_address_confirmation("s1")["product_id"] == "col-001"
+
+    @pytest.mark.parametrize("text, expected", [
+        ("reorder ord-0009", "I couldn't find an order with the ID ord-0009."),
+        ("reorder the fifth one", "You only have 3 past orders, so there is no number 5."),
+    ])
+    def test_an_order_that_does_not_exist_is_reported_and_nothing_starts(self, text, expected):
+        assert _chat("s1", text) == expected
+        assert store.get_pending_address_confirmation("s1") is None
+
+    def test_a_cancelled_order_can_be_reordered_by_name(self):
+        store.cancel_order("ord-0002", "demo_user")
+        _chat("s1", "reorder the ibuprofen")
+        assert store.get_pending_address_confirmation("s1") == {"product_id": "fev-003", "quantity": 2}
+
+    def test_cancelling_and_reordering_words_do_not_cross(self):
+        _chat("s1", "cancel the ibuprofen order")
+        assert [o["status"] for o in store.list_orders("demo_user")] == ["placed", "cancelled", "placed"]
+        assert store.get_pending_address_confirmation("s1") is None

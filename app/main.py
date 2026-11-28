@@ -894,6 +894,56 @@ def _reply_for_multi_product_order(session_id: str, products: list[tuple[dict, i
     )
 
 
+# Reordering a SPECIFIC past order. "reorder my paracetamol" and "order the same ibuprofen again" started an
+# order for the MOST RECENT order's product (the cetirizine), ignoring the product named: the wrong medicine
+# (found Nov 28). "reorder ord-0002", "the first one" and "same as my second order" went to the model. The
+# order is picked by its id, its position or its product, over ALL past orders (a cancelled one can be
+# reordered); with the same product and quantity it had.
+_REORDER_SELECTOR_INTENT_RE = re.compile(r"\b(?:re-?order|repeat|redo|same\s+as|order\s+the\s+same)\b", re.IGNORECASE)
+
+
+def _specific_reorder(text: str) -> tuple[dict | None, str | None]:
+    """(order to repeat, None) | (None, a message) | (None, None) when no particular order is meant."""
+    words = re.findall(r"[a-z']+", text.lower())
+    if not words or len(words) > 14 or "@" in text or "?" in text or words[0] in _QUESTION_WORDS:
+        return None, None
+    if not _REORDER_SELECTOR_INTENT_RE.search(text) or _has_cancel_intent(text) or _CANCEL_EXCEPTION_RE.search(text):
+        return None, None
+    orders = sorted(store.list_orders("demo_user"), key=lambda o: int(o["order_id"].split("-")[-1]))
+    if not orders:
+        return None, None
+    ids: list[str] = []
+    for match in re.finditer(r"\bord-?\s*(\d{1,4})\b|\border\s*(?:number|no\.?|num)\s*#?\s*(\d{1,4})\b", text, re.IGNORECASE):
+        ids.append(f"ord-{int(match.group(1) or match.group(2)):04d}")
+    if ids:
+        found = next((o for o in orders if o["order_id"] == ids[0]), None)
+        return (found, None) if found else (None, f"I couldn't find an order with the ID {ids[0]}.")
+    ordinal = _ORDINAL_RE.search(text)
+    if ordinal:
+        position = _ORDINAL_WORDS.get((ordinal.group(1) or "").lower()) or int(ordinal.group(2))
+        if 1 <= position <= len(orders):
+            return orders[position - 1], None
+        return None, f"You only have {len(orders)} past order{'s' if len(orders) != 1 else ''}, so there is no number {position}."
+    named = _orders_naming_a_product(text, orders)
+    products = {o["product_id"] for o in named}
+    if len(products) == 1:
+        return max(named, key=lambda o: int(o["order_id"].split("-")[-1])), None
+    return None, None
+
+
+def _reply_for_specific_reorder(session_id: str, order: dict, text: str = "") -> str:
+    quantity = order.get("quantity", 1)
+    # an explicit number in the message wins over the old quantity ("reorder 1 of the ibuprofen"); the id and
+    # the position ("ord-0002", "number 2", "the 2nd one") are not quantities, and neither is a bare "one"
+    stripped = re.sub(r"\bord-?\s*\d+\b|\border\s*(?:number|no\.?|num)?\s*#?\s*\d+\b|#\s*\d+|\b\d+(?:st|nd|rd|th)\b", " ", text, flags=re.IGNORECASE)
+    explicit = re.search(r"\b(\d{1,2})\b|\b(two|three|four|five)\b", stripped, re.IGNORECASE)
+    if explicit:
+        quantity = int(explicit.group(1)) if explicit.group(1) else _NUMBER_WORDS[explicit.group(2).lower()]
+    started = json.loads(tools.start_order(order["product_id"], session_id, quantity))
+    shown = started.get("quantity", quantity) if "error" not in started else quantity
+    return f"Reordering {order['order_id']} ({shown} x {order['product_name']}).\n\n{_reply_for_start_order_result(started)}"
+
+
 # "Change my shipping address to X" and "what address do you have on file?"
 # have no tool-backed path that works with the small local model. Real bug,
 # found by a live probe: the model called save_address, then wrote "Order
@@ -1659,10 +1709,14 @@ def _active_orders(order_rows: list[dict] | None = None) -> list[dict]:
 
 def _named_active_orders(text: str) -> list[dict]:
     """Active orders whose PRODUCT the text names ("cancel the ibuprofen order", "cancel my cetirizine")."""
+    return _orders_naming_a_product(text, _active_orders())
+
+
+def _orders_naming_a_product(text: str, orders: list[dict]) -> list[dict]:
     lower = " ".join(text.lower().replace("\u2019", "'").replace("&", "and").split())
     catalog = {p["id"]: p for p in store.get_catalog()}
     matched = []
-    for order in _active_orders():
+    for order in orders:
         product = catalog.get(order["product_id"])
         words = {w for w in re.findall(r"[a-z']+", order["product_name"].lower()) if len(w) >= 5 and w not in _GENERIC_NAME_WORDS}
         aliases = set(_product_aliases(product, list(catalog.values()))) if product else set()
@@ -2372,6 +2426,11 @@ def chat(req: ChatRequest):
             # Before the pending-email branches: "cancel my last order" is
             # usually said right after an order was placed with no email yet.
             reply = _reply_for_cancel_request(*cancel_request, text)
+            messages.append({"role": "user", "content": text})
+            messages.append({"role": "assistant", "content": reply})
+        elif text and not pending_product_id and (specific_reorder := _specific_reorder(text)) != (None, None):
+            target, problem = specific_reorder
+            reply = problem if problem else _reply_for_specific_reorder(req.session_id, target, text)
             messages.append({"role": "user", "content": text})
             messages.append({"role": "assistant", "content": reply})
         elif text and not pending_product_id and _is_plain_reorder_request(text):
