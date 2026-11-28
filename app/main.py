@@ -796,6 +796,12 @@ def _product_aliases(product: dict, catalog: list[dict]) -> list[str]:
         aliases.append(f"{strength.group(1)} {strength.group(2).removesuffix('mg')}")
         if "extra strength" in aliases[0]:
             aliases += [f"{strength.group(1)} extra strength", f"extra strength {strength.group(1)}"]
+    if "&" in product["name"]:
+        # "Cold & Flu Multi-Symptom Relief" / "Children's Cold & Cough Syrup": the explicit forms only.
+        # A bare "cold and flu" is also the CATEGORY ("something for cold and flu"), so it is not an alias.
+        plain = re.sub(r"\s+(?:multi[- ]symptom|relief|tablets|syrup)\b.*$", "", product["name"].lower())   # "cold & flu"
+        aliases += [plain, plain.replace("&", "and") + " relief", plain.replace("&", "and") + " multi-symptom", plain.replace("&", "and") + " multi symptom"]
+        aliases += [plain.replace("&", "and") + " syrup"] if "syrup" in product["name"].lower() else []
     for word in re.findall(r"[a-z]+", product["active_ingredient"].lower()):
         if len(word) >= 5 and sum(1 for p in catalog if word in p["active_ingredient"].lower()) == 1:
             aliases.append(word)
@@ -844,6 +850,48 @@ def _resolve_named_product_order(text: str) -> tuple[dict, int] | None:
     if quantity is None:
         return None
     return product, quantity
+
+
+# Two or more products in one message: "order ibuprofen and cetirizine", "I want 2 ibuprofen and 1
+# cetirizine". The shop holds one pending order at a time. What happened was arbitrary: some phrasings
+# went to the model, and "give me ibuprofen and the cold & flu" silently ordered only the ibuprofen and
+# never mentioned the other (found Nov 28). The first product is started and the rest are named, plainly.
+_MULTI_SPLIT_RE = re.compile(r"\s*(?:,|&|\+|\band\b|\bplus\b|\bthen\b|\balso\b)\s*", re.IGNORECASE)
+
+
+def _multi_product_order(text: str) -> list[tuple[dict, int]] | None:
+    words = re.findall(r"[a-z']+", text.lower())
+    if not words or len(words) > 26 or "@" in text or "?" in text or words[0] in _QUESTION_WORDS or is_info_question(text):
+        return None
+    if not (_has_unnegated_intent(text, ORDER_INTENT_RE) or _has_unnegated_intent(text, _NAMED_ORDER_VERB_RE)):
+        return None
+    found: list[tuple[dict, int]] = []
+    # "cold & flu" is ONE product's name: keep its ampersand out of the split
+    protected = text
+    for product in store.get_catalog():
+        for first, second in re.findall(r"(\w+)\s*&\s*(\w+)", product["name"]):
+            protected = re.sub(rf"\b({first})\s*&\s*({second})\b", "\\1 \u0001 \\2", protected, flags=re.IGNORECASE)
+    for segment in _MULTI_SPLIT_RE.split(protected):
+        segment = segment.replace(" \u0001 ", " & ")
+        if not segment.strip():
+            continue
+        resolved = _resolve_named_product_order("order " + segment.strip())
+        if resolved and resolved[0]["id"] not in {p["id"] for p, _ in found}:
+            found.append(resolved)
+    return found if len(found) >= 2 else None
+
+
+def _reply_for_multi_product_order(session_id: str, products: list[tuple[dict, int]]) -> str:
+    (first, quantity), rest = products[0], products[1:]
+    order = json.loads(tools.start_order(first["id"], session_id, quantity))
+    reply = _reply_for_start_order_result(order)
+    names = " and ".join(p["name"] for p, _ in rest)
+    if "error" in order:
+        return f"{reply}\n\nYou also asked for {names}. I can place one product per order, so if you still want it, just ask me to order {names}."
+    return (
+        f"{reply}\n\nI can place one product per order, so I've started {first['name']}. "
+        f"When that is done, just ask me to order {names} next."
+    )
 
 
 # "Change my shipping address to X" and "what address do you have on file?"
@@ -2287,6 +2335,10 @@ def chat(req: ChatRequest):
             and (compound_order := _parse_compound_order(text))
         ):
             reply = _place_compound_order(req.session_id, compound_order)
+            messages.append({"role": "user", "content": text})
+            messages.append({"role": "assistant", "content": reply})
+        elif text and (multi_order := _multi_product_order(text)):
+            reply = _reply_for_multi_product_order(req.session_id, multi_order)
             messages.append({"role": "user", "content": text})
             messages.append({"role": "assistant", "content": reply})
         elif text and (named_order := _resolve_named_product_order(text)):

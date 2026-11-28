@@ -886,10 +886,13 @@ class TestSwitchingProductWhileAnOrderWaits:
 
     @pytest.mark.parametrize("text", [
         "I want to know about ibuprofen", "give me paracetamol", "order dextromethorphan", "I need ibuprofen 400mg",
-        "order ibuprofen 400mg", "give me ibuprofen and cetirizine", "is ibuprofen safe", "I want ibuprofen dosage",
+        "order ibuprofen 400mg", "is ibuprofen safe", "I want ibuprofen dosage",
         "do you have ibuprofen", "I wonder if ibuprofen works", "don't order ibuprofen",
     ])
     def test_ambiguous_questions_and_other_strengths_are_left_to_the_model(self, monkeypatch, text):
+        # "give me ibuprofen and cetirizine" used to be on this list (two products = ambiguous = the model).
+        # Since Nov 28 a message naming two products is handled explicitly: the first replaces the waiting
+        # order and the other is named (TestMoreThanOneProductInAnOrder), so it is no longer left alone.
         store.set_pending_order("s1", "col-004", 1)
         monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
         _chat("s1", text)
@@ -2473,3 +2476,56 @@ class TestAnsweringTheEmailQuestion:
         self._order_placed_and_asked_for_an_email()
         _chat("s1", "I don't have time")
         assert store.get_pending_email("s1") == "ord-0001"
+
+
+class TestMoreThanOneProductInAnOrder:
+    """Found Nov 28: the shop holds one pending order at a time, and a message naming two products behaved
+    arbitrarily — some phrasings went to the model, and "give me ibuprofen and the cold & flu" silently
+    ordered only the ibuprofen and never mentioned the other."""
+
+    @pytest.fixture(autouse=True)
+    def _no_model(self, monkeypatch):
+        monkeypatch.setattr(main, "run_turn", lambda messages, **kwargs: ("from the model", messages))
+
+    @pytest.mark.parametrize("text, first, quantity, others", [
+        ("order paracetamol 500mg and ibuprofen", "fev-001", 1, ["Ibuprofen 200mg Tablets"]),
+        ("order ibuprofen and cetirizine", "fev-003", 1, ["Cetirizine 10mg Antihistamine Tablets"]),
+        ("I want 2 ibuprofen and 1 cetirizine", "fev-003", 2, ["Cetirizine 10mg Antihistamine Tablets"]),
+        ("buy ibuprofen plus cetirizine", "fev-003", 1, ["Cetirizine 10mg Antihistamine Tablets"]),
+        ("order ibuprofen & cetirizine", "fev-003", 1, ["Cetirizine 10mg Antihistamine Tablets"]),
+        ("order ibuprofen, cetirizine and pseudoephedrine", "fev-003", 1, ["Cetirizine 10mg Antihistamine Tablets", "Pseudoephedrine Decongestant Tablets"]),
+        ("give me ibuprofen and the cold & flu", "fev-003", 1, ["Cold & Flu Multi-Symptom Relief"]),
+        ("order cold & flu and ibuprofen", "col-003", 1, ["Ibuprofen 200mg Tablets"]),
+        ("order paracetamol 500mg and paracetamol 650mg", "fev-001", 1, ["Paracetamol Extra Strength 650mg"]),
+    ])
+    def test_the_first_is_started_and_the_rest_are_named(self, text, first, quantity, others):
+        reply = _chat("s1", text)
+        assert "one product per order" in reply
+        assert all(name in reply for name in others), reply
+        assert store.get_pending_order("s1") == {"product_id": first, "quantity": quantity}
+
+    def test_when_the_first_is_refused_the_rest_are_still_mentioned(self):
+        reply = _chat("s1", "order ibuprofen for my 5 year old and cetirizine")
+        assert "adult dose only" in reply and "Cetirizine 10mg Antihistamine Tablets" in reply and "one product per order" in reply
+        assert store.get_pending_order("s1") is None
+
+    @pytest.mark.parametrize("text", [
+        "order ibuprofen", "order cetirizine and cetirizine", "order ibuprofen and send it to 12 Baker Street, London",
+        "what is the difference between ibuprofen and cetirizine", "can I take ibuprofen and cetirizine together",
+        "I need something for cold and flu",
+    ])
+    def test_one_product_questions_and_a_compound_order_are_unaffected(self, text):
+        reply = _chat("s1", text)
+        assert "one product per order" not in reply
+
+    def test_the_cold_and_flu_product_can_be_ordered_by_its_ampersand_name(self):
+        _chat("s1", "order the cold & flu")
+        assert store.get_pending_order("s1")["product_id"] == "col-003"
+
+
+    def test_two_products_while_another_order_waits_replace_it_with_the_first_and_name_the_other(self):
+        # the case removed from the list above, with the behaviour it now has
+        store.set_pending_order("s1", "col-004", 1)
+        reply = _chat("s1", "give me ibuprofen and cetirizine")
+        assert "one product per order" in reply and "Cetirizine 10mg Antihistamine Tablets" in reply
+        assert store.get_pending_order("s1")["product_id"] == "fev-003"
